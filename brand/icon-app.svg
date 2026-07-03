@@ -1,0 +1,45 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" fill="none">
+  <defs>
+    <linearGradient id="appBg" x1="256" y1="20" x2="256" y2="492" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#37363f"/>
+      <stop offset="1" stop-color="#23222a"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="256" y1="70" x2="256" y2="442" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9a72fb"/>
+      <stop offset="1" stop-color="#6f2fe0"/>
+    </linearGradient>
+    <linearGradient id="shaft" x1="232" y1="272" x2="316" y2="188" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f59e0b"/>
+      <stop offset="0.42" stop-color="#9a6cf0"/>
+      <stop offset="1" stop-color="#8b53f0"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#ffd489"/>
+      <stop offset="0.32" stop-color="#f9a825"/>
+      <stop offset="0.62" stop-color="#f59e0b" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#f59e0b" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <circle cx="256" cy="256" r="244" fill="url(#appBg)"/>
+  <circle cx="256" cy="256" r="244" fill="none" stroke="#7c3aed" stroke-width="9" opacity="0.6"/>
+
+  <g transform="translate(256 256) scale(1.24) translate(-256 -256)">
+    <circle cx="256" cy="256" r="150" stroke="url(#ring)" stroke-width="34"/>
+    <g>
+      <circle cx="186" cy="268" r="18" fill="url(#glow)"/>
+      <circle cx="210" cy="312" r="16" fill="url(#glow)"/>
+      <circle cx="294" cy="306" r="16" fill="url(#glow)"/>
+      <circle cx="252" cy="350" r="18" fill="url(#glow)"/>
+      <circle cx="186" cy="268" r="8" fill="#ffbb45"/>
+      <circle cx="210" cy="312" r="7.5" fill="#ffbb45"/>
+      <circle cx="294" cy="306" r="7.5" fill="#ffbb45"/>
+      <circle cx="252" cy="350" r="8" fill="#ffbb45"/>
+    </g>
+    <line x1="232" y1="272" x2="308" y2="196" stroke="url(#shaft)" stroke-width="26" stroke-linecap="round"/>
+    <path d="M340 164 L323 217 L286 180 Z" fill="#9a72fb"/>
+    <circle cx="246" cy="258" r="48" fill="url(#glow)"/>
+    <circle cx="246" cy="258" r="23" fill="#ffb020"/>
+    <circle cx="246" cy="258" r="23" fill="url(#glow)" opacity="0.5"/>
+  </g>
+</svg>

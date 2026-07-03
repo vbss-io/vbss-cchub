@@ -1,0 +1,22 @@
+{
+  "name": "cch-focus",
+  "private": true,
+  "displayName": "VBSS CCHUB — Focus",
+  "description": "Focuses the integrated terminal of a Claude Code session, via URI, on request from VBSS CCHUB.",
+  "publisher": "vbss",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onUri", "onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cchFocus.listTerminals",
+        "title": "CCHUB: List terminals and PIDs"
+      }
+    ]
+  }
+}
