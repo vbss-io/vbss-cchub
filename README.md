@@ -78,7 +78,7 @@ process tree**, so it walks up (`find-host-window.ps1`) to the first ancestor wi
 the terminal/editor hosting Claude — and sends that PID (`hostPid`) to the hub. Focus brings
 that PID's window forward (`focus.ps1`). When one process owns several windows (e.g. VS Code),
 it disambiguates by matching the session's folder name in the window title. The walk runs once
-per session (cached in `~/.claude-code-hub/pids/`).
+per session (cached in `~/.vbss-cchub/pids/`).
 
 Honest limits: Windows Terminal has one window per process (focuses the window, not the
 specific tab). Focus of a session running inside WSL is limited — see below.
@@ -99,7 +99,7 @@ button installs this for each WSL distro automatically; the manual equivalent is
 
 ```bash
 HUB_SOURCE=wsl HUB_HOST_TARGET=<windows-ip-or-gateway> \
-  sh "/mnt/c/path/to/claude-code-hub/apps/server/hooks/notify.sh"
+  sh "/mnt/c/path/to/vbss-cchub/apps/server/hooks/notify.sh"
 ```
 
 `notify.sh` resolves the Windows host via the default-route gateway when `HUB_HOST_TARGET`
@@ -113,7 +113,7 @@ is unset. `open/focus` of WSL paths is still limited — native Windows paths wo
 | --- | --- | --- |
 | `HUB_PORT` | `4317` | Server port |
 | `HUB_HOST` | `0.0.0.0` | Bind (LAN for phone) |
-| `HUB_DATA_DIR` | `~/.claude-code-hub` | Where `hub.db` lives |
+| `HUB_DATA_DIR` | `~/.vbss-cchub` | Where `hub.db` lives |
 | `HUB_STATIC_DIR` | — | ui build to serve the front on the same port |
 
 ### Hook

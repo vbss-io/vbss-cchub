@@ -17,7 +17,7 @@ URI is never fired — no side effects.
 Copy the folder into your VS Code extensions and reload:
 
 ```bash
-cp -r "C:/path/to/claude-code-hub/apps/vscode-ext" "$HOME/.vscode/extensions/vbss.cch-focus-1.0.0"
+cp -r "C:/path/to/vbss-cchub/apps/vscode-ext" "$HOME/.vscode/extensions/vbss.cch-focus-1.0.0"
 ```
 
 Then, in VS Code: `Ctrl+Shift+P` → "Developer: Reload Window".

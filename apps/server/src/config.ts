@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const dataDir = process.env.HUB_DATA_DIR ?? join(homedir(), ".claude-code-hub");
+const dataDir = process.env.HUB_DATA_DIR ?? join(homedir(), ".vbss-cchub");
 
 export const config = {
   host: process.env.HUB_HOST ?? "0.0.0.0",

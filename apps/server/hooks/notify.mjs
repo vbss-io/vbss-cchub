@@ -39,7 +39,7 @@ const SOURCE = process.env.HUB_SOURCE ?? hostname();
 function resolveHostInfo(sessionId) {
   const empty = { hostPid: null, shellPid: null };
   if (process.platform !== "win32") return empty;
-  const dir = join(homedir(), ".claude-code-hub", "pids");
+  const dir = join(homedir(), ".vbss-cchub", "pids");
   const cache = join(dir, `${sessionId}.json`);
   try {
     if (existsSync(cache)) {

@@ -234,5 +234,5 @@ if (config.staticDir && existsSync(config.staticDir)) {
 }
 
 app.listen(config.port, config.host, () => {
-  console.log(`claude-code-hub server on http://${config.host}:${config.port}`);
+  console.log(`vbss-cchub server on http://${config.host}:${config.port}`);
 });

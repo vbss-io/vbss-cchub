@@ -1,19 +1,19 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "node \"C:\\path\\to\\claude-code-hub\\apps\\server\\hooks\\notify.mjs\"" }] }
+      { "hooks": [{ "type": "command", "command": "node \"C:\\path\\to\\vbss-cchub\\apps\\server\\hooks\\notify.mjs\"" }] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "node \"C:\\path\\to\\claude-code-hub\\apps\\server\\hooks\\notify.mjs\"" }] }
+      { "hooks": [{ "type": "command", "command": "node \"C:\\path\\to\\vbss-cchub\\apps\\server\\hooks\\notify.mjs\"" }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "node \"C:\\path\\to\\claude-code-hub\\apps\\server\\hooks\\notify.mjs\"" }] }
+      { "hooks": [{ "type": "command", "command": "node \"C:\\path\\to\\vbss-cchub\\apps\\server\\hooks\\notify.mjs\"" }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "node \"C:\\path\\to\\claude-code-hub\\apps\\server\\hooks\\notify.mjs\"" }] }
+      { "hooks": [{ "type": "command", "command": "node \"C:\\path\\to\\vbss-cchub\\apps\\server\\hooks\\notify.mjs\"" }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "node \"C:\\path\\to\\claude-code-hub\\apps\\server\\hooks\\notify.mjs\"" }] }
+      { "hooks": [{ "type": "command", "command": "node \"C:\\path\\to\\vbss-cchub\\apps\\server\\hooks\\notify.mjs\"" }] }
     ]
   }
 }

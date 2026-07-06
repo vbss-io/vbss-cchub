@@ -3,7 +3,7 @@ const os = require("os");
 const path = require("path");
 const fs = require("fs");
 
-const LOG = path.join(os.homedir(), ".claude-code-hub", "ext-focus.log");
+const LOG = path.join(os.homedir(), ".vbss-cchub", "ext-focus.log");
 
 async function terminalSnapshot() {
   const terms = [];
