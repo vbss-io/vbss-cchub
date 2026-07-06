@@ -1,0 +1,54 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [prd]
+    paths:
+      - 'apps/landing/**'
+      - package-lock.json
+      - Dockerfile
+      - .github/workflows/deploy.yml
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build landing image
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Registry login (push token)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_PUSH_USER }}
+          password: ${{ secrets.ACR_PUSH_TOKEN }}
+
+      - name: Build + push (immutable git-sha tag)
+        env:
+          REGISTRY: ${{ secrets.ACR_REGISTRY }}
+        run: |
+          SHA="${GITHUB_SHA::12}"
+          docker build -t "$REGISTRY/cchub:$SHA" -f Dockerfile .
+          docker push "$REGISTRY/cchub:$SHA"
+
+  deploy:
+    name: Dispatch deploy
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: repository_dispatch (deploy)
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.IAC_DEPLOY_TOKEN }}
+          repository: ${{ secrets.IAC_REPO }}
+          event-type: deploy
+          client-payload: '{"app":"cchub","namespace":"cchub","tag":"${{ github.sha }}","caller":"${{ github.repository }}"}'

@@ -1,0 +1,10 @@
+**/node_modules
+**/build
+**/dist
+**/target
+**/coverage
+.git
+.github
+**/.env*
+brand
+apps/desktop/src-tauri/sidecar
