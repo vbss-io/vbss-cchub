@@ -8,6 +8,8 @@
   "scripts": {
     "dev": "concurrently -k -n server,ui -c blue,magenta \"npm run dev -w @cch/server\" \"npm run dev -w @cch/ui\"",
     "build": "npm run build -w @cch/server && npm run build -w @cch/ui",
+    "build:app": "npm run build -w @cch/ui && node apps/desktop/build-sidecar.mjs",
+    "build:sidecar": "node apps/desktop/build-sidecar.mjs",
     "typecheck": "npm run typecheck -w @cch/server && npm run typecheck -w @cch/ui",
     "desktop:dev": "npm run dev -w @cch/desktop",
     "desktop:build": "npm run build -w @cch/desktop"

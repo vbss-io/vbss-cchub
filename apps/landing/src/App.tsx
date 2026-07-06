@@ -1,4 +1,5 @@
-const DOWNLOAD_URL = "https://cdn.vbss.io/vbss-cchub/releases/VBSS-CCHUB-Setup.msi";
+const DOWNLOAD_URL =
+  "https://github.com/vbss-io/vbss-cchub/releases/latest/download/VBSS-CCHUB-Setup.msi";
 const GITHUB_URL = "https://github.com/vbss-io/vbss-cchub";
 const PORTFOLIO_URL = "https://vbss.io";
 const COFFEE_URL = "https://www.buymeacoffee.com/vbss.io";

@@ -101,7 +101,9 @@ export function App() {
       setHooksState({ installed: true, events: [], wsl: [{ distro: "Ubuntu-24.04", installed: true }] });
       return;
     }
-    void getHooks().then(setHooksState);
+    void getHooks()
+      .then(setHooksState)
+      .catch(() => setHooksState({ installed: false, events: [] }));
   }, []);
 
   const toggleHooks = async () => {
@@ -200,6 +202,9 @@ export function App() {
       (nextGroups) => {
         if (mounted) setGroups(nextGroups);
       },
+      (nextHooks) => {
+        if (mounted) setHooksState(nextHooks);
+      },
     );
     return () => {
       mounted = false;
@@ -296,21 +301,23 @@ export function App() {
         </h1>
         <div className="topbar__actions">
           <span className="badge">{attention} need attention</span>
-          {hooks && (
-            <button
-              className={`hookbtn ${hooks.installed ? "hookbtn--on" : ""}`}
-              onClick={() => void toggleHooks()}
-              disabled={busy}
-            >
-              {hooks.installed
-                ? `Hooks active${
-                    (hooks.wsl?.filter((w) => w.installed).length ?? 0) > 0
-                      ? ` (+${hooks.wsl?.filter((w) => w.installed).length} WSL)`
-                      : ""
-                  } — remove`
-                : "Set up hooks"}
-            </button>
-          )}
+          <button
+            className={`hookbtn ${hooks?.installed ? "hookbtn--on" : ""}`}
+            onClick={() => void toggleHooks()}
+            disabled={busy || !hooks}
+          >
+            {busy
+              ? "Working…"
+              : !hooks
+                ? "Checking hooks…"
+                : hooks.installed
+                  ? `Hooks active${
+                      (hooks.wsl?.filter((w) => w.installed).length ?? 0) > 0
+                        ? ` (+${hooks.wsl?.filter((w) => w.installed).length} WSL)`
+                        : ""
+                    } — remove`
+                  : "Set up hooks"}
+          </button>
           <button
             className="coffee"
             onClick={() => void openExternal(COFFEE_URL)}

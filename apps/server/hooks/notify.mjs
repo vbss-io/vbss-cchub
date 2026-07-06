@@ -36,6 +36,16 @@ const HOST = process.env.HUB_HOST_TARGET ?? "127.0.0.1";
 const PORT = process.env.HUB_PORT ?? 4317;
 const SOURCE = process.env.HUB_SOURCE ?? hostname();
 
+function alive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveHostInfo(sessionId) {
   const empty = { hostPid: null, shellPid: null };
   if (process.platform !== "win32") return empty;
@@ -44,7 +54,10 @@ function resolveHostInfo(sessionId) {
   try {
     if (existsSync(cache)) {
       const cached = JSON.parse(readFileSync(cache, "utf8"));
-      if (Number.isInteger(cached.hostPid) && cached.hostPid > 0) return cached;
+      const shellOk = cached.shellPid == null || alive(cached.shellPid);
+      if (Number.isInteger(cached.hostPid) && cached.hostPid > 0 && alive(cached.hostPid) && shellOk) {
+        return cached;
+      }
     }
   } catch {
     /* ignore */

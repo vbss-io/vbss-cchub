@@ -2,11 +2,13 @@ import { execFile } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { config } from "./config.js";
 
 const run = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
-const configureScript = join(here, "..", "hooks", "configure.mjs");
-const notifyShScript = join(here, "..", "hooks", "notify.sh");
+const hooksDir = config.resourceDir ? join(config.resourceDir, "hooks") : join(here, "..", "hooks");
+const configureScript = join(hooksDir, "configure.mjs");
+const notifyShScript = join(hooksDir, "notify.sh");
 
 export type HookAction = "status" | "install" | "uninstall";
 
@@ -40,13 +42,13 @@ function parseLastJson(stdout: string): Record<string, unknown> {
 }
 
 async function configure(action: HookAction, extra: string[] = []): Promise<Record<string, unknown>> {
-  const { stdout } = await run("node", [configureScript, action, ...extra]);
+  const { stdout } = await run(config.nodeBin, [configureScript, action, ...extra]);
   return parseLastJson(stdout);
 }
 
 async function listWslDistros(): Promise<string[]> {
   try {
-    const { stdout } = await run("wsl", ["-l", "-q"]);
+    const { stdout } = await run("wsl", ["-l", "-q"], { timeout: 8000 });
     return clean(stdout)
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -59,7 +61,7 @@ async function listWslDistros(): Promise<string[]> {
 
 async function wslUser(distro: string): Promise<string | null> {
   try {
-    const { stdout } = await run("wsl", ["-d", distro, "bash", "-lc", "whoami"]);
+    const { stdout } = await run("wsl", ["-d", distro, "whoami"], { timeout: 25000 });
     return clean(stdout).trim() || null;
   } catch {
     return null;
@@ -88,13 +90,19 @@ async function configureWsl(action: HookAction, distro: string): Promise<WslResu
   }
 }
 
-export async function controlHooks(action: HookAction): Promise<Record<string, unknown>> {
-  const windows = await configure(action);
-  const distros = await listWslDistros();
-  const wsl: WslResult[] = [];
-  for (const distro of distros) {
-    wsl.push(await configureWsl(action, distro));
-  }
-  const installed = windows.installed === true && wsl.every((entry) => entry.installed === true);
-  return { ...windows, installed, wsl };
+export async function windowsHooks(action: HookAction): Promise<Record<string, unknown>> {
+  return configure(action, config.resourceDir ? ["--runner", config.nodeBin] : []);
 }
+
+export async function wslHooks(action: HookAction): Promise<WslResult[]> {
+  const distros = await listWslDistros();
+  return Promise.all(distros.map((distro) => configureWsl(action, distro)));
+}
+
+export function mergeHooks(
+  windows: Record<string, unknown>,
+  wsl: WslResult[],
+): Record<string, unknown> {
+  return { ...windows, installed: windows.installed === true, wsl };
+}
+

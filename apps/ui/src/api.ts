@@ -1,7 +1,9 @@
 import type { GroupRecord, SessionRecord } from "./types";
 
 const envUrl = import.meta.env.VITE_HUB_URL as string | undefined;
-const base = envUrl ?? `http://${location.hostname || "localhost"}:4317`;
+const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const host = inTauri ? "127.0.0.1" : location.hostname || "localhost";
+const base = envUrl ?? `http://${host}:4317`;
 
 export async function fetchSessions(): Promise<SessionRecord[]> {
   const res = await fetch(`${base}/api/sessions`);
@@ -102,6 +104,7 @@ export function subscribe(
   onSession: (session: SessionRecord) => void,
   onRemoved?: (sessionId: string) => void,
   onGroups?: (groups: GroupRecord[]) => void,
+  onHooks?: (hooks: HooksStatus) => void,
 ): () => void {
   const source = new EventSource(`${base}/api/events`);
   source.addEventListener("session", (event) => {
@@ -113,6 +116,9 @@ export function subscribe(
   });
   source.addEventListener("groups", (event) => {
     onGroups?.(JSON.parse((event as MessageEvent<string>).data) as GroupRecord[]);
+  });
+  source.addEventListener("hooks", (event) => {
+    onHooks?.(JSON.parse((event as MessageEvent<string>).data) as HooksStatus);
   });
   return () => source.close();
 }

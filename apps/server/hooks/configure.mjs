@@ -18,7 +18,8 @@ const source = flag("--source");
 const runner = flag("--runner") ?? "node";
 
 const EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"];
-const command = `${source ? `HUB_SOURCE=${source} ` : ""}${runner} "${notifyPath}"`;
+const quotedRunner = runner.includes(" ") ? `"${runner}"` : runner;
+const command = `${source ? `HUB_SOURCE=${source} ` : ""}${quotedRunner} "${notifyPath}"`;
 
 const isOurs = (entry) =>
   Array.isArray(entry?.hooks) &&

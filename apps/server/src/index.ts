@@ -15,8 +15,9 @@ import {
   reorderGroups,
   updateGroup,
 } from "./db.js";
-import { focusTerminal, focusWindow } from "./focus.js";
-import { controlHooks } from "./hooks-control.js";
+import { focusWindow } from "./focus.js";
+import { ensureExtension } from "./ensure-extension.js";
+import { mergeHooks, windowsHooks, wslHooks } from "./hooks-control.js";
 import { readSessionName, readTranscript } from "./transcript.js";
 import { addClient, broadcast } from "./sse.js";
 import { HOOK_KINDS, type HookKind, type HookPayload } from "./types.js";
@@ -137,7 +138,7 @@ app.post("/api/sessions/:id/focus", async (req, res) => {
     return;
   }
   const result = await focusWindow(session.hostPid, session.cwd);
-  if (session.shellPid) void focusTerminal(session.shellPid);
+  if (session.shellPid) broadcast("focus-terminal", { shellPid: session.shellPid });
   res.json(result);
 });
 
@@ -208,15 +209,21 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/hooks", async (_req, res) => {
-  res.json(await controlHooks("status"));
+  const windows = await windowsHooks("status");
+  res.json({ ...windows, wsl: null });
+  void wslHooks("status").then((wsl) => broadcast("hooks", mergeHooks(windows, wsl)));
 });
 
 app.post("/api/hooks/install", async (_req, res) => {
-  res.json(await controlHooks("install"));
+  const windows = await windowsHooks("install");
+  res.json({ ...windows, wsl: null });
+  void wslHooks("install").then((wsl) => broadcast("hooks", mergeHooks(windows, wsl)));
 });
 
 app.post("/api/hooks/uninstall", async (_req, res) => {
-  res.json(await controlHooks("uninstall"));
+  const windows = await windowsHooks("uninstall");
+  res.json({ ...windows, wsl: null });
+  void wslHooks("uninstall").then((wsl) => broadcast("hooks", mergeHooks(windows, wsl)));
 });
 
 app.get("/api/events", (_req, res) => {
@@ -236,3 +243,16 @@ if (config.staticDir && existsSync(config.staticDir)) {
 app.listen(config.port, config.host, () => {
   console.log(`vbss-cchub server on http://${config.host}:${config.port}`);
 });
+
+ensureExtension();
+
+const parentPid = Number(process.env.HUB_PARENT_PID);
+if (Number.isInteger(parentPid) && parentPid > 0) {
+  setInterval(() => {
+    try {
+      process.kill(parentPid, 0);
+    } catch {
+      process.exit(0);
+    }
+  }, 3000).unref();
+}

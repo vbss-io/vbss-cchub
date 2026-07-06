@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev --prefix ../..",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build --prefix ../..",
+    "beforeBuildCommand": "npm run build:app --prefix ../..",
     "frontendDist": "../../ui/dist"
   },
   "app": {
@@ -35,15 +35,12 @@
     ],
     "security": {
       "csp": null
-    },
-    "trayIcon": {
-      "id": "main",
-      "iconPath": "icons/icon.png"
     }
   },
   "bundle": {
     "active": true,
     "targets": ["msi"],
+    "resources": ["sidecar/**/*"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
