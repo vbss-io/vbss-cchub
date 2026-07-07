@@ -12,7 +12,8 @@
     "build:sidecar": "node apps/desktop/build-sidecar.mjs",
     "typecheck": "npm run typecheck -w @cch/server && npm run typecheck -w @cch/ui",
     "desktop:dev": "npm run dev -w @cch/desktop",
-    "desktop:build": "npm run build -w @cch/desktop"
+    "desktop:build": "npm run build -w @cch/desktop",
+    "release": "node scripts/release.mjs"
   },
   "devDependencies": {
     "concurrently": "^10.0.3"

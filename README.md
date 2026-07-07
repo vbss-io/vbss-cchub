@@ -132,11 +132,19 @@ is unset. `open/focus` of WSL paths is still limited — native Windows paths wo
 
 The context bar limit is inferred per model family (200k for Sonnet/Haiku, 1M for Opus).
 
+## Release
+
+```bash
+node scripts/release.mjs 1.1.0
+```
+
+One command from a clean `main`: bumps the version in every manifest, builds the `.msi`,
+copies it to the stable asset name, commits + pushes the bump, publishes the GitHub release
+(`gh release create`) and verifies the public download URL. The landing always points to
+`releases/latest/download/VBSS-CCHUB-Setup.msi`, so no landing change is needed per release.
+
 ## Known gaps
 
-- **Production packaging**: the server sidecar is not bundled in the `.msi` yet — `tauri dev`
-  runs the server via `beforeDevCommand`; packaging node + server into the installer is the
-  next big step.
 - **Mobile**: serving over the LAN works, but real-device layout and notifications over
   plain-http (secure-context limits Web Notification/AudioContext) still need validation.
 - **WSL focus**: opening/focusing WSL paths is best-effort; native Windows paths work best.
