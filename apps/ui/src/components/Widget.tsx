@@ -25,11 +25,11 @@ const statusText: Record<SessionStatus, string> = {
 const nameOf = (session: SessionRecord): string =>
   session.customTitle ?? session.title ?? session.sessionId.slice(0, 8);
 
-const groupIdOf = (session: SessionRecord, groups: GroupRecord[]): string | null => {
+const groupNameOf = (session: SessionRecord, groups: GroupRecord[]): string | null => {
   const cwd = (session.cwd ?? "").toLowerCase();
   for (const group of groups) {
     const pattern = group.match.trim().toLowerCase();
-    if (pattern && cwd.includes(pattern)) return group.id;
+    if (pattern && cwd.includes(pattern)) return group.name;
   }
   return null;
 };
@@ -173,16 +173,22 @@ export function Widget() {
 
   const sections = useMemo(() => {
     if (!config.grouped || groups.length === 0) return null;
-    const byGroup = new Map<string, SessionRecord[]>();
-    for (const group of groups) byGroup.set(group.id, []);
+    const names: string[] = [];
+    const byName = new Map<string, SessionRecord[]>();
+    for (const group of groups) {
+      if (!byName.has(group.name)) {
+        byName.set(group.name, []);
+        names.push(group.name);
+      }
+    }
     const ungrouped: SessionRecord[] = [];
     for (const session of list) {
-      const id = groupIdOf(session, groups);
-      const bucket = id ? byGroup.get(id) : undefined;
+      const name = groupNameOf(session, groups);
+      const bucket = name ? byName.get(name) : undefined;
       if (bucket) bucket.push(session);
       else ungrouped.push(session);
     }
-    return { byGroup, ungrouped };
+    return { names, byName, ungrouped };
   }, [list, groups, config.grouped]);
 
   const renderRow = (session: SessionRecord) => (
@@ -280,12 +286,12 @@ export function Widget() {
         <div className="widget__list">
           {sections ? (
             <>
-              {groups.map((group) => {
-                const items = sections.byGroup.get(group.id) ?? [];
+              {sections.names.map((name) => {
+                const items = sections.byName.get(name) ?? [];
                 if (items.length === 0) return null;
                 return (
-                  <div key={group.id}>
-                    <div className="widget__group">{group.name}</div>
+                  <div key={name}>
+                    <div className="widget__group">{name}</div>
                     {items.map(renderRow)}
                   </div>
                 );

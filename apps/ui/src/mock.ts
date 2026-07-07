@@ -54,4 +54,5 @@ export const MOCK_GROUPS: GroupRecord[] = [
   { id: "g1", name: "API", match: "api-gateway", position: 0 },
   { id: "g2", name: "Web", match: "web-app", position: 1 },
   { id: "g3", name: "Infra", match: "infra", position: 2 },
+  { id: "g4", name: "Infra", match: "build-pipeline", position: 3 },
 ];

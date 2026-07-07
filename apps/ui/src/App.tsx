@@ -78,6 +78,14 @@ export function App() {
   const [tick, setTick] = useState(0);
   const [notifSettings, setNotifSettings] = useState<NotifSettings>(loadNotif);
   const [showNotif, setShowNotif] = useState(false);
+  const [toolbarOpen, setToolbarOpen] = useState(() => localStorage.getItem("hub.toolbar") !== "0");
+
+  const toggleToolbar = () => {
+    setToolbarOpen((open) => {
+      localStorage.setItem("hub.toolbar", open ? "0" : "1");
+      return !open;
+    });
+  };
   const notifRef = useRef(notifSettings);
 
   useEffect(() => {
@@ -183,7 +191,10 @@ export function App() {
                   `${label} • ${session.status === "waiting" ? "needs a decision" : "paused"}`,
                 );
               }
-              if (cfg.sound) void playSound(session.status === "idle" ? "idle" : "attention");
+              if (cfg.sound) {
+                void playSound(session.status === "idle" ? "idle" : "attention");
+                navigator.vibrate?.(session.status === "waiting" ? [90, 60, 90] : 160);
+              }
             } else if (session.status === "ended" && before && cfg.finished) {
               if (cfg.desktop) void notify("VBSS CCHUB", `${label} • finished`);
               if (cfg.sound) void playSound("finished");
@@ -226,6 +237,16 @@ export function App() {
   const total = counts.waiting + counts.idle + counts.active;
   const attention = counts.waiting + counts.idle;
 
+  useEffect(() => {
+    document.title = attention > 0 ? `(${attention}) VBSS CCHUB` : "VBSS CCHUB";
+    const nav = navigator as Navigator & {
+      setAppBadge?: (count?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    if (attention > 0) nav.setAppBadge?.(attention)?.catch(() => {});
+    else nav.clearAppBadge?.()?.catch(() => {});
+  }, [attention]);
+
   const list = useMemo(() => {
     const all = Object.values(sessions);
     const filtered = all.filter((session) => {
@@ -250,24 +271,30 @@ export function App() {
   }, [sessions, filter, sort, tick]);
 
   const grouped = useMemo(() => {
-    const groupIdFor = (session: SessionRecord): string | null => {
+    const groupNameFor = (session: SessionRecord): string | null => {
       const cwd = (session.cwd ?? "").toLowerCase();
       for (const group of groups) {
         const pattern = group.match.trim().toLowerCase();
-        if (pattern && cwd.includes(pattern)) return group.id;
+        if (pattern && cwd.includes(pattern)) return group.name;
       }
       return null;
     };
-    const byGroup = new Map<string, SessionRecord[]>();
-    for (const group of groups) byGroup.set(group.id, []);
+    const names: string[] = [];
+    const byName = new Map<string, SessionRecord[]>();
+    for (const group of groups) {
+      if (!byName.has(group.name)) {
+        byName.set(group.name, []);
+        names.push(group.name);
+      }
+    }
     const ungrouped: SessionRecord[] = [];
     for (const session of list) {
-      const id = groupIdFor(session);
-      const bucket = id ? byGroup.get(id) : undefined;
+      const name = groupNameFor(session);
+      const bucket = name ? byName.get(name) : undefined;
       if (bucket) bucket.push(session);
       else ungrouped.push(session);
     }
-    return { byGroup, ungrouped };
+    return { names, byName, ungrouped };
   }, [list, groups]);
 
   const showSource = useMemo(() => {
@@ -326,9 +353,18 @@ export function App() {
           >
             ☕
           </button>
+          <button
+            className="hdr-toggle"
+            onClick={toggleToolbar}
+            title={toolbarOpen ? "Hide filters" : "Show filters"}
+            aria-label={toolbarOpen ? "Hide filters" : "Show filters"}
+          >
+            {toolbarOpen ? "▴" : "▾"}
+          </button>
         </div>
       </header>
 
+      {toolbarOpen && (
       <nav className="toolbar">
         <div className="filters">
           <button
@@ -389,8 +425,9 @@ export function App() {
           </label>
         </div>
       </nav>
+      )}
 
-      {showNotif && (
+      {toolbarOpen && showNotif && (
         <div className="notifcfg">
           <label className="notifcfg__item">
             <input
@@ -437,7 +474,7 @@ export function App() {
         </div>
       )}
 
-      {managing && (
+      {toolbarOpen && managing && (
         <GroupManager
           groups={groups}
           onCreate={addGroup}
@@ -451,13 +488,13 @@ export function App() {
         <section className="grid">{list.map(renderCard)}</section>
       ) : (
         <>
-          {groups.map((group) => {
-            const items = grouped.byGroup.get(group.id) ?? [];
+          {grouped.names.map((name) => {
+            const items = grouped.byName.get(name) ?? [];
             if (items.length === 0) return null;
             return (
-              <section key={group.id} className="group">
+              <section key={name} className="group">
                 <h2 className="group__title">
-                  {group.name} <span className="group__count">{items.length}</span>
+                  {name} <span className="group__count">{items.length}</span>
                 </h2>
                 <div className="grid">{items.map(renderCard)}</div>
               </section>

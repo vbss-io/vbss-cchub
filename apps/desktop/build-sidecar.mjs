@@ -39,4 +39,6 @@ for (const f of ["extension.js", "package.json", "README.md"]) {
   copyFileSync(join(root, "apps/vscode-ext", f), join(sidecar, "vscode-ext", f));
 }
 
+cpSync(join(root, "apps/ui/dist"), join(sidecar, "ui"), { recursive: true });
+
 console.log(`sidecar built at ${sidecar}`);
