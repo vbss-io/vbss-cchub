@@ -1,6 +1,5 @@
 #!/bin/sh
-# Hook do Claude Code para ambientes sem node (ex: WSL). Só precisa de curl.
-# Lê o JSON do hook no stdin e repassa cru pro hub, que transforma.
+[ "$HUB_SKIP" = "1" ] && exit 0
 
 SOURCE="${HUB_SOURCE:-wsl}"
 PORT="${HUB_PORT:-4317}"
