@@ -200,6 +200,29 @@ export function deleteSession(sessionId: string): boolean {
   return removeTx(sessionId) > 0;
 }
 
+const emptySessionsStmt = db.prepare(`
+  SELECT session_id FROM sessions
+  WHERE model IS NULL AND context_tokens IS NULL AND updated_at < ?
+`);
+
+const purgeEmptyTx = db.transaction((cutoff: number): string[] => {
+  const ids = (emptySessionsStmt.all(cutoff) as { session_id: string }[]).map(
+    (row) => row.session_id,
+  );
+  const dropEvents = db.prepare(`DELETE FROM events WHERE session_id = ?`);
+  const dropSession = db.prepare(`DELETE FROM sessions WHERE session_id = ?`);
+  for (const id of ids) {
+    dropEvents.run(id);
+    dropSession.run(id);
+  }
+  return ids;
+});
+
+export function purgeEmptySessions(ttlMs: number): string[] {
+  if (ttlMs <= 0) return [];
+  return purgeEmptyTx(Date.now() - ttlMs);
+}
+
 const groupSelect = `SELECT id, name, match_pattern AS "match", position FROM groups ORDER BY position`;
 
 export function listGroups(): GroupRecord[] {

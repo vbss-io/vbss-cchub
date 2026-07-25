@@ -33,6 +33,9 @@ function sessionTitle(sessionId, aiTitle) {
 
 if (process.env.HUB_SKIP === "1") process.exit(0);
 
+const isHeadless = (process.env.CLAUDE_CODE_ENTRYPOINT ?? "").startsWith("sdk");
+if (isHeadless && process.env.HUB_TRACK_SDK !== "1") process.exit(0);
+
 const here = dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HUB_HOST_TARGET ?? "127.0.0.1";
 const PORT = process.env.HUB_PORT ?? 4317;

@@ -1,6 +1,10 @@
 #!/bin/sh
 [ "$HUB_SKIP" = "1" ] && exit 0
 
+case "$CLAUDE_CODE_ENTRYPOINT" in
+  sdk*) [ "$HUB_TRACK_SDK" = "1" ] || exit 0 ;;
+esac
+
 SOURCE="${HUB_SOURCE:-wsl}"
 PORT="${HUB_PORT:-4317}"
 HOST="${HUB_HOST_TARGET}"

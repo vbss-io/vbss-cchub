@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { fetchGroups, fetchSessions, focusSession, subscribe } from "../api";
 import { BrandMark } from "./BrandMark";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "../mock";
-import { isStale } from "../stale";
+import { isEmpty, isStale } from "../stale";
 import type { GroupRecord, SessionRecord, SessionStatus } from "../types";
 
 type SortKey = "status" | "recent" | "name";
@@ -43,13 +43,18 @@ function loadConfig(): WidgetConfig {
   }
 }
 
-const stop = (event: MouseEvent) => event.stopPropagation();
-
-async function startDrag(event: MouseEvent): Promise<void> {
-  if (event.button !== 0 || !("__TAURI_INTERNALS__" in window)) return;
-  const { getCurrentWindow } = await import("@tauri-apps/api/window");
-  await getCurrentWindow().startDragging();
+function loadCollapsedGroups(): string[] {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem("widget.collapsedGroups") ?? "[]");
+    return Array.isArray(stored) ? stored.filter((name): name is string => typeof name === "string") : [];
+  } catch {
+    return [];
+  }
 }
+
+const UNGROUPED = "Ungrouped";
+
+const stop = (event: MouseEvent) => event.stopPropagation();
 
 async function hideWidget(): Promise<void> {
   if (!("__TAURI_INTERNALS__" in window)) return;
@@ -84,11 +89,35 @@ export function Widget() {
   const [config, setConfig] = useState<WidgetConfig>(loadConfig);
   const [showConfig, setShowConfig] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("widget.collapsed") === "1");
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>(loadCollapsedGroups);
   const expandedHeight = useRef(Number(localStorage.getItem("widget.height")) || 440);
+  const dragWindow = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     localStorage.setItem("widget.config", JSON.stringify(config));
   }, [config]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    void import("@tauri-apps/api/window").then((api) => {
+      dragWindow.current = () => void api.getCurrentWindow().startDragging();
+    });
+  }, []);
+
+  const startDrag = (event: MouseEvent) => {
+    if (event.button !== 0) return;
+    dragWindow.current?.();
+  };
+
+  const toggleGroup = (name: string) => {
+    setCollapsedGroups((current) => {
+      const next = current.includes(name)
+        ? current.filter((item) => item !== name)
+        : [...current, name];
+      localStorage.setItem("widget.collapsedGroups", JSON.stringify(next));
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (collapsed) void resizeHeight(HEADER_H);
@@ -146,7 +175,7 @@ export function Widget() {
 
   const list = useMemo(() => {
     let arr = Object.values(sessions).filter(
-      (s) => s.archivedAt == null && s.status !== "ended" && !isStale(s),
+      (s) => s.archivedAt == null && s.status !== "ended" && !isStale(s) && !isEmpty(s),
     );
     if (config.attentionOnly) {
       arr = arr.filter((s) => s.status === "waiting" || s.status === "idle");
@@ -166,6 +195,7 @@ export function Widget() {
         (s) =>
           s.archivedAt == null &&
           !isStale(s) &&
+          !isEmpty(s) &&
           (s.status === "waiting" || s.status === "idle"),
       ).length,
     [sessions],
@@ -204,21 +234,42 @@ export function Widget() {
     </button>
   );
 
+  const renderSection = (name: string, items: SessionRecord[]) => {
+    const groupCollapsed = collapsedGroups.includes(name);
+    const needAttention = items.filter(
+      (session) => session.status === "waiting" || session.status === "idle",
+    ).length;
+    return (
+      <div key={name}>
+        <button
+          className="widget__group"
+          onClick={() => toggleGroup(name)}
+          aria-expanded={!groupCollapsed}
+          title={groupCollapsed ? "Expand group" : "Collapse group"}
+        >
+          <span className="widget__caret">{groupCollapsed ? "▸" : "▾"}</span>
+          <span className="widget__gname">{name}</span>
+          <span className="widget__gcount">{items.length}</span>
+          {groupCollapsed && needAttention > 0 && (
+            <span className="widget__attn">{needAttention}</span>
+          )}
+        </button>
+        {!groupCollapsed && items.map(renderRow)}
+      </div>
+    );
+  };
+
   return (
     <div className="widget">
-      <div className="widget__head" data-tauri-drag-region onMouseDown={(e) => void startDrag(e)}>
+      <div className="widget__head" onMouseDown={startDrag}>
         <BrandMark size={15} />
-        <span className="widget__title" data-tauri-drag-region>
-          VBSS CCHUB
-        </span>
+        <span className="widget__title">VBSS CCHUB</span>
         {attention > 0 && (
-          <span className="widget__attn" data-tauri-drag-region title="need attention">
+          <span className="widget__attn" title="need attention">
             {attention}
           </span>
         )}
-        <span className="widget__count" data-tauri-drag-region>
-          {list.length}
-        </span>
+        <span className="widget__count">{list.length}</span>
         <button
           className="widget__btn"
           onMouseDown={stop}
@@ -289,19 +340,9 @@ export function Widget() {
               {sections.names.map((name) => {
                 const items = sections.byName.get(name) ?? [];
                 if (items.length === 0) return null;
-                return (
-                  <div key={name}>
-                    <div className="widget__group">{name}</div>
-                    {items.map(renderRow)}
-                  </div>
-                );
+                return renderSection(name, items);
               })}
-              {sections.ungrouped.length > 0 && (
-                <div>
-                  <div className="widget__group">Ungrouped</div>
-                  {sections.ungrouped.map(renderRow)}
-                </div>
-              )}
+              {sections.ungrouped.length > 0 && renderSection(UNGROUPED, sections.ungrouped)}
             </>
           ) : (
             list.map(renderRow)

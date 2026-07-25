@@ -151,6 +151,10 @@ body {
   border-color: var(--muted);
 }
 
+.pill--empty.pill--on {
+  border-color: var(--ended);
+}
+
 .pill--danger {
   border-color: var(--hold);
   color: var(--hold);
@@ -253,16 +257,45 @@ body {
   margin-bottom: 22px;
 }
 
+.group--collapsed {
+  margin-bottom: 12px;
+}
+
+.group > h2 {
+  margin: 0;
+}
+
 .group__title {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  font-family: inherit;
   font-size: 14px;
   font-weight: 600;
   color: var(--text);
-  margin: 0 0 12px;
-  padding-bottom: 8px;
+  background: transparent;
+  border: none;
   border-bottom: 1px solid var(--border);
+  margin: 0 0 12px;
+  padding: 0 0 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.group--collapsed .group__title {
+  margin-bottom: 0;
+}
+
+.group__title:hover .group__caret,
+.group__title:hover .group__name {
+  color: var(--brand-2);
+}
+
+.group__caret {
+  font-size: 11px;
+  color: var(--muted);
+  width: 10px;
 }
 
 .group__count {
@@ -272,6 +305,15 @@ body {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0 7px;
+}
+
+.group__attn {
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--hold);
+  border-radius: 999px;
+  padding: 1px 9px;
 }
 
 .widget {
@@ -290,6 +332,15 @@ body {
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   user-select: none;
+  cursor: grab;
+}
+
+.widget__head:active {
+  cursor: grabbing;
+}
+
+.widget__head > :not(button) {
+  pointer-events: none;
 }
 
 .widget__title {
@@ -367,11 +418,39 @@ body {
 }
 
 .widget__group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  font-family: inherit;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
   padding: 8px 8px 4px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.widget__group:hover {
+  color: var(--text);
+}
+
+.widget__caret {
+  font-size: 9px;
+}
+
+.widget__gname {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.widget__gcount {
+  font-variant-numeric: tabular-nums;
 }
 
 .widget__list {

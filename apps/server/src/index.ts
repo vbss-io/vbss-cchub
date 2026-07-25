@@ -11,6 +11,7 @@ import {
   getSession,
   listGroups,
   listSessions,
+  purgeEmptySessions,
   renameSession,
   reorderGroups,
   updateGroup,
@@ -243,6 +244,17 @@ if (config.staticDir && existsSync(config.staticDir)) {
 app.listen(config.port, config.host, () => {
   console.log(`vbss-cchub server on http://${config.host}:${config.port}`);
 });
+
+const PURGE_INTERVAL_MS = 3_600_000;
+
+function purgeEmpty(): void {
+  const removed = purgeEmptySessions(config.emptyTtlMs);
+  for (const sessionId of removed) broadcast("removed", { sessionId });
+  if (removed.length > 0) console.log(`purged ${removed.length} empty sessions`);
+}
+
+purgeEmpty();
+setInterval(purgeEmpty, PURGE_INTERVAL_MS).unref();
 
 ensureExtension();
 

@@ -37,6 +37,18 @@ brand/        logo/icon source (radar mark, transparent) + app-icon (with backgr
 Brand accents (logo, interactive highlights) are violet + amber; the status colours
 above stay semantic so the board reads at a glance.
 
+## Headless sessions
+
+Anything that shells out to `claude -p` (or the Agent SDK) inherits your global hooks, so a
+`Stop` hook that summarizes the session would land on the board as a session of its own —
+one card per run, no model, no tokens, a derived `<folder>-<hash>` name. The hook skips
+those: `CLAUDE_CODE_ENTRYPOINT` is `sdk-*` for headless runs and `cli` for interactive ones.
+`HUB_TRACK_SDK=1` reports them anyway.
+
+Whatever still gets through — any session that never produced an assistant turn — sits
+behind the **Empty** filter instead of the board, and the server drops it after
+`HUB_EMPTY_TTL_HOURS`.
+
 ## Run (dev)
 
 ```bash
@@ -88,7 +100,8 @@ specific tab). Focus of a session running inside WSL is limited — see below.
 A second Tauri window (frameless, always on top, off the taskbar) with a one-line-per-session
 summary of what's running / paused / needs attention. Toggle it from the **tray**
 ("Show/hide widget"). Click a row to focus that session. Draggable header, collapses to a
-single bar.
+single bar. With grouping on, each group header collapses on click (the board does the
+same) and a collapsed group keeps showing how many sessions inside need attention.
 
 ## Track many Claudes (WSL / another subscription / another machine)
 
@@ -115,6 +128,7 @@ is unset. `open/focus` of WSL paths is still limited — native Windows paths wo
 | `HUB_HOST` | `0.0.0.0` | Bind (LAN for phone) |
 | `HUB_DATA_DIR` | `~/.vbss-cchub` | Where `hub.db` lives |
 | `HUB_STATIC_DIR` | — | ui build to serve the front on the same port |
+| `HUB_EMPTY_TTL_HOURS` | `12` | Drop sessions that never produced a turn after this long (`0` keeps them) |
 
 ### Hook
 
@@ -123,6 +137,8 @@ is unset. `open/focus` of WSL paths is still limited — native Windows paths wo
 | `HUB_HOST_TARGET` | `127.0.0.1` (win) / gateway (wsl) | Hub host the hook posts to |
 | `HUB_PORT` | `4317` | Hub port |
 | `HUB_SOURCE` | hostname | Session origin label (e.g. `wsl`, `work-sub`) |
+| `HUB_SKIP` | — | `1` makes the hook exit without reporting |
+| `HUB_TRACK_SDK` | — | `1` also reports headless sessions (see below) |
 
 ### UI
 

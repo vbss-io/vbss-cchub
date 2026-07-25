@@ -20,11 +20,11 @@ import { GroupManager } from "./components/GroupManager";
 import { SessionCard } from "./components/SessionCard";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { COFFEE_URL, notify, openExternal, playSound, unlockAudio } from "./notify";
-import { isStale } from "./stale";
+import { isEmpty, isStale } from "./stale";
 import type { GroupRecord, SessionRecord, SessionStatus } from "./types";
 
 type SortKey = "status" | "recent" | "name";
-type FilterKey = SessionStatus | "all" | "archived" | "stale";
+type FilterKey = SessionStatus | "all" | "archived" | "stale" | "empty";
 
 interface NotifSettings {
   attention: boolean;
@@ -42,6 +42,17 @@ function loadNotif(): NotifSettings {
     return DEFAULT_NOTIF;
   }
 }
+
+function loadCollapsedGroups(): string[] {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem("hub.collapsedGroups") ?? "[]");
+    return Array.isArray(stored) ? stored.filter((name): name is string => typeof name === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+const UNGROUPED = "Ungrouped";
 
 const sortRank: Record<SessionStatus, number> = {
   waiting: 0,
@@ -79,6 +90,17 @@ export function App() {
   const [notifSettings, setNotifSettings] = useState<NotifSettings>(loadNotif);
   const [showNotif, setShowNotif] = useState(false);
   const [toolbarOpen, setToolbarOpen] = useState(() => localStorage.getItem("hub.toolbar") !== "0");
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>(loadCollapsedGroups);
+
+  const toggleGroup = (name: string) => {
+    setCollapsedGroups((current) => {
+      const next = current.includes(name)
+        ? current.filter((item) => item !== name)
+        : [...current, name];
+      localStorage.setItem("hub.collapsedGroups", JSON.stringify(next));
+      return next;
+    });
+  };
 
   const toggleToolbar = () => {
     setToolbarOpen((open) => {
@@ -224,9 +246,10 @@ export function App() {
   }, []);
 
   const counts = useMemo(() => {
-    const result = { waiting: 0, idle: 0, active: 0, ended: 0, stale: 0, archived: 0 };
+    const result = { waiting: 0, idle: 0, active: 0, ended: 0, stale: 0, archived: 0, empty: 0 };
     for (const session of Object.values(sessions)) {
       if (session.archivedAt != null) result.archived += 1;
+      else if (isEmpty(session)) result.empty += 1;
       else if (session.status === "ended") result.ended += 1;
       else if (isStale(session)) result.stale += 1;
       else result[session.status] += 1;
@@ -251,9 +274,12 @@ export function App() {
     const all = Object.values(sessions);
     const filtered = all.filter((session) => {
       const archived = session.archivedAt != null;
-      const stale = !archived && session.status !== "ended" && isStale(session);
+      const empty = !archived && isEmpty(session);
+      const stale = !archived && !empty && session.status !== "ended" && isStale(session);
       if (filter === "archived") return archived;
       if (archived) return false;
+      if (filter === "empty") return empty;
+      if (empty) return false;
       if (filter === "stale") return stale;
       if (stale) return false;
       if (filter === "all") return session.status !== "ended";
@@ -315,6 +341,33 @@ export function App() {
       onRename={rename}
     />
   );
+
+  const renderGroup = (name: string, items: SessionRecord[]) => {
+    const collapsed = collapsedGroups.includes(name);
+    const needAttention = items.filter(
+      (session) => session.status === "waiting" || session.status === "idle",
+    ).length;
+    return (
+      <section key={name} className={`group ${collapsed ? "group--collapsed" : ""}`}>
+        <h2>
+          <button
+            className="group__title"
+            onClick={() => toggleGroup(name)}
+            aria-expanded={!collapsed}
+            title={collapsed ? "Expand group" : "Collapse group"}
+          >
+            <span className="group__caret">{collapsed ? "▸" : "▾"}</span>
+            <span className="group__name">{name}</span>
+            <span className="group__count">{items.length}</span>
+            {collapsed && needAttention > 0 && (
+              <span className="group__attn">{needAttention} need attention</span>
+            )}
+          </button>
+        </h2>
+        {!collapsed && <div className="grid">{items.map(renderCard)}</div>}
+      </section>
+    );
+  };
 
   return (
     <main className="app">
@@ -388,6 +441,15 @@ export function App() {
               onClick={() => setFilter("stale")}
             >
               Inactive <span className="pill__count">{counts.stale}</span>
+            </button>
+          )}
+          {counts.empty > 0 && (
+            <button
+              className={`pill pill--empty ${filter === "empty" ? "pill--on" : ""}`}
+              onClick={() => setFilter("empty")}
+              title="Sessions that never produced a turn (headless runs, aborted starts)"
+            >
+              Empty <span className="pill__count">{counts.empty}</span>
             </button>
           )}
           <button
@@ -491,23 +553,9 @@ export function App() {
           {grouped.names.map((name) => {
             const items = grouped.byName.get(name) ?? [];
             if (items.length === 0) return null;
-            return (
-              <section key={name} className="group">
-                <h2 className="group__title">
-                  {name} <span className="group__count">{items.length}</span>
-                </h2>
-                <div className="grid">{items.map(renderCard)}</div>
-              </section>
-            );
+            return renderGroup(name, items);
           })}
-          {grouped.ungrouped.length > 0 && (
-            <section className="group">
-              <h2 className="group__title">
-                Ungrouped <span className="group__count">{grouped.ungrouped.length}</span>
-              </h2>
-              <div className="grid">{grouped.ungrouped.map(renderCard)}</div>
-            </section>
-          )}
+          {grouped.ungrouped.length > 0 && renderGroup(UNGROUPED, grouped.ungrouped)}
         </>
       )}
 
