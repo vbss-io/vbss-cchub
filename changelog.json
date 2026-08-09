@@ -1,0 +1,33 @@
+[
+  {
+    "version": "1.1.2",
+    "date": "2026-07-25",
+    "highlights": [
+      "Headless sessions (SDK / claude -p) no longer enter the hub",
+      "Empty sessions are purged automatically after 12h (HUB_EMPTY_TTL_HOURS)",
+      "Session groups can be collapsed, with a needs-attention counter when closed"
+    ]
+  },
+  {
+    "version": "1.1.1",
+    "date": "2026-07-09",
+    "highlights": [
+      "HUB_SKIP environment variable makes notify hooks exit early"
+    ]
+  },
+  {
+    "version": "1.1.0",
+    "date": "2026-07-07",
+    "highlights": [
+      "Mobile LAN access with PWA manifest, title badge and vibration",
+      "Release script and containerization (Dockerfile)"
+    ]
+  },
+  {
+    "version": "1.0.0",
+    "date": "2026-07-06",
+    "highlights": [
+      "First public release: session board, notifications, always-on-top widget, VS Code focus, WSL support and .msi installer"
+    ]
+  }
+]

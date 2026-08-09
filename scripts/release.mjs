@@ -52,6 +52,17 @@ try {
   fail("gh is not authenticated");
 }
 
+const changelog = readJson(join(root, "changelog.json"));
+const entry = changelog[0];
+if (entry?.version !== version) {
+  fail(`changelog.json must start with an entry for ${version} (found ${entry?.version ?? "none"})`);
+}
+if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.date ?? "")) fail(`changelog entry ${version} needs a date (YYYY-MM-DD)`);
+if (!Array.isArray(entry.highlights) || entry.highlights.length === 0) {
+  fail(`changelog entry ${version} needs at least one highlight`);
+}
+const notes = entry.highlights.map((line) => `- ${line}`).join("\n");
+
 console.log(`release: bumping ${current} -> ${version}`);
 for (const dir of ["", ...workspaces]) {
   const path = join(root, dir, "package.json");
@@ -88,6 +99,8 @@ const built = join(bundleDir, `VBSS CCHUB_${version}_x64_en-US.msi`);
 if (!existsSync(built)) fail(`installer not found: ${built}`);
 const stable = join(bundleDir, "VBSS-CCHUB-Setup.msi");
 copyFileSync(built, stable);
+const versioned = join(bundleDir, `VBSS-CCHUB-Setup-v${version}.msi`);
+copyFileSync(built, versioned);
 
 console.log("release: committing version bump");
 run("git add -A");
@@ -95,7 +108,10 @@ run(`git commit -m "chore: release v${version}"`);
 run("git push");
 
 console.log(`release: publishing v${version}`);
-run(`gh release create v${version} "${stable}" --title "VBSS CCHUB v${version}" --generate-notes`);
+writeFileSync(join(bundleDir, "release-notes.md"), `${notes}\n`);
+run(
+  `gh release create v${version} "${stable}" "${versioned}" --title "VBSS CCHUB v${version}" --notes-file "${join(bundleDir, "release-notes.md")}"`,
+);
 
 let status = 0;
 for (let attempt = 1; attempt <= 5; attempt += 1) {

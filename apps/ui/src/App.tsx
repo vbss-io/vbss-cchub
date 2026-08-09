@@ -18,6 +18,7 @@ import {
 import { BrandMark, Wordmark } from "./components/BrandMark";
 import { GroupManager } from "./components/GroupManager";
 import { SessionCard } from "./components/SessionCard";
+import { WhatsNew } from "./components/WhatsNew";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { COFFEE_URL, notify, openExternal, playSound, unlockAudio } from "./notify";
 import { isEmpty, isStale } from "./stale";
@@ -91,6 +92,14 @@ export function App() {
   const [showNotif, setShowNotif] = useState(false);
   const [toolbarOpen, setToolbarOpen] = useState(() => localStorage.getItem("hub.toolbar") !== "0");
   const [collapsedGroups, setCollapsedGroups] = useState<string[]>(loadCollapsedGroups);
+  const [showWhatsNew, setShowWhatsNew] = useState(false);
+  const [seenVersion, setSeenVersion] = useState(() => localStorage.getItem("hub.seenVersion"));
+
+  const openWhatsNew = () => {
+    localStorage.setItem("hub.seenVersion", __APP_VERSION__);
+    setSeenVersion(__APP_VERSION__);
+    setShowWhatsNew(true);
+  };
 
   const toggleGroup = (name: string) => {
     setCollapsedGroups((current) => {
@@ -380,6 +389,13 @@ export function App() {
           </span>
         </h1>
         <div className="topbar__actions">
+          <button
+            className={`version ${seenVersion !== __APP_VERSION__ ? "version--new" : ""}`}
+            onClick={openWhatsNew}
+            title="What's new"
+          >
+            v{__APP_VERSION__}
+          </button>
           <span className="badge">{attention} need attention</span>
           <button
             className={`hookbtn ${hooks?.installed ? "hookbtn--on" : ""}`}
@@ -563,6 +579,8 @@ export function App() {
         <p className="empty">No active sessions. Set up the Claude Code hooks.</p>
       )}
       {list.length === 0 && filter !== "all" && <p className="empty">Nothing in this filter.</p>}
+
+      {showWhatsNew && <WhatsNew onClose={() => setShowWhatsNew(false)} />}
     </main>
   );
 }

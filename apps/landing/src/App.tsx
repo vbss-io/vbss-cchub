@@ -1,5 +1,8 @@
+import { useEffect, useState } from "react";
+
 const DOWNLOAD_URL =
   "https://github.com/vbss-io/vbss-cchub/releases/latest/download/VBSS-CCHUB-Setup.msi";
+const RELEASE_API = "https://api.github.com/repos/vbss-io/vbss-cchub/releases/latest";
 const GITHUB_URL = "https://github.com/vbss-io/vbss-cchub";
 const PORTFOLIO_URL = "https://vbss.io";
 const COFFEE_URL = "https://www.buymeacoffee.com/vbss.io";
@@ -40,7 +43,46 @@ const FEATURES: Feature[] = [
 
 const SLOGANS = ["Run many. Forget none.", "Make every token count.", "Never lose a session again."];
 
+interface LatestRelease {
+  version: string;
+  highlights: string[];
+  downloadUrl: string;
+}
+
+interface ReleaseResponse {
+  tag_name?: string;
+  body?: string;
+  assets?: { name: string; browser_download_url: string }[];
+}
+
+async function fetchLatestRelease(): Promise<LatestRelease | null> {
+  try {
+    const response = await fetch(RELEASE_API);
+    if (!response.ok) return null;
+    const data = (await response.json()) as ReleaseResponse;
+    const version = data.tag_name?.replace(/^v/, "");
+    if (!version) return null;
+    const highlights = (data.body ?? "")
+      .split("\n")
+      .filter((line) => line.startsWith("- "))
+      .map((line) => line.slice(2).trim());
+    const versioned = data.assets?.find((asset) => asset.name === `VBSS-CCHUB-Setup-v${version}.msi`);
+    return { version, highlights, downloadUrl: versioned?.browser_download_url ?? DOWNLOAD_URL };
+  } catch {
+    return null;
+  }
+}
+
 export function App() {
+  const [release, setRelease] = useState<LatestRelease | null>(null);
+
+  useEffect(() => {
+    void fetchLatestRelease().then(setRelease);
+  }, []);
+
+  const downloadUrl = release?.downloadUrl ?? DOWNLOAD_URL;
+  const versionSuffix = release ? ` · v${release.version}` : "";
+
   return (
     <div className="page">
       <header className="nav">
@@ -56,8 +98,8 @@ export function App() {
           <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
             GitHub
           </a>
-          <a className="btn btn--sm" href={DOWNLOAD_URL}>
-            Download
+          <a className="btn btn--sm" href={downloadUrl}>
+            Download{versionSuffix}
           </a>
         </nav>
       </header>
@@ -76,14 +118,25 @@ export function App() {
             and make every token count.
           </p>
           <div className="hero__cta">
-            <a className="btn btn--lg" href={DOWNLOAD_URL}>
-              Download for Windows
+            <a className="btn btn--lg" href={downloadUrl}>
+              Download for Windows{versionSuffix}
             </a>
             <a className="btn btn--ghost btn--lg" href={GITHUB_URL} target="_blank" rel="noopener noreferrer">
               View on GitHub
             </a>
           </div>
           <p className="hero__note">Free · No account · Your sessions never leave your machine</p>
+
+          {release && release.highlights.length > 0 && (
+            <div className="whatsnew">
+              <span className="whatsnew__title">What's new in v{release.version}</span>
+              <ul>
+                {release.highlights.map((highlight) => (
+                  <li key={highlight}>{highlight}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="shot">
             <img className="shot__app" src="/shot-app.png" alt="VBSS CCHUB session board" />
@@ -136,8 +189,8 @@ export function App() {
         <section className="cta">
           <h2>Stop babysitting terminals.</h2>
           <p>Install it once. Let it watch. Get back to building.</p>
-          <a className="btn btn--lg" href={DOWNLOAD_URL}>
-            Download for Windows
+          <a className="btn btn--lg" href={downloadUrl}>
+            Download for Windows{versionSuffix}
           </a>
           <a className="coffee-link" href={COFFEE_URL} target="_blank" rel="noopener noreferrer">
             ☕ Like it? Buy me a coffee
