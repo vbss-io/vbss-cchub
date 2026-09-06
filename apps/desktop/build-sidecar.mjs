@@ -23,6 +23,19 @@ await build({
   outfile: join(sidecar, "server.cjs"),
 });
 
+await build({
+  entryPoints: [join(root, "apps", "server", "src", "mcp.ts")],
+  bundle: true,
+  platform: "node",
+  format: "cjs",
+  target: "node22",
+  define: { "import.meta.url": "__cch_import_meta_url" },
+  banner: { js: "const __cch_import_meta_url = require('url').pathToFileURL(__filename).href;" },
+  outfile: join(sidecar, "mcp.cjs"),
+});
+
+cpSync(join(root, "apps/server/shell"), join(sidecar, "shell"), { recursive: true });
+
 for (const dep of ["better-sqlite3", "bindings", "file-uri-to-path"]) {
   cpSync(join(root, "node_modules", dep), join(sidecar, "node_modules", dep), { recursive: true });
 }
@@ -30,7 +43,7 @@ for (const dep of ["better-sqlite3", "bindings", "file-uri-to-path"]) {
 copyFileSync(execPath, join(sidecar, "node.exe"));
 
 copyFileSync(join(root, "apps/server/scripts/focus.ps1"), join(sidecar, "scripts", "focus.ps1"));
-for (const f of ["configure.mjs", "notify.mjs", "notify.sh", "find-host-window.ps1"]) {
+for (const f of ["configure.mjs", "notify.mjs", "guard.mjs", "notify.sh", "find-host-window.ps1"]) {
   copyFileSync(join(root, "apps/server/hooks", f), join(sidecar, "hooks", f));
 }
 

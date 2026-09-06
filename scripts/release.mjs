@@ -102,6 +102,14 @@ copyFileSync(built, stable);
 const versioned = join(bundleDir, `VBSS-CCHUB-Setup-v${version}.msi`);
 copyFileSync(built, versioned);
 
+const nsisDir = join(root, "apps/desktop/src-tauri/target/release/bundle/nsis");
+const builtNsis = join(nsisDir, `VBSS CCHUB_${version}_x64-setup.exe`);
+if (!existsSync(builtNsis)) fail(`per-user installer not found: ${builtNsis}`);
+const stableNsis = join(nsisDir, "VBSS-CCHUB-Setup.exe");
+copyFileSync(builtNsis, stableNsis);
+const versionedNsis = join(nsisDir, `VBSS-CCHUB-Setup-v${version}.exe`);
+copyFileSync(builtNsis, versionedNsis);
+
 console.log("release: committing version bump");
 run("git add -A");
 run(`git commit -m "chore: release v${version}"`);
@@ -110,7 +118,7 @@ run("git push");
 console.log(`release: publishing v${version}`);
 writeFileSync(join(bundleDir, "release-notes.md"), `${notes}\n`);
 run(
-  `gh release create v${version} "${stable}" "${versioned}" --title "VBSS CCHUB v${version}" --notes-file "${join(bundleDir, "release-notes.md")}"`,
+  `gh release create v${version} "${stable}" "${versioned}" "${stableNsis}" "${versionedNsis}" --title "VBSS CCHUB v${version}" --notes-file "${join(bundleDir, "release-notes.md")}"`,
 );
 
 let status = 0;

@@ -1,6 +1,6 @@
 {
   "name": "vbss-cchub",
-  "version": "1.1.3",
+  "version": "1.2.0",
   "private": true,
   "workspaces": [
     "apps/*"
@@ -13,7 +13,8 @@
     "typecheck": "npm run typecheck -w @cch/server && npm run typecheck -w @cch/ui",
     "desktop:dev": "npm run dev -w @cch/desktop",
     "desktop:build": "npm run build -w @cch/desktop",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "test": "npm test -w @cch/server"
   },
   "devDependencies": {
     "concurrently": "^10.0.3"

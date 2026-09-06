@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 export interface SessionName {
@@ -44,7 +44,8 @@ export interface TranscriptInfo {
 interface TranscriptLine {
   type?: string;
   aiTitle?: string;
-  message?: { model?: string; usage?: Record<string, number> };
+  timestamp?: string;
+  message?: { model?: string; usage?: Record<string, number>; content?: unknown; role?: string };
 }
 
 export function readTranscript(path: string | null): TranscriptInfo {
@@ -96,4 +97,130 @@ export function readTranscript(path: string | null): TranscriptInfo {
     out.tokensOut = tokensOut;
   }
   return out;
+}
+
+export type TranscriptRole = "user" | "assistant" | "tool" | "result";
+
+export interface TranscriptEntry {
+  at: number | null;
+  role: TranscriptRole;
+  text: string;
+  tool: string | null;
+}
+
+const TAIL_BYTES = 512_000;
+const MAX_TEXT = 4000;
+const MAX_TOOL_TEXT = 200;
+
+type Json = Record<string, unknown>;
+
+const isString = (value: unknown): value is string => typeof value === "string";
+const asObject = (value: unknown): Json | null =>
+  value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : null;
+
+const clip = (text: string, max: number): string => {
+  const trimmed = text.trim();
+  return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
+};
+
+function readTailText(path: string): string {
+  const size = statSync(path).size;
+  const start = Math.max(0, size - TAIL_BYTES);
+  const fd = openSync(path, "r");
+  try {
+    const buffer = Buffer.alloc(size - start);
+    const read = readSync(fd, buffer, 0, buffer.length, start);
+    const text = buffer.toString("utf8", 0, read);
+    if (start === 0) return text;
+    const firstBreak = text.indexOf("\n");
+    return firstBreak >= 0 ? text.slice(firstBreak + 1) : "";
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function toolSummary(name: string, input: unknown): string {
+  const obj = asObject(input);
+  if (!obj) return "";
+  const preferred = ["command", "file_path", "pattern", "path", "url", "description", "prompt", "query", "subagent_type"];
+  for (const key of preferred) {
+    const value = obj[key];
+    if (isString(value) && value.trim().length > 0) return clip(value, MAX_TOOL_TEXT);
+  }
+  const first = Object.values(obj).find(isString);
+  return first ? clip(first, MAX_TOOL_TEXT) : "";
+}
+
+function contentText(content: unknown): string {
+  if (isString(content)) return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      const item = asObject(part);
+      return item && item.type === "text" && isString(item.text) ? item.text : "";
+    })
+    .filter((text) => text.length > 0)
+    .join("\n");
+}
+
+function entriesFromLine(entry: TranscriptLine): TranscriptEntry[] {
+  const at = isString(entry.timestamp) ? Date.parse(entry.timestamp) || null : null;
+  const message = entry.message;
+  if (!message) return [];
+  if (entry.type === "user") {
+    if (isString(message.content)) {
+      const text = clip(message.content, MAX_TEXT);
+      return text.length > 0 ? [{ at, role: "user", text, tool: null }] : [];
+    }
+    if (!Array.isArray(message.content)) return [];
+    const out: TranscriptEntry[] = [];
+    for (const part of message.content) {
+      const item = asObject(part);
+      if (!item) continue;
+      if (item.type === "text" && isString(item.text) && item.text.trim().length > 0) {
+        out.push({ at, role: "user", text: clip(item.text, MAX_TEXT), tool: null });
+      }
+      if (item.type === "tool_result") {
+        const text = clip(contentText(item.content) || (isString(item.content) ? item.content : ""), MAX_TOOL_TEXT);
+        out.push({ at, role: "result", text: text || "(no output)", tool: null });
+      }
+    }
+    return out;
+  }
+  if (entry.type === "assistant" && Array.isArray(message.content)) {
+    const out: TranscriptEntry[] = [];
+    for (const part of message.content) {
+      const item = asObject(part);
+      if (!item) continue;
+      if (item.type === "text" && isString(item.text) && item.text.trim().length > 0) {
+        out.push({ at, role: "assistant", text: clip(item.text, MAX_TEXT), tool: null });
+      }
+      if (item.type === "tool_use" && isString(item.name)) {
+        out.push({ at, role: "tool", text: toolSummary(item.name, item.input), tool: item.name });
+      }
+    }
+    return out;
+  }
+  return [];
+}
+
+export function readTranscriptTail(path: string | null, limit = 40): TranscriptEntry[] {
+  if (!path) return [];
+  let text: string;
+  try {
+    text = readTailText(path);
+  } catch {
+    return [];
+  }
+  const entries: TranscriptEntry[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    try {
+      entries.push(...entriesFromLine(JSON.parse(trimmed) as TranscriptLine));
+    } catch {
+      continue;
+    }
+  }
+  return entries.slice(-limit);
 }

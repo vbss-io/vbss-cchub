@@ -3,6 +3,7 @@ import { fetchGroups, fetchSessions, focusSession, subscribe } from "../api";
 import { BrandMark } from "./BrandMark";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "../mock";
 import { isEmpty, isStale } from "../stale";
+import { isHubRun } from "../clients";
 import type { GroupRecord, SessionRecord, SessionStatus } from "../types";
 
 type SortKey = "status" | "recent" | "name";
@@ -155,18 +156,18 @@ export function Widget() {
     void fetchGroups().then((list) => {
       if (mounted) setGroups(list);
     });
-    const unsubscribe = subscribe(
-      (session) => setSessions((prev) => ({ ...prev, [session.sessionId]: session })),
-      (sessionId) =>
+    const unsubscribe = subscribe({
+      onSession: (session) => setSessions((prev) => ({ ...prev, [session.sessionId]: session })),
+      onRemoved: (sessionId) =>
         setSessions((prev) => {
           const next = { ...prev };
           delete next[sessionId];
           return next;
         }),
-      (nextGroups) => {
+      onGroups: (nextGroups) => {
         if (mounted) setGroups(nextGroups);
       },
-    );
+    });
     return () => {
       mounted = false;
       unsubscribe();
@@ -175,7 +176,7 @@ export function Widget() {
 
   const list = useMemo(() => {
     let arr = Object.values(sessions).filter(
-      (s) => s.archivedAt == null && s.status !== "ended" && !isStale(s) && !isEmpty(s),
+      (s) => s.archivedAt == null && s.status !== "ended" && !isStale(s) && !isEmpty(s) && !isHubRun(s.client),
     );
     if (config.attentionOnly) {
       arr = arr.filter((s) => s.status === "waiting" || s.status === "idle");
@@ -196,6 +197,7 @@ export function Widget() {
           s.archivedAt == null &&
           !isStale(s) &&
           !isEmpty(s) &&
+          !isHubRun(s.client) &&
           (s.status === "waiting" || s.status === "idle"),
       ).length,
     [sessions],

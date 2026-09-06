@@ -22,9 +22,17 @@ fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
     if !node.exists() || !server.exists() {
         return None;
     }
+    let app_exe = std::env::current_exe()
+        .map(|p| {
+            let s = p.to_string_lossy().to_string();
+            s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+        })
+        .unwrap_or_default();
     let mut cmd = Command::new(&node);
     cmd.arg(&server)
         .env("HUB_RESOURCE_DIR", &sidecar)
+        .env("HUB_DELEGATION", "1")
+        .env("HUB_APP_EXE", app_exe)
         .env("HUB_PARENT_PID", std::process::id().to_string());
     if let Ok(profile) = std::env::var("USERPROFILE") {
         let dir = std::path::PathBuf::from(profile).join(".vbss-cchub");

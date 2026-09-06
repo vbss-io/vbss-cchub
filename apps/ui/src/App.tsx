@@ -1,75 +1,65 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  archiveSession,
-  createGroup,
-  deleteGroup,
-  deleteSession,
-  fetchGroups,
-  fetchSessions,
-  focusSession,
-  getHooks,
-  renameSession,
-  reorderGroups,
-  setHooks,
-  subscribe,
-  updateGroup,
-  type HooksStatus,
-} from "./api";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { archiveSession, createGroup, deleteGroup, deleteSession, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, renameSession, reorderGroups, setHooks, subscribe, updateGroup, type HooksStatus, type ShareStreamEvent } from "./api";
+import { isHubRun } from "./clients";
 import { BrandMark, Wordmark } from "./components/BrandMark";
-import { GroupManager } from "./components/GroupManager";
-import { SessionCard } from "./components/SessionCard";
+import { RuntimeBar } from "./components/RuntimeBar";
+import { SessionDrawer } from "./components/SessionDrawer";
 import { WhatsNew } from "./components/WhatsNew";
+import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, listReports, listTasks, listWorkspaces, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type ShellKind, type TaskRecord, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
+import { IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconWorkspaces } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
-import { COFFEE_URL, notify, openExternal, playSound, unlockAudio } from "./notify";
+import { notify, playSound, unlockAudio } from "./notify";
 import { isEmpty, isStale } from "./stale";
-import type { GroupRecord, SessionRecord, SessionStatus } from "./types";
+import type { CodexSessionRecord, GroupRecord, RunEventMessage, RuntimeSnapshot, SessionRecord, SessionClient } from "./types";
+import { FlowView } from "./views/FlowView";
+import { ReportsView } from "./views/ReportsView";
+import { SessionsView } from "./views/SessionsView";
+import { SettingsView, type NotifSettings, type SettingsSection, type ThemeName } from "./views/SettingsView";
+import { ShareView } from "./views/ShareView";
+import { TasksView } from "./views/TasksView";
+import { WorkspacesView } from "./views/WorkspacesView";
+import { workspaceOf } from "./wsmatch";
 
-type SortKey = "status" | "recent" | "name";
-type FilterKey = SessionStatus | "all" | "archived" | "stale" | "empty";
+type View = "sessions" | "flow" | "tasks" | "workspaces" | "reports" | "share" | "settings";
 
-interface NotifSettings {
-  attention: boolean;
-  finished: boolean;
-  desktop: boolean;
-  sound: boolean;
+interface Route {
+  view: View;
+  param: string | null;
 }
 
-const DEFAULT_NOTIF: NotifSettings = { attention: true, finished: true, desktop: true, sound: true };
+const VIEWS: { key: View; label: string; icon: ReactElement; subtitle: string }[] = [
+  { key: "sessions", label: "Sessions", icon: <IconSessions />, subtitle: "Every Claude Code session on this machine, plus Codex threads" },
+  { key: "flow", label: "Flow", icon: <IconFlow />, subtitle: "Workspaces, sessions, subagents and delegated tasks as a live map" },
+  { key: "tasks", label: "Delegated", icon: <IconTasks />, subtitle: "Work handed to the hub by agents: follow, steer, cancel" },
+  { key: "workspaces", label: "Workspaces", icon: <IconWorkspaces />, subtitle: "The same registry your wk alias uses" },
+  { key: "reports", label: "Reports", icon: <IconReports />, subtitle: "What agents reported back" },
+  { key: "share", label: "Share", icon: <IconShare />, subtitle: "Links so other people and their assistants can ask your Claude, on the LAN or through ngrok" },
+  { key: "settings", label: "Settings", icon: <IconSettings />, subtitle: "Paths, hooks, connections, notifications, groups" },
+];
+
+const DEFAULT_NOTIF: NotifSettings = {
+  attention: true,
+  finished: true,
+  desktop: true,
+  sound: true,
+  shares: true,
+  clients: { terminal: true, vscode: true, wsl: true, "claude-desktop": false, headless: false, hub: false, share: false },
+};
 
 function loadNotif(): NotifSettings {
   try {
-    return { ...DEFAULT_NOTIF, ...JSON.parse(localStorage.getItem("hub.notifications") ?? "{}") };
+    const stored = JSON.parse(localStorage.getItem("hub.notifications") ?? "{}") as Partial<NotifSettings>;
+    return { ...DEFAULT_NOTIF, ...stored, clients: { ...DEFAULT_NOTIF.clients, ...(stored.clients ?? {}) } };
   } catch {
     return DEFAULT_NOTIF;
   }
 }
 
-function loadCollapsedGroups(): string[] {
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem("hub.collapsedGroups") ?? "[]");
-    return Array.isArray(stored) ? stored.filter((name): name is string => typeof name === "string") : [];
-  } catch {
-    return [];
-  }
+function parseRoute(hash: string): Route {
+  const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  const view = VIEWS.find((item) => item.key === parts[0])?.key ?? "sessions";
+  return { view, param: parts[1] ?? null };
 }
-
-const UNGROUPED = "Ungrouped";
-
-const sortRank: Record<SessionStatus, number> = {
-  waiting: 0,
-  idle: 1,
-  active: 2,
-  ended: 3,
-};
-
-const STATUS_ORDER: SessionStatus[] = ["waiting", "idle", "active", "ended"];
-
-const STATUS_LABELS: Record<SessionStatus, string> = {
-  waiting: "Waiting",
-  idle: "Idle",
-  active: "Active",
-  ended: "Ended",
-};
 
 const projectOf = (session: SessionRecord): string => {
   if (!session.cwd) return session.sessionId.slice(0, 8);
@@ -77,47 +67,49 @@ const projectOf = (session: SessionRecord): string => {
   return parts[parts.length - 1] ?? session.cwd;
 };
 
-const byRecent = (a: SessionRecord, b: SessionRecord): number => b.updatedAt - a.updatedAt;
-
 export function App() {
+  const [route, setRoute] = useState<Route>(() => parseRoute(location.hash));
   const [sessions, setSessions] = useState<Record<string, SessionRecord>>({});
-  const [hooks, setHooksState] = useState<HooksStatus | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [filter, setFilter] = useState<FilterKey>("all");
-  const [sort, setSort] = useState<SortKey>("status");
   const [groups, setGroups] = useState<GroupRecord[]>([]);
-  const [managing, setManaging] = useState(false);
+  const [hooks, setHooksState] = useState<HooksStatus | null>(null);
+  const [hooksBusy, setHooksBusy] = useState(false);
+  const [runtimes, setRuntimes] = useState<RuntimeSnapshot | null>(null);
+  const [codexSessions, setCodexSessions] = useState<CodexSessionRecord[]>([]);
+  const [hubEnabled, setHubEnabled] = useState(true);
+  const [settings, setSettings] = useState<DelegationSettings | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
+  const [tasks, setTasks] = useState<TaskRecord[]>([]);
+  const [reports, setReports] = useState<ReportRecord[]>([]);
+  const [connect, setConnect] = useState<ConnectStatus | null>(null);
   const [tick, setTick] = useState(0);
+  const [hubTick, setHubTick] = useState(0);
   const [notifSettings, setNotifSettings] = useState<NotifSettings>(loadNotif);
-  const [showNotif, setShowNotif] = useState(false);
-  const [toolbarOpen, setToolbarOpen] = useState(() => localStorage.getItem("hub.toolbar") !== "0");
-  const [collapsedGroups, setCollapsedGroups] = useState<string[]>(loadCollapsedGroups);
   const [showWhatsNew, setShowWhatsNew] = useState(false);
   const [seenVersion, setSeenVersion] = useState(() => localStorage.getItem("hub.seenVersion"));
+  const [drawer, setDrawer] = useState<string | null>(null);
+  const [shareTick, setShareTick] = useState(0);
+  const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
+  const [autostart, setAutostartState] = useState<AutostartStatus | null>(null);
+  const [theme, setTheme] = useState<ThemeName>(() => (localStorage.getItem("hub.theme") === "midnight" ? "midnight" : "dracula"));
 
-  const openWhatsNew = () => {
-    localStorage.setItem("hub.seenVersion", __APP_VERSION__);
-    setSeenVersion(__APP_VERSION__);
-    setShowWhatsNew(true);
-  };
-
-  const toggleGroup = (name: string) => {
-    setCollapsedGroups((current) => {
-      const next = current.includes(name)
-        ? current.filter((item) => item !== name)
-        : [...current, name];
-      localStorage.setItem("hub.collapsedGroups", JSON.stringify(next));
-      return next;
-    });
-  };
-
-  const toggleToolbar = () => {
-    setToolbarOpen((open) => {
-      localStorage.setItem("hub.toolbar", open ? "0" : "1");
-      return !open;
-    });
-  };
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("hub.theme", theme);
+  }, [theme]);
+  const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const notifRef = useRef(notifSettings);
+  const runListeners = useRef(new Set<(event: RunEventMessage) => void>());
+  const shareListeners = useRef(new Set<(event: ShareStreamEvent) => void>());
+
+  const navigate = useCallback((view: View, param?: string | null) => {
+    location.hash = param ? `#/${view}/${param}` : `#/${view}`;
+  }, []);
+
+  useEffect(() => {
+    const onHash = () => setRoute(parseRoute(location.hash));
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   useEffect(() => {
     notifRef.current = notifSettings;
@@ -136,51 +128,241 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!notice) return;
+    const id = setTimeout(() => setNotice(null), 6_000);
+    return () => clearTimeout(id);
+  }, [notice]);
+
+  const loadHub = useCallback(async () => {
+    try {
+      const [nextSettings, nextWorkspaces, nextTasks, nextReports] = await Promise.all([getSettings(), listWorkspaces(), listTasks(), listReports()]);
+      setSettings(nextSettings);
+      setWorkspaces(nextWorkspaces);
+      setTasks(nextTasks);
+      setReports(nextReports);
+      setHubEnabled(true);
+    } catch (err) {
+      if (err instanceof DelegationDisabledError) setHubEnabled(false);
+    }
+  }, []);
+
+  const loadConnect = useCallback(async () => {
+    try {
+      setConnect(await getConnect());
+    } catch {
+      setConnect(null);
+    }
+  }, []);
+
+  useEffect(() => {
     if (isMock) {
       setHooksState({ installed: true, events: [], wsl: [{ distro: "Ubuntu-24.04", installed: true }] });
+      setHubEnabled(false);
       return;
     }
     void getHooks()
       .then(setHooksState)
       .catch(() => setHooksState({ installed: false, events: [] }));
+    void loadHub();
+  }, [loadHub]);
+
+  useEffect(() => {
+    if (isMock) return;
+    void loadHub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hubTick]);
+
+  useEffect(() => {
+    if (isMock || route.view !== "settings" || !hubEnabled) return;
+    void getAutostart()
+      .then(setAutostartState)
+      .catch(() => setAutostartState(null));
+    void loadConnect();
+  }, [route.view, hubEnabled, loadConnect]);
+
+  useEffect(() => {
+    if (isMock) return;
+    let mounted = true;
+    const poll = () => {
+      void fetchRuntimes()
+        .then((snapshot) => {
+          if (mounted) setRuntimes(snapshot);
+        })
+        .catch(() => undefined);
+      void fetchCodexSessions()
+        .then((list) => {
+          if (mounted) setCodexSessions(list);
+        })
+        .catch(() => undefined);
+    };
+    poll();
+    const id = setInterval(poll, 10_000);
+    return () => {
+      mounted = false;
+      clearInterval(id);
+    };
   }, []);
 
+  useEffect(() => {
+    if (isMock) {
+      setSessions(Object.fromEntries(MOCK_SESSIONS.map((s) => [s.sessionId, s])));
+      setGroups(MOCK_GROUPS);
+      return;
+    }
+    let mounted = true;
+    void fetchSessions().then((list) => {
+      if (mounted) setSessions(Object.fromEntries(list.map((session) => [session.sessionId, session])));
+    });
+    void fetchGroups().then((list) => {
+      if (mounted) setGroups(list);
+    });
+    const unsubscribe = subscribe({
+      onSession: (session) => {
+        setSessions((prev) => {
+          const before = prev[session.sessionId];
+          const cfg = notifRef.current;
+          const quiet = !(cfg.clients[(session.client ?? "terminal") as SessionClient] ?? true) || session.archivedAt != null;
+          if (!quiet && (!before || before.status !== session.status)) {
+            const label = session.customTitle ?? session.title ?? projectOf(session);
+            if ((session.status === "waiting" || session.status === "idle") && cfg.attention) {
+              if (cfg.desktop) void notify("VBSS CCHUB", `${label} • ${session.status === "waiting" ? "needs a decision" : "paused"}`);
+              if (cfg.sound) {
+                void playSound(session.status === "idle" ? "idle" : "attention");
+                navigator.vibrate?.(session.status === "waiting" ? [90, 60, 90] : 160);
+              }
+            } else if (session.status === "ended" && before && cfg.finished) {
+              if (cfg.desktop) void notify("VBSS CCHUB", `${label} • finished`);
+              if (cfg.sound) void playSound("finished");
+            }
+          }
+          return { ...prev, [session.sessionId]: session };
+        });
+      },
+      onRemoved: (sessionId) =>
+        setSessions((prev) => {
+          const next = { ...prev };
+          delete next[sessionId];
+          return next;
+        }),
+      onGroups: (nextGroups) => {
+        if (mounted) setGroups(nextGroups);
+      },
+      onHooks: (nextHooks) => {
+        if (mounted) setHooksState(nextHooks);
+      },
+      onDelegation: () => {
+        if (mounted) setHubTick((value) => value + 1);
+      },
+      onReport: () => {
+        if (mounted) setHubTick((value) => value + 1);
+      },
+      onRunEvent: (event) => {
+        for (const listener of runListeners.current) listener(event);
+      },
+      onShareRequest: (request) => {
+        if (mounted) setShareTick((value) => value + 1);
+        const cfg = notifRef.current;
+        if (request.status === "running" && cfg.shares) {
+          const text = `${request.asker ?? request.label} • ${request.kind === "ask" ? "asked" : "requested"}: ${request.prompt.slice(0, 90)}`;
+          if (cfg.desktop) void notify("VBSS CCHUB", text);
+          if (cfg.sound) void playSound("attention");
+        }
+      },
+      onTunnel: (status) => {
+        if (mounted) setTunnel(status);
+      },
+      onShareStream: (event) => {
+        for (const listener of shareListeners.current) listener(event);
+      },
+    });
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hubEnabled || isMock) return;
+    void getTunnel()
+      .then(setTunnel)
+      .catch(() => setTunnel(null));
+  }, [hubEnabled, shareTick]);
+
+  const subscribeShareStream = useCallback((listener: (event: ShareStreamEvent) => void) => {
+    shareListeners.current.add(listener);
+    return () => {
+      shareListeners.current.delete(listener);
+    };
+  }, []);
+
+  const subscribeRunEvents = useCallback((listener: (event: RunEventMessage) => void) => {
+    runListeners.current.add(listener);
+    return () => {
+      runListeners.current.delete(listener);
+    };
+  }, []);
+
+  const liveSessions = useMemo(
+    () => Object.values(sessions).filter((s) => s.archivedAt == null && s.status !== "ended" && !isStale(s) && !isEmpty(s) && !isHubRun(s.client)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessions, tick],
+  );
+  const attention = liveSessions.filter((s) => s.status === "waiting" || s.status === "idle").length;
+  const hubRunning = tasks.filter((t) => t.status === "running" || t.status === "pending").length;
+  const hubAttention = tasks.filter((t) => t.status === "attention" || t.status === "failed" || t.status === "interrupted").length;
+
+  useEffect(() => {
+    document.title = attention > 0 ? `(${attention}) VBSS CCHUB` : "VBSS CCHUB";
+    const nav = navigator as Navigator & { setAppBadge?: (count?: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+    if (attention > 0) nav.setAppBadge?.(attention)?.catch(() => {});
+    else nav.clearAppBadge?.()?.catch(() => {});
+  }, [attention]);
+
   const toggleHooks = async () => {
-    if (!hooks || busy) return;
-    setBusy(true);
+    if (!hooks || hooksBusy) return;
+    setHooksBusy(true);
     try {
       setHooksState(await setHooks(!hooks.installed));
     } finally {
-      setBusy(false);
+      setHooksBusy(false);
     }
   };
 
-  const archive = (sessionId: string) => {
-    void archiveSession(sessionId);
-  };
+  const ok = useCallback((text: string) => setNotice({ kind: "ok", text }), []);
+  const fail = useCallback((text: string) => setNotice({ kind: "error", text }), []);
 
-  const remove = (sessionId: string) => {
-    void deleteSession(sessionId);
-  };
-
-  const focus = (sessionId: string) => {
-    void focusSession(sessionId);
-  };
-
-  const rename = (sessionId: string, title: string) => {
-    void renameSession(sessionId, title);
-  };
-
-  const archiveStale = () => {
-    for (const session of Object.values(sessions)) {
-      if (isStale(session)) void archiveSession(session.sessionId);
+  const saveSettings = async (patch: Partial<DelegationSettings>) => {
+    try {
+      setSettings(await updateSettings(patch));
+      await loadHub();
+      setConnect(null);
+      await loadConnect();
+      ok("Settings saved.");
+    } catch (err) {
+      fail(err instanceof Error ? err.message : "could not save");
     }
   };
 
-  const addGroup = (name: string, match: string) => void createGroup(name, match);
-  const editGroup = (id: string, fields: { name?: string; match?: string }) =>
-    void updateGroup(id, fields);
-  const removeGroup = (id: string) => void deleteGroup(id);
+  const shell = async (kind: ShellKind, action: "install" | "uninstall") => {
+    try {
+      await configureShell(kind, action);
+      await loadConnect();
+      ok(action === "install" ? "Alias installed. Reopen the terminal." : "Alias removed.");
+    } catch (err) {
+      fail(err instanceof Error ? err.message : "could not change the alias");
+    }
+  };
+
+  const mcp = async (client: McpClient, action: "install" | "uninstall") => {
+    try {
+      await configureMcp(client, action);
+      await loadConnect();
+      ok(action === "install" ? "Connected. Restart the client so it loads the hub tools." : "Disconnected.");
+    } catch (err) {
+      fail(err instanceof Error ? err.message : "could not change the connection");
+    }
+  };
+
   const moveGroup = (id: string, direction: -1 | 1) => {
     const index = groups.findIndex((group) => group.id === id);
     const target = index + direction;
@@ -194,393 +376,197 @@ export function App() {
     void reorderGroups(ids);
   };
 
-  useEffect(() => {
-    if (isMock) {
-      setSessions(Object.fromEntries(MOCK_SESSIONS.map((s) => [s.sessionId, s])));
-      setGroups(MOCK_GROUPS);
-      return;
-    }
-    let mounted = true;
-    void fetchSessions().then((list) => {
-      if (!mounted) return;
-      setSessions(Object.fromEntries(list.map((session) => [session.sessionId, session])));
-    });
-    void fetchGroups().then((list) => {
-      if (mounted) setGroups(list);
-    });
-    const unsubscribe = subscribe(
-      (session) => {
-        setSessions((prev) => {
-          const before = prev[session.sessionId];
-          if (session.archivedAt == null && (!before || before.status !== session.status)) {
-            const cfg = notifRef.current;
-            const label = session.customTitle ?? session.title ?? projectOf(session);
-            if ((session.status === "waiting" || session.status === "idle") && cfg.attention) {
-              if (cfg.desktop) {
-                void notify(
-                  "VBSS CCHUB",
-                  `${label} • ${session.status === "waiting" ? "needs a decision" : "paused"}`,
-                );
-              }
-              if (cfg.sound) {
-                void playSound(session.status === "idle" ? "idle" : "attention");
-                navigator.vibrate?.(session.status === "waiting" ? [90, 60, 90] : 160);
-              }
-            } else if (session.status === "ended" && before && cfg.finished) {
-              if (cfg.desktop) void notify("VBSS CCHUB", `${label} • finished`);
-              if (cfg.sound) void playSound("finished");
-            }
-          }
-          return { ...prev, [session.sessionId]: session };
-        });
-      },
-      (sessionId) => {
-        setSessions((prev) => {
-          const next = { ...prev };
-          delete next[sessionId];
-          return next;
-        });
-      },
-      (nextGroups) => {
-        if (mounted) setGroups(nextGroups);
-      },
-      (nextHooks) => {
-        if (mounted) setHooksState(nextHooks);
-      },
-    );
-    return () => {
-      mounted = false;
-      unsubscribe();
-    };
-  }, []);
-
-  const counts = useMemo(() => {
-    const result = { waiting: 0, idle: 0, active: 0, ended: 0, stale: 0, archived: 0, empty: 0 };
-    for (const session of Object.values(sessions)) {
-      if (session.archivedAt != null) result.archived += 1;
-      else if (isEmpty(session)) result.empty += 1;
-      else if (session.status === "ended") result.ended += 1;
-      else if (isStale(session)) result.stale += 1;
-      else result[session.status] += 1;
-    }
-    return result;
-  }, [sessions, tick]);
-
-  const total = counts.waiting + counts.idle + counts.active;
-  const attention = counts.waiting + counts.idle;
-
-  useEffect(() => {
-    document.title = attention > 0 ? `(${attention}) VBSS CCHUB` : "VBSS CCHUB";
-    const nav = navigator as Navigator & {
-      setAppBadge?: (count?: number) => Promise<void>;
-      clearAppBadge?: () => Promise<void>;
-    };
-    if (attention > 0) nav.setAppBadge?.(attention)?.catch(() => {});
-    else nav.clearAppBadge?.()?.catch(() => {});
-  }, [attention]);
-
-  const list = useMemo(() => {
-    const all = Object.values(sessions);
-    const filtered = all.filter((session) => {
-      const archived = session.archivedAt != null;
-      const empty = !archived && isEmpty(session);
-      const stale = !archived && !empty && session.status !== "ended" && isStale(session);
-      if (filter === "archived") return archived;
-      if (archived) return false;
-      if (filter === "empty") return empty;
-      if (empty) return false;
-      if (filter === "stale") return stale;
-      if (stale) return false;
-      if (filter === "all") return session.status !== "ended";
-      return session.status === filter;
-    });
-    return filtered.sort((a, b) => {
-      if (sort === "recent") return byRecent(a, b);
-      if (sort === "name") {
-        const nameA = (a.customTitle ?? a.title ?? projectOf(a)).toLowerCase();
-        const nameB = (b.customTitle ?? b.title ?? projectOf(b)).toLowerCase();
-        return nameA.localeCompare(nameB) || byRecent(a, b);
-      }
-      return sortRank[a.status] - sortRank[b.status] || byRecent(a, b);
-    });
-  }, [sessions, filter, sort, tick]);
-
-  const grouped = useMemo(() => {
-    const groupNameFor = (session: SessionRecord): string | null => {
-      const cwd = (session.cwd ?? "").toLowerCase();
-      for (const group of groups) {
-        const pattern = group.match.trim().toLowerCase();
-        if (pattern && cwd.includes(pattern)) return group.name;
-      }
-      return null;
-    };
-    const names: string[] = [];
-    const byName = new Map<string, SessionRecord[]>();
-    for (const group of groups) {
-      if (!byName.has(group.name)) {
-        byName.set(group.name, []);
-        names.push(group.name);
-      }
-    }
-    const ungrouped: SessionRecord[] = [];
-    for (const session of list) {
-      const name = groupNameFor(session);
-      const bucket = name ? byName.get(name) : undefined;
-      if (bucket) bucket.push(session);
-      else ungrouped.push(session);
-    }
-    return { names, byName, ungrouped };
-  }, [list, groups]);
-
-  const showSource = useMemo(() => {
-    const sources = new Set<string>();
-    for (const session of Object.values(sessions)) if (session.source) sources.add(session.source);
-    return sources.size > 1;
-  }, [sessions]);
-
-  const renderCard = (session: SessionRecord) => (
-    <SessionCard
-      key={session.sessionId}
-      session={session}
-      showSource={showSource}
-      stale={isStale(session)}
-      onArchive={archive}
-      onDelete={remove}
-      onFocus={focus}
-      onRename={rename}
-    />
-  );
-
-  const renderGroup = (name: string, items: SessionRecord[]) => {
-    const collapsed = collapsedGroups.includes(name);
-    const needAttention = items.filter(
-      (session) => session.status === "waiting" || session.status === "idle",
-    ).length;
-    return (
-      <section key={name} className={`group ${collapsed ? "group--collapsed" : ""}`}>
-        <h2>
-          <button
-            className="group__title"
-            onClick={() => toggleGroup(name)}
-            aria-expanded={!collapsed}
-            title={collapsed ? "Expand group" : "Collapse group"}
-          >
-            <span className="group__caret">{collapsed ? "▸" : "▾"}</span>
-            <span className="group__name">{name}</span>
-            <span className="group__count">{items.length}</span>
-            {collapsed && needAttention > 0 && (
-              <span className="group__attn">{needAttention} need attention</span>
-            )}
-          </button>
-        </h2>
-        {!collapsed && <div className="grid">{items.map(renderCard)}</div>}
-      </section>
-    );
-  };
+  const current = VIEWS.find((item) => item.key === route.view) ?? VIEWS[0]!;
+  const drawerSession = drawer ? (sessions[drawer] ?? null) : null;
 
   return (
-    <main className="app">
-      <header className="topbar">
-        <h1 className="brand">
-          <BrandMark size={34} />
-          <span className="brand__wm">
+    <div className="shell">
+      <nav className="nav" aria-label="Main">
+        <div className="nav__brand">
+          <BrandMark size={30} />
+          <span className="nav__wm">
             <Wordmark />
-            <span className="brand__slogan">Run many. Forget none.</span>
+            <span className="nav__slogan">Run many. Forget none.</span>
           </span>
-        </h1>
-        <div className="topbar__actions">
+        </div>
+        <ul className="nav__list">
+          {VIEWS.map((item) => {
+            const badge =
+              item.key === "sessions" ? attention : item.key === "tasks" ? hubRunning + hubAttention : item.key === "reports" ? 0 : 0;
+            return (
+              <li key={item.key}>
+                <a className={`nav__item ${route.view === item.key ? "nav__item--on" : ""}`} href={`#/${item.key}`} title={item.label}>
+                  <span className="nav__icon">{item.icon}</span>
+                  <span className="nav__label">{item.label}</span>
+                  {badge > 0 && <span className={`nav__badge ${item.key === "sessions" ? "nav__badge--attn" : ""}`}>{badge}</span>}
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="nav__foot">
           <button
             className={`version ${seenVersion !== __APP_VERSION__ ? "version--new" : ""}`}
-            onClick={openWhatsNew}
+            onClick={() => {
+              localStorage.setItem("hub.seenVersion", __APP_VERSION__);
+              setSeenVersion(__APP_VERSION__);
+              setShowWhatsNew(true);
+            }}
             title="What's new"
           >
             v{__APP_VERSION__}
           </button>
-          <span className="badge">{attention} need attention</span>
-          <button
-            className={`hookbtn ${hooks?.installed ? "hookbtn--on" : ""}`}
-            onClick={() => void toggleHooks()}
-            disabled={busy || !hooks}
-          >
-            {busy
-              ? "Working…"
-              : !hooks
-                ? "Checking hooks…"
-                : hooks.installed
-                  ? `Hooks active${
-                      (hooks.wsl?.filter((w) => w.installed).length ?? 0) > 0
-                        ? ` (+${hooks.wsl?.filter((w) => w.installed).length} WSL)`
-                        : ""
-                    } — remove`
-                  : "Set up hooks"}
-          </button>
-          <button
-            className="coffee"
-            onClick={() => void openExternal(COFFEE_URL)}
-            title="Buy me a coffee"
-            aria-label="Buy me a coffee"
-          >
-            ☕
-          </button>
-          <button
-            className="hdr-toggle"
-            onClick={toggleToolbar}
-            title={toolbarOpen ? "Hide filters" : "Show filters"}
-            aria-label={toolbarOpen ? "Hide filters" : "Show filters"}
-          >
-            {toolbarOpen ? "▴" : "▾"}
-          </button>
-        </div>
-      </header>
-
-      {toolbarOpen && (
-      <nav className="toolbar">
-        <div className="filters">
-          <button
-            className={`pill ${filter === "all" ? "pill--on" : ""}`}
-            onClick={() => setFilter("all")}
-          >
-            All <span className="pill__count">{total}</span>
-          </button>
-          {STATUS_ORDER.map((status) => (
-            <button
-              key={status}
-              className={`pill pill--${status} ${filter === status ? "pill--on" : ""}`}
-              onClick={() => setFilter(status)}
-            >
-              {STATUS_LABELS[status]} <span className="pill__count">{counts[status]}</span>
-            </button>
-          ))}
-          {counts.stale > 0 && (
-            <button
-              className={`pill pill--stale ${filter === "stale" ? "pill--on" : ""}`}
-              onClick={() => setFilter("stale")}
-            >
-              Inactive <span className="pill__count">{counts.stale}</span>
-            </button>
-          )}
-          {counts.empty > 0 && (
-            <button
-              className={`pill pill--empty ${filter === "empty" ? "pill--on" : ""}`}
-              onClick={() => setFilter("empty")}
-              title="Sessions that never produced a turn (headless runs, aborted starts)"
-            >
-              Empty <span className="pill__count">{counts.empty}</span>
-            </button>
-          )}
-          <button
-            className={`pill pill--archived ${filter === "archived" ? "pill--on" : ""}`}
-            onClick={() => setFilter("archived")}
-          >
-            Archived <span className="pill__count">{counts.archived}</span>
-          </button>
-        </div>
-        <div className="toolbar__right">
-          {filter === "stale" && counts.stale > 0 && (
-            <button className="pill pill--danger" onClick={archiveStale}>
-              Archive inactive ({counts.stale})
-            </button>
-          )}
-          <button
-            className={`pill ${showNotif ? "pill--on" : ""}`}
-            onClick={() => setShowNotif((value) => !value)}
-          >
-            Notifications
-          </button>
-          <button
-            className={`pill ${managing ? "pill--on" : ""}`}
-            onClick={() => setManaging((value) => !value)}
-          >
-            Groups {groups.length > 0 && <span className="pill__count">{groups.length}</span>}
-          </button>
-          <label className="sort">
-            Sort
-            <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
-              <option value="status">Status</option>
-              <option value="recent">Recent</option>
-              <option value="name">Name</option>
-            </select>
-          </label>
         </div>
       </nav>
-      )}
 
-      {toolbarOpen && showNotif && (
-        <div className="notifcfg">
-          <label className="notifcfg__item">
-            <input
-              type="checkbox"
-              checked={notifSettings.attention}
-              onChange={(e) => setNotifSettings((s) => ({ ...s, attention: e.target.checked }))}
+      <div className="main">
+        <header className="head">
+          <div className="head__title">
+            <h1>{current.label}</h1>
+            <p className="head__sub">{current.subtitle}</p>
+          </div>
+          {!isMock && (
+            <RuntimeBar
+              runtimes={runtimes}
+              claudeSessions={liveSessions.length}
+              codexSessions={codexSessions.filter((session) => session.status !== "ended").length}
+              hubRunning={hubRunning}
+              hubAttention={hubAttention}
+              onOpenHub={() => navigate("tasks")}
             />
-            On attention (waiting/idle)
-          </label>
-          <label className="notifcfg__item">
-            <input
-              type="checkbox"
-              checked={notifSettings.finished}
-              onChange={(e) => setNotifSettings((s) => ({ ...s, finished: e.target.checked }))}
+          )}
+        </header>
+
+        {notice && <p className={`toast toast--${notice.kind}`}>{notice.text}</p>}
+
+        <div className="content">
+          {route.view === "sessions" && (
+            <SessionsView
+              sessions={sessions}
+              groups={groups}
+              workspaces={workspaces}
+              codexSessions={codexSessions}
+              tick={tick}
+              onOpen={setDrawer}
+              onFocus={(id) => void focusSession(id)}
+              onArchive={(id) => void archiveSession(id)}
+              onDelete={(id) => void deleteSession(id)}
+              onRename={(id, title) => void renameSession(id, title)}
             />
-            On finish (ended)
-          </label>
-          <span className="notifcfg__sep" />
-          <label className="notifcfg__item">
-            <input
-              type="checkbox"
-              checked={notifSettings.desktop}
-              onChange={(e) => setNotifSettings((s) => ({ ...s, desktop: e.target.checked }))}
+          )}
+          {route.view === "flow" && (
+            <FlowView
+              sessions={sessions}
+              codexSessions={codexSessions}
+              tasks={tasks}
+              workspaces={workspaces}
+              onOpenSession={setDrawer}
+              onOpenTask={(id) => navigate("tasks", id)}
             />
-            Desktop notification
-          </label>
-          <label className="notifcfg__item">
-            <input
-              type="checkbox"
-              checked={notifSettings.sound}
-              onChange={(e) => setNotifSettings((s) => ({ ...s, sound: e.target.checked }))}
+          )}
+          {route.view === "tasks" && (
+            <TasksView
+              tasks={tasks}
+              enabled={hubEnabled}
+              selectedId={route.param}
+              tick={hubTick}
+              onSelect={(id) => navigate("tasks", id)}
+              subscribeRunEvents={subscribeRunEvents}
+              onRefresh={loadHub}
+              onOpenSettings={() => navigate("settings", "connect")}
+              onError={fail}
             />
-            Sound
-          </label>
-          <button className="act" onClick={() => void playSound("attention")}>
-            Test decision
-          </button>
-          <button className="act" onClick={() => void playSound("idle")}>
-            Test idle
-          </button>
-          <button className="act" onClick={() => void playSound("finished")}>
-            Test finish
-          </button>
+          )}
+          {route.view === "workspaces" && (
+            <WorkspacesView
+              workspaces={workspaces}
+              settings={settings}
+              enabled={hubEnabled}
+              onChanged={loadHub}
+              onOpenSettings={() => navigate("settings", "paths")}
+              onNotice={ok}
+              onError={fail}
+            />
+          )}
+          {route.view === "reports" && <ReportsView reports={reports} enabled={hubEnabled} onOpenTask={(id) => navigate("tasks", id)} />}
+          {route.view === "share" && (
+            <ShareView
+              enabled={hubEnabled}
+              workspaces={workspaces}
+              sessions={sessions}
+              param={route.param}
+              tick={shareTick}
+              tunnel={tunnel}
+              onTunnelChanged={setTunnel}
+              subscribeShareStream={subscribeShareStream}
+              ownerName={settings?.ownerName ?? ""}
+              onOpenSettings={() => navigate("settings", "sharing")}
+              onOpenTask={(id) => navigate("tasks", id)}
+              onNotice={ok}
+              onError={fail}
+            />
+          )}
+          {route.view === "settings" && (
+            <SettingsView
+              enabled={hubEnabled}
+              hubUrl={hubBase}
+              version={__APP_VERSION__}
+              section={(route.param as SettingsSection | null) ?? null}
+              settings={settings}
+              connect={connect}
+              hooks={hooks}
+              hooksBusy={hooksBusy}
+              notif={notifSettings}
+              groups={groups}
+              onToggleHooks={() => void toggleHooks()}
+              onSaveSettings={saveSettings}
+              onShell={shell}
+              onMcp={mcp}
+              autostart={autostart}
+              onAutostart={async (enabled) => {
+                try {
+                  const status = await setAutostart(enabled);
+                  setAutostartState(status);
+                  if (status.error) fail(status.error);
+                  else ok(enabled ? "The hub will start with Windows." : "Autostart removed.");
+                } catch (err) {
+                  fail(err instanceof Error ? err.message : "could not change autostart");
+                }
+              }}
+              theme={theme}
+              onTheme={setTheme}
+              tunnel={tunnel}
+              onTunnelSettings={async (patch) => {
+                try {
+                  setTunnel(await updateTunnelSettings(patch));
+                  ok("ngrok settings saved");
+                } catch (err) {
+                  fail(err instanceof Error ? err.message : "could not save");
+                }
+              }}
+              onNotif={setNotifSettings}
+              onWhatsNew={() => setShowWhatsNew(true)}
+              onCreateGroup={(name, match) => void createGroup(name, match)}
+              onUpdateGroup={(id, fields) => void updateGroup(id, fields)}
+              onDeleteGroup={(id) => void deleteGroup(id)}
+              onMoveGroup={moveGroup}
+            />
+          )}
         </div>
-      )}
+      </div>
 
-      {toolbarOpen && managing && (
-        <GroupManager
-          groups={groups}
-          onCreate={addGroup}
-          onUpdate={editGroup}
-          onDelete={removeGroup}
-          onMove={moveGroup}
+      {drawerSession && (
+        <SessionDrawer
+          session={drawerSession}
+          workspace={workspaceOf(workspaces, drawerSession.cwd)}
+          onClose={() => setDrawer(null)}
+          onShare={(id) => {
+            setDrawer(null);
+            navigate("share", `new:${id}`);
+          }}
         />
       )}
-
-      {groups.length === 0 ? (
-        <section className="grid">{list.map(renderCard)}</section>
-      ) : (
-        <>
-          {grouped.names.map((name) => {
-            const items = grouped.byName.get(name) ?? [];
-            if (items.length === 0) return null;
-            return renderGroup(name, items);
-          })}
-          {grouped.ungrouped.length > 0 && renderGroup(UNGROUPED, grouped.ungrouped)}
-        </>
-      )}
-
-      {list.length === 0 && filter === "all" && (
-        <p className="empty">No active sessions. Set up the Claude Code hooks.</p>
-      )}
-      {list.length === 0 && filter !== "all" && <p className="empty">Nothing in this filter.</p>}
-
       {showWhatsNew && <WhatsNew onClose={() => setShowWhatsNew(false)} />}
-    </main>
+    </div>
   );
 }

@@ -4,8 +4,8 @@
   "description": "Never lose a Claude Code session again.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0e1116",
-  "theme_color": "#0e1116",
+  "background_color": "#282a36",
+  "theme_color": "#282a36",
   "icons": [
     { "src": "/pwa-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "/pwa-512.png", "sizes": "512x512", "type": "image/png" }
