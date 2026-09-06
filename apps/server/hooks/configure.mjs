@@ -17,7 +17,7 @@ const settingsPath = flag("--settings") ?? join(homedir(), ".claude", "settings.
 const source = flag("--source");
 const runner = flag("--runner") ?? "node";
 
-const EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"];
+const EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd", "SubagentStart", "SubagentStop"];
 const posix = (value) => value.replace(/\\/g, "/");
 const quotedRunner = runner === "node" || runner === "sh" ? runner : `"${posix(runner)}"`;
 const command = `${source ? `HUB_SOURCE=${source} ` : ""}${quotedRunner} "${posix(notifyPath)}"`;

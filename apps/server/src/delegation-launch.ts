@@ -1,0 +1,280 @@
+import { randomUUID } from "node:crypto";
+import { basename, join } from "node:path";
+import { config } from "./config.js";
+import { runTask, type RunEvent } from "./executor.js";
+import { broadcast } from "./sse.js";
+import { appendHubSource } from "./second-brain.js";
+import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail } from "./delegation-store.js";
+import type { CodexSandbox, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
+import { finishShareRequestByTask, getShare } from "./share-store.js";
+import { SHARE_CREATED_BY_PREFIX, implementGuardrail, implementProfile, type RunProfile, type TrustLevel } from "./share-types.js";
+import { discoverWorkspaces, findRepo, findWorkspace, isDirectory, samePath } from "./workspaces.js";
+
+const activeRuns = new Map<string, AbortController>();
+const FLUSH_MS = 400;
+
+export class BadRequestError extends Error {}
+export class NotFoundError extends Error {}
+
+export function titleFrom(prompt: string): string {
+  const firstLine = prompt.split(/\r?\n/).find((line) => line.trim().length > 0) ?? prompt;
+  return firstLine.trim().slice(0, 80);
+}
+
+export function shareLabelFromCreatedBy(createdBy: string | null): string | null {
+  if (!createdBy || !createdBy.startsWith(SHARE_CREATED_BY_PREFIX)) return null;
+  const rest = createdBy.slice(SHARE_CREATED_BY_PREFIX.length);
+  const separator = rest.indexOf(":");
+  return separator >= 0 ? rest.slice(separator + 1) : rest;
+}
+
+export function shareIdFromCreatedBy(createdBy: string | null): string | null {
+  if (!createdBy || !createdBy.startsWith(SHARE_CREATED_BY_PREFIX)) return null;
+  const rest = createdBy.slice(SHARE_CREATED_BY_PREFIX.length);
+  const separator = rest.indexOf(":");
+  return separator >= 0 ? rest.slice(0, separator) : rest;
+}
+
+export function shareTrustFromCreatedBy(createdBy: string | null): TrustLevel | null {
+  if (!createdBy || !createdBy.startsWith(SHARE_CREATED_BY_PREFIX)) return null;
+  const rest = createdBy.slice(SHARE_CREATED_BY_PREFIX.length);
+  const separator = rest.indexOf(":");
+  const shareId = separator >= 0 ? rest.slice(0, separator) : rest;
+  return getShare(shareId)?.trust ?? "low";
+}
+
+function taskContext(task: TaskRecord): string {
+  const lines = [
+    `You are running inside the "${task.workspace}" workspace, launched by the CC Hub (task ${task.id}).`,
+    `Working directory: ${task.cwd}`,
+    "Repositories of this workspace (all accessible; never ask which folder a project lives in, use this map):",
+    ...task.addDirs.map((dir) => `- ${basename(dir)}: ${dir}`),
+  ];
+  if (task.repo) lines.push(`This task targets the "${task.repo}" repository.`);
+  lines.push("When you finish, state clearly what was done, what was verified and what is still open.");
+  const shareLabel = shareLabelFromCreatedBy(task.createdBy);
+  if (shareLabel) {
+    const trust = shareTrustFromCreatedBy(task.createdBy) ?? "medium";
+    lines.push("", implementGuardrail(shareLabel, trust));
+    const shareId = shareIdFromCreatedBy(task.createdBy);
+    if (shareId) {
+      const artifactsRoot = join(task.cwd, "share-artifacts", shareId);
+      lines.push(`Files the asker sent are in ${join(artifactsRoot, "inbox")} (read them when relevant).`);
+      if (trust !== "low") lines.push(`To hand a file back to the asker, write it in ${artifactsRoot} and mention its file name; they download it from there.`);
+    }
+  }
+  return lines.join("\n");
+}
+
+export function brainNote(text: string): void {
+  const root = getSettings().secondBrainRoot;
+  if (!root || !isDirectory(root)) return;
+  try {
+    appendHubSource(root, text);
+  } catch (err) {
+    console.error(`second brain append failed: ${String(err)}`);
+  }
+}
+
+class RunLog {
+  private pending = "";
+  private timer: NodeJS.Timeout | null = null;
+
+  constructor(
+    private readonly runId: string,
+    private readonly taskId: string,
+  ) {}
+
+  push(event: RunEvent): void {
+    broadcast("run-event", { taskId: this.taskId, runId: this.runId, kind: event.kind, text: event.text });
+    if (event.kind === "text") {
+      this.pending += event.text;
+      if (!this.timer) this.timer = setTimeout(() => this.flush(), FLUSH_MS);
+      return;
+    }
+    this.flush();
+    appendRunEvent({ runId: this.runId, taskId: this.taskId, kind: event.kind, text: event.text });
+  }
+
+  flush(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    if (this.pending.length > 0) {
+      appendRunEvent({ runId: this.runId, taskId: this.taskId, kind: "text", text: this.pending });
+      this.pending = "";
+    }
+  }
+}
+
+export function abortActiveRuns(reason: string): void {
+  for (const controller of activeRuns.values()) controller.abort(new Error(reason));
+}
+
+export function abortRun(taskId: string, reason: string): boolean {
+  const controller = activeRuns.get(taskId);
+  if (!controller) return false;
+  controller.abort(new Error(reason));
+  return true;
+}
+
+export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model: string | null, permissionMode: PermissionMode | null): void {
+  const resumeSessionId = kind === "continue" ? task.sessionId : null;
+  const plannedSession = task.runner === "claude" && !resumeSessionId ? randomUUID() : null;
+  const trust = shareTrustFromCreatedBy(task.createdBy);
+  const fromShare = trust !== null;
+  const profile: RunProfile | null = trust ? implementProfile(trust) : null;
+  const autonomous = getSettings().autonomy === "full";
+  const effectiveMode: PermissionMode = profile ? profile.permissionMode : (permissionMode ?? (autonomous ? "bypassPermissions" : "acceptEdits"));
+  const effectiveSandbox: CodexSandbox | null =
+    task.runner === "codex" ? (profile ? profile.codexSandbox : (task.sandbox ?? (autonomous ? "danger-full-access" : "workspace-write"))) : null;
+  const run = beginRun({
+    taskId: task.id,
+    kind,
+    runner: task.runner,
+    prompt,
+    model,
+    permissionMode: effectiveMode,
+    sessionId: resumeSessionId ?? plannedSession,
+  });
+  const controller = new AbortController();
+  activeRuns.set(task.id, controller);
+  const log = new RunLog(run.id, task.id);
+  const timer =
+    config.runTimeoutMs > 0
+      ? setTimeout(
+          () => controller.abort(new Error(`timed out after ${Math.round(config.runTimeoutMs / 60_000)} min`)),
+          config.runTimeoutMs,
+        )
+      : null;
+  broadcast("delegation", { taskId: task.id });
+  void runTask({
+    runner: task.runner,
+    cwd: task.cwd,
+    addDirs: task.addDirs,
+    prompt,
+    systemContext: taskContext(task),
+    model,
+    permissionMode: effectiveMode,
+    sandbox: effectiveSandbox,
+    sessionId: plannedSession,
+    resumeSessionId,
+    restricted: profile?.restricted,
+    strictMcpConfig: profile?.strictMcpConfig,
+    permissionPrompts: profile?.permissionPrompts,
+    tools: profile?.tools,
+    allowedTools: profile?.allowedTools,
+    disallowedTools: profile?.disallowedTools,
+    maxTurns: profile?.maxTurns,
+    guard: profile?.guard ?? undefined,
+    signal: controller.signal,
+    onEvent: (event) => log.push(event),
+  })
+    .then((outcome) => {
+      log.flush();
+      finishRun({
+        runId: run.id,
+        taskId: task.id,
+        status: outcome.status,
+        effectiveModel: outcome.effectiveModel,
+        sessionId: outcome.sessionId,
+        result: outcome.result,
+        error: outcome.error,
+        exitCode: outcome.exitCode,
+      });
+      const summary = outcome.status === "completed" ? (outcome.result ?? "").slice(0, 160) : (outcome.error ?? "");
+      brainNote(`task ${outcome.status} · ${task.workspace} · ${task.title} (${task.runner}) — ${summary}`);
+      if (fromShare) {
+        const ok = outcome.status === "completed" || outcome.status === "attention";
+        finishShareRequestByTask({ taskId: task.id, status: ok ? "completed" : "failed", error: ok ? null : outcome.error, sessionId: outcome.sessionId });
+        broadcast("share-request", { taskId: task.id, status: ok ? "completed" : "failed" });
+      }
+    })
+    .catch((err: unknown) => {
+      log.flush();
+      const message = err instanceof Error ? err.message : "executor crashed";
+      try {
+        finishRun({
+          runId: run.id,
+          taskId: task.id,
+          status: "failed",
+          effectiveModel: null,
+          sessionId: null,
+          result: null,
+          error: message,
+          exitCode: null,
+        });
+      } catch (storeErr) {
+        console.error(`run ${run.id} could not be finalized: ${String(storeErr)}`);
+      }
+      if (fromShare) finishShareRequestByTask({ taskId: task.id, status: "failed", error: message, sessionId: null });
+    })
+    .finally(() => {
+      if (timer) clearTimeout(timer);
+      activeRuns.delete(task.id);
+      broadcast("delegation", { taskId: task.id });
+    });
+}
+
+export interface DelegateInput {
+  prompt: string | null;
+  workspace: string | null;
+  repo: string | null;
+  runner: Runner | null;
+  model: string | null;
+  permissionMode: PermissionMode | null;
+  sandbox: CodexSandbox | null;
+  title: string | null;
+  source: string | null;
+}
+
+export interface WorkspaceTarget {
+  workspace: string;
+  repo: string | null;
+  cwd: string;
+  addDirs: string[];
+}
+
+export function resolveWorkspaceTarget(workspaceName: string, repoName: string | null): WorkspaceTarget {
+  const root = getSettings().workspacesRoot;
+  const workspace = findWorkspace(root, workspaceName);
+  if (!workspace) {
+    const available = discoverWorkspaces(root).map((item) => item.name);
+    throw new NotFoundError(`workspace "${workspaceName}" not found; available: ${available.join(", ") || "none"}`);
+  }
+  const repo = repoName ? findRepo(workspace, repoName) : null;
+  if (repoName && !repo) {
+    throw new NotFoundError(
+      `repo "${repoName}" is not in workspace "${workspace.name}"; available: ${workspace.repos.map((item) => item.name).join(", ") || "none"}`,
+    );
+  }
+  const cwd = workspace.contextPath ?? repo?.path ?? workspace.repos[0]?.path ?? null;
+  if (!cwd || !isDirectory(cwd)) throw new BadRequestError(`workspace "${workspace.name}" has no usable folder to run in`);
+  const addDirs = workspace.repos.map((item) => item.path).filter((path) => !samePath(path, cwd) && isDirectory(path));
+  return { workspace: workspace.name, repo: repo?.name ?? null, cwd, addDirs };
+}
+
+export function delegateTask(input: DelegateInput): TaskDetail {
+  if (!input.prompt || !input.workspace) throw new BadRequestError("prompt and workspace required");
+  const target = resolveWorkspaceTarget(input.workspace, input.repo);
+  const runner = input.runner ?? "claude";
+  const task = createTask({
+    title: input.title?.trim() || titleFrom(input.prompt),
+    prompt: input.prompt,
+    workspace: target.workspace,
+    repo: target.repo,
+    cwd: target.cwd,
+    addDirs: target.addDirs,
+    runner,
+    model: input.model,
+    permissionMode: input.permissionMode,
+    sandbox: input.sandbox,
+    createdBy: input.source,
+  });
+  startRun(task, "launch", input.prompt, input.model, input.permissionMode);
+  brainNote(
+    `task delegated · ${task.workspace}${task.repo ? `/${task.repo}` : ""} · ${task.title} (${task.runner}${task.createdBy ? `, via ${task.createdBy}` : ""}) · id ${task.id}`,
+  );
+  return getTaskDetail(task.id) as TaskDetail;
+}

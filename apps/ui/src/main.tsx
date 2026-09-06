@@ -4,6 +4,7 @@ import { App } from "./App";
 import { Widget } from "./components/Widget";
 import "./styles.css";
 
+document.documentElement.dataset.theme = localStorage.getItem("hub.theme") === "midnight" ? "midnight" : "dracula";
 const isWidget = new URLSearchParams(location.search).get("widget") === "1";
 const root = document.getElementById("root");
 if (root) {

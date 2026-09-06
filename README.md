@@ -118,6 +118,19 @@ HUB_SOURCE=wsl HUB_HOST_TARGET=<windows-ip-or-gateway> \
 `notify.sh` resolves the Windows host via the default-route gateway when `HUB_HOST_TARGET`
 is unset. `open/focus` of WSL paths is still limited — native Windows paths work best.
 
+## The hub for every agent
+
+With `HUB_DELEGATION=1` the hub is also where agents arrive and report:
+
+- **Workspaces** are discovered from your `.code-workspace` folder (the one a `wk` alias reads); the hub can create, edit and open them, and install the alias in bash or PowerShell.
+- **Delegation**: any Claude Code, Claude Desktop, Codex CLI or Codex app conversation registers the hub as the `cchub` MCP server (Connect tab) and gets `hub_overview`, `hub_workspaces`, `hub_delegate`, `hub_task`, `hub_continue`, `hub_report` and friends. Delegated runs start in the workspace context folder with every repo attached and show up as regular sessions.
+- **Everything running**: Claude Code sessions with their subagents, Claude Desktop, the Codex app and CLI, and Codex threads read from `~/.codex/sessions`.
+- **Reports** from any agent land in the hub (and, when linked, in the second brain as `fontes/hub/<date>.md`).
+- **Share**: a link (LAN, or public through ngrok started from the hub) that lets another person's assistant ask your Claude and delegate work into a workspace at a trust level you pick (Low read-only, Medium edits, High edits + safe shell, Total no blocks), with a key, expiry, rate limit and a full log.
+- **Autonomous by default**: delegated runs bypass permissions (Claude) and the sandbox (Codex) so nothing stops in "Needs you"; switch to safe mode in Settings. The app can start with Windows, and the UI ships a Dracula theme (Midnight still available).
+
+Details, security model, MCP tools and the thin CLI in `apps/server/DELEGATION.md`.
+
 ## Environment variables
 
 ### Server
@@ -129,6 +142,15 @@ is unset. `open/focus` of WSL paths is still limited — native Windows paths wo
 | `HUB_DATA_DIR` | `~/.vbss-cchub` | Where `hub.db` lives |
 | `HUB_STATIC_DIR` | — | ui build to serve the front on the same port |
 | `HUB_EMPTY_TTL_HOURS` | `12` | Drop sessions that never produced a turn after this long (`0` keeps them) |
+| `HUB_DELEGATION` | — | `1` enables the delegation surface (see `apps/server/DELEGATION.md`) |
+| `HUB_WORKSPACES_ROOT` | — | Default folder of `.code-workspace` files (the Settings value wins) |
+| `HUB_SECOND_BRAIN` | — | Vault root; the hub appends delegations and reports to `fontes/hub/<date>.md` |
+| `HUB_CODEX_BIN` | newest `codex.exe` | Codex CLI used by the codex runner |
+| `HUB_STALE_HOURS` | `4` | Sessions silent for longer are flagged inactive and left out of the counts |
+| `HUB_TRUSTED_ORIGINS` | — | Extra browser origins allowed on `/delegation`, comma-separated |
+| `HUB_SHARE_PORT` | `4318` | Share endpoint (links for other people's assistants; LAN and ngrok target) |
+| `HUB_SHARE_HOST` | `0.0.0.0` | Bind address of the share endpoint |
+| `HUB_NGROK_BIN` | auto | ngrok executable for Start tunnel (downloaded automatically when absent) |
 
 ### Hook
 

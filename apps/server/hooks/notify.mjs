@@ -52,7 +52,7 @@ function alive(pid) {
 }
 
 function resolveHostInfo(sessionId) {
-  const empty = { hostPid: null, shellPid: null };
+  const empty = { hostPid: null, shellPid: null, claudePid: null, host: null };
   if (process.platform !== "win32") return empty;
   const dir = join(homedir(), ".vbss-cchub", "pids");
   const cache = join(dir, `${sessionId}.json`);
@@ -61,7 +61,7 @@ function resolveHostInfo(sessionId) {
       const cached = JSON.parse(readFileSync(cache, "utf8"));
       const shellOk = cached.shellPid == null || alive(cached.shellPid);
       if (Number.isInteger(cached.hostPid) && cached.hostPid > 0 && alive(cached.hostPid) && shellOk) {
-        return cached;
+        return { claudePid: null, host: null, ...cached };
       }
     }
   } catch {
@@ -83,14 +83,18 @@ function resolveHostInfo(sessionId) {
     ).trim();
     const parsed = JSON.parse(out);
     const hostPid = Number(parsed.windowPid);
+    const claude = Number(parsed.claudePid);
+    const claudePid = Number.isInteger(claude) && claude > 0 ? claude : null;
+    const host = typeof parsed.host === "string" ? parsed.host : null;
     if (Number.isInteger(hostPid) && hostPid > 0) {
       const shell = Number(parsed.shellPid);
       const shellPid = parsed.isCode && Number.isInteger(shell) && shell > 0 ? shell : null;
-      const info = { hostPid, shellPid };
+      const info = { hostPid, shellPid, claudePid, host };
       mkdirSync(dir, { recursive: true });
       writeFileSync(cache, JSON.stringify(info));
       return info;
     }
+    if (claudePid) return { hostPid: null, shellPid: null, claudePid, host };
   } catch {
     /* powershell unavailable or nothing found */
   }
@@ -143,7 +147,8 @@ const kindByEvent = {
   UserPromptSubmit: "user_prompt",
   Notification: "notification",
   Stop: "stop",
-  SubagentStop: "stop",
+  SubagentStart: "subagent_start",
+  SubagentStop: "subagent_stop",
   SessionEnd: "session_end",
 };
 
@@ -164,7 +169,11 @@ try {
 const kind = process.argv[2] ?? kindByEvent[input.hook_event_name] ?? "notification";
 const sessionId = input.session_id ?? "unknown";
 const transcript = readTranscript(input.transcript_path);
-const { hostPid, shellPid } = resolveHostInfo(sessionId);
+const { hostPid, shellPid, claudePid, host } = resolveHostInfo(sessionId);
+const lastAssistant =
+  typeof input.last_assistant_message === "string" ? input.last_assistant_message.slice(0, 400) : null;
+const shareLabel = process.env.HUB_SHARE_LABEL ?? null;
+const client = shareLabel ? "share" : isHeadless ? (process.env.HUB_DELEGATED === "1" ? "hub" : "headless") : (host ?? "terminal");
 
 const body = {
   kind,
@@ -173,12 +182,19 @@ const body = {
   source: SOURCE,
   hostPid,
   shellPid,
-  message: input.message ?? null,
+  message: input.message ?? (input.agent_id ? null : lastAssistant),
   title: sessionTitle(sessionId, transcript.title),
   model: transcript.model,
   tokensIn: transcript.tokensIn,
   tokensOut: transcript.tokensOut,
   contextTokens: transcript.contextTokens,
+  agentId: input.agent_id ?? null,
+  agentType: input.agent_type ?? null,
+  client,
+  claudePid: claudePid ?? null,
+  transcriptPath: input.transcript_path ?? null,
+  agentMessage: input.agent_id ? lastAssistant : null,
+  shareLabel,
 };
 
 try {

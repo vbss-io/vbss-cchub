@@ -4,6 +4,8 @@ export const HOOK_KINDS = [
   "notification",
   "stop",
   "session_end",
+  "subagent_start",
+  "subagent_stop",
 ] as const;
 
 export type HookKind = (typeof HOOK_KINDS)[number];
@@ -23,6 +25,26 @@ export interface HookPayload {
   tokensIn: number | null;
   tokensOut: number | null;
   contextTokens: number | null;
+  agentId: string | null;
+  agentType: string | null;
+  client: string | null;
+  claudePid: number | null;
+  transcriptPath: string | null;
+  agentMessage: string | null;
+  shareLabel: string | null;
+}
+
+export type AgentStatus = "running" | "ended";
+
+export interface AgentRecord {
+  agentId: string;
+  sessionId: string;
+  agentType: string | null;
+  status: AgentStatus;
+  transcriptPath: string | null;
+  lastMessage: string | null;
+  startedAt: number;
+  updatedAt: number;
 }
 
 export interface GroupRecord {
@@ -39,6 +61,13 @@ export interface SessionRecord {
   source: string | null;
   hostPid: number | null;
   shellPid: number | null;
+  claudePid: number | null;
+  client: string | null;
+  transcriptPath: string | null;
+  shareLabel: string | null;
+  forks: number;
+  remoteAsks: number;
+  stale: boolean;
   title: string | null;
   customTitle: string | null;
   lastMessage: string | null;
@@ -47,6 +76,8 @@ export interface SessionRecord {
   tokensOut: number | null;
   contextTokens: number | null;
   archivedAt: number | null;
+  agentsRunning: number;
+  agentsTotal: number;
   startedAt: number;
   updatedAt: number;
 }

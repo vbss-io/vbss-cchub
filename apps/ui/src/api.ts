@@ -1,124 +1,131 @@
-import type { GroupRecord, SessionRecord } from "./types";
+import type {
+  AgentRecord,
+  CodexSessionRecord,
+  GroupRecord,
+  HooksStatus,
+  RunEventMessage,
+  RuntimeSnapshot,
+  SessionLive,
+  SessionRecord,
+} from "./types";
 
 const envUrl = import.meta.env.VITE_HUB_URL as string | undefined;
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const host = inTauri ? "127.0.0.1" : location.hostname || "localhost";
 const base = envUrl ?? `http://${host}:4317`;
 
-export async function fetchSessions(): Promise<SessionRecord[]> {
-  const res = await fetch(`${base}/api/sessions`);
-  return (await res.json()) as SessionRecord[];
+export const hubBase = base;
+
+export type { HooksStatus, WslHookStatus } from "./types";
+import type { ShareRequestRecord, TunnelStatus } from "./delegation";
+
+export type ShareRequestEvent = ShareRequestRecord;
+
+async function getJson<T>(path: string): Promise<T> {
+  const res = await fetch(`${base}${path}`);
+  if (!res.ok) throw new Error(`${path} failed (${res.status})`);
+  return (await res.json()) as T;
 }
 
-export interface WslHookStatus {
-  distro: string;
-  installed?: boolean;
-  error?: string;
-}
-
-export interface HooksStatus {
-  installed: boolean;
-  events: string[];
-  settingsPath?: string;
-  notifyPath?: string;
-  wsl?: WslHookStatus[];
-}
-
-export async function getHooks(): Promise<HooksStatus> {
-  const res = await fetch(`${base}/api/hooks`);
-  return (await res.json()) as HooksStatus;
-}
-
-export async function setHooks(install: boolean): Promise<HooksStatus> {
-  const res = await fetch(`${base}/api/hooks/${install ? "install" : "uninstall"}`, {
-    method: "POST",
+async function send<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${base}${path}`, {
+    method,
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
-  return (await res.json()) as HooksStatus;
+  const text = await res.text();
+  const json: unknown = text.length > 0 ? JSON.parse(text) : null;
+  if (!res.ok) throw new Error((json as { error?: string } | null)?.error ?? `${path} failed (${res.status})`);
+  return json as T;
 }
+
+export const fetchHealth = (): Promise<{ ok: boolean; hostname: string | null }> => getJson("/api/health");
+
+export const fetchSessions = (): Promise<SessionRecord[]> => getJson("/api/sessions");
+
+export const fetchRuntimes = (): Promise<RuntimeSnapshot> => getJson("/api/runtimes");
+
+export const fetchCodexSessions = (): Promise<CodexSessionRecord[]> => getJson("/api/codex/sessions");
+
+export const fetchAgents = (sessionId: string): Promise<AgentRecord[]> =>
+  getJson(`/api/sessions/${encodeURIComponent(sessionId)}/agents`);
+
+export const fetchSessionLive = (sessionId: string, limit = 40): Promise<SessionLive> =>
+  getJson(`/api/sessions/${encodeURIComponent(sessionId)}/live?limit=${limit}`);
+
+export const getHooks = (): Promise<HooksStatus> => getJson("/api/hooks");
+
+export const setHooks = (install: boolean): Promise<HooksStatus> =>
+  send("POST", `/api/hooks/${install ? "install" : "uninstall"}`);
 
 export interface FocusResult {
   ok: boolean;
   reason?: string;
 }
 
-export async function focusSession(sessionId: string): Promise<FocusResult> {
-  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}/focus`, {
-    method: "POST",
-  });
-  return (await res.json()) as FocusResult;
+export const focusSession = (sessionId: string): Promise<FocusResult> =>
+  send("POST", `/api/sessions/${encodeURIComponent(sessionId)}/focus`);
+
+export const archiveSession = (sessionId: string): Promise<void> =>
+  send("POST", `/api/sessions/${encodeURIComponent(sessionId)}/archive`);
+
+export const deleteSession = (sessionId: string): Promise<void> =>
+  send("DELETE", `/api/sessions/${encodeURIComponent(sessionId)}`);
+
+export const renameSession = (sessionId: string, title: string): Promise<void> =>
+  send("PATCH", `/api/sessions/${encodeURIComponent(sessionId)}`, { title });
+
+export const fetchGroups = (): Promise<GroupRecord[]> => getJson("/api/groups");
+
+export const createGroup = (name: string, match: string): Promise<GroupRecord> =>
+  send("POST", "/api/groups", { name, match });
+
+export const updateGroup = (id: string, fields: { name?: string; match?: string }): Promise<GroupRecord> =>
+  send("PATCH", `/api/groups/${encodeURIComponent(id)}`, fields);
+
+export const deleteGroup = (id: string): Promise<void> => send("DELETE", `/api/groups/${encodeURIComponent(id)}`);
+
+export const reorderGroups = (ids: string[]): Promise<void> => send("POST", "/api/groups/reorder", { ids });
+
+export interface HubEvents {
+  onSession: (session: SessionRecord) => void;
+  onRemoved?: (sessionId: string) => void;
+  onGroups?: (groups: GroupRecord[]) => void;
+  onHooks?: (hooks: HooksStatus) => void;
+  onDelegation?: (taskId: string) => void;
+  onReport?: () => void;
+  onRunEvent?: (event: RunEventMessage) => void;
+  onShareRequest?: (request: ShareRequestEvent) => void;
+  onTunnel?: (status: TunnelStatus) => void;
+  onShareStream?: (event: ShareStreamEvent) => void;
 }
 
-export async function renameSession(sessionId: string, title: string): Promise<void> {
-  await fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ title }),
-  });
+export interface ShareStreamEvent {
+  requestId: string;
+  shareId: string;
+  kind: "text" | "tool" | "status";
+  text: string;
 }
 
-export async function archiveSession(sessionId: string): Promise<void> {
-  await fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "POST" });
+export interface SessionAsks {
+  forks: { shareId: string; asker: string; sessionId: string; parentSessionId: string | null; createdAt: number; lastUsedAt: number; questions: number }[];
+  asks: ShareRequestRecord[];
 }
 
-export async function deleteSession(sessionId: string): Promise<void> {
-  await fetch(`${base}/api/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
-}
+export const fetchSessionAsks = (sessionId: string): Promise<SessionAsks> => getJson(`/api/sessions/${encodeURIComponent(sessionId)}/asks`);
 
-export async function fetchGroups(): Promise<GroupRecord[]> {
-  const res = await fetch(`${base}/api/groups`);
-  return (await res.json()) as GroupRecord[];
-}
-
-export async function createGroup(name: string, match: string): Promise<void> {
-  await fetch(`${base}/api/groups`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name, match }),
-  });
-}
-
-export async function updateGroup(
-  id: string,
-  fields: { name?: string; match?: string },
-): Promise<void> {
-  await fetch(`${base}/api/groups/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(fields),
-  });
-}
-
-export async function deleteGroup(id: string): Promise<void> {
-  await fetch(`${base}/api/groups/${encodeURIComponent(id)}`, { method: "DELETE" });
-}
-
-export async function reorderGroups(ids: string[]): Promise<void> {
-  await fetch(`${base}/api/groups/reorder`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ids }),
-  });
-}
-
-export function subscribe(
-  onSession: (session: SessionRecord) => void,
-  onRemoved?: (sessionId: string) => void,
-  onGroups?: (groups: GroupRecord[]) => void,
-  onHooks?: (hooks: HooksStatus) => void,
-): () => void {
+export function subscribe(handlers: HubEvents): () => void {
   const source = new EventSource(`${base}/api/events`);
-  source.addEventListener("session", (event) => {
-    onSession(JSON.parse((event as MessageEvent<string>).data) as SessionRecord);
-  });
-  source.addEventListener("removed", (event) => {
-    const data = JSON.parse((event as MessageEvent<string>).data) as { sessionId: string };
-    onRemoved?.(data.sessionId);
-  });
-  source.addEventListener("groups", (event) => {
-    onGroups?.(JSON.parse((event as MessageEvent<string>).data) as GroupRecord[]);
-  });
-  source.addEventListener("hooks", (event) => {
-    onHooks?.(JSON.parse((event as MessageEvent<string>).data) as HooksStatus);
-  });
+  const data = <T>(event: Event): T => JSON.parse((event as MessageEvent<string>).data) as T;
+  source.addEventListener("session", (event) => handlers.onSession(data<SessionRecord>(event)));
+  source.addEventListener("removed", (event) => handlers.onRemoved?.(data<{ sessionId: string }>(event).sessionId));
+  source.addEventListener("groups", (event) => handlers.onGroups?.(data<GroupRecord[]>(event)));
+  source.addEventListener("hooks", (event) => handlers.onHooks?.(data<HooksStatus>(event)));
+  source.addEventListener("delegation", (event) => handlers.onDelegation?.(data<{ taskId: string }>(event).taskId));
+  source.addEventListener("report", () => handlers.onReport?.());
+  source.addEventListener("run-event", (event) => handlers.onRunEvent?.(data<RunEventMessage>(event)));
+  source.addEventListener("share-request", (event) => handlers.onShareRequest?.(data<ShareRequestEvent>(event)));
+  source.addEventListener("tunnel", (event) => handlers.onTunnel?.(data<TunnelStatus>(event)));
+  source.addEventListener("share-stream", (event) => handlers.onShareStream?.(data<ShareStreamEvent>(event)));
   return () => source.close();
 }

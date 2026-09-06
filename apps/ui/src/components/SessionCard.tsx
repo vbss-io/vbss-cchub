@@ -1,4 +1,7 @@
 import { useState, type MouseEvent } from "react";
+import { ClientBadge, claudeClient, sessionClient } from "../clients";
+import { IconFocus } from "../icons";
+import { relativeTime } from "../time";
 import type { SessionRecord, SessionStatus } from "../types";
 
 const statusLabel: Record<SessionStatus, string> = {
@@ -8,15 +11,6 @@ const statusLabel: Record<SessionStatus, string> = {
   ended: "Ended",
 };
 
-function relativeTime(timestamp: number): string {
-  const minutes = Math.floor((Date.now() - timestamp) / 60000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
 function formatTokens(value: number | null | undefined): string {
   if (value == null) return "—";
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
@@ -24,7 +18,7 @@ function formatTokens(value: number | null | undefined): string {
   return String(value);
 }
 
-function prettyModel(model: string | null): string | null {
+export function prettyModel(model: string | null): string | null {
   if (!model) return null;
   const match = model.match(/(opus|sonnet|haiku|fable)-(\d+)-(\d+)/i);
   if (!match) return model;
@@ -38,12 +32,12 @@ const LARGE_CONTEXT_LIMIT = 1_000_000;
 function modelContextLimit(model: string | null): number | null {
   if (!model) return null;
   const name = model.toLowerCase();
-  if (name.includes("opus")) return LARGE_CONTEXT_LIMIT;
+  if (name.includes("opus") || name.includes("fable")) return LARGE_CONTEXT_LIMIT;
   if (name.includes("sonnet") || name.includes("haiku")) return DEFAULT_CONTEXT_LIMIT;
   return null;
 }
 
-function contextLimitFor(tokens: number, model: string | null): number {
+export function contextLimitFor(tokens: number, model: string | null): number {
   let limit = modelContextLimit(model) ?? DEFAULT_CONTEXT_LIMIT;
   if (tokens > limit) limit = LARGE_CONTEXT_LIMIT;
   return limit;
@@ -51,8 +45,10 @@ function contextLimitFor(tokens: number, model: string | null): number {
 
 interface Props {
   session: SessionRecord;
+  workspace: string | null;
   showSource: boolean;
   stale?: boolean;
+  onOpen: (sessionId: string) => void;
   onArchive: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onFocus: (sessionId: string) => void;
@@ -61,8 +57,10 @@ interface Props {
 
 export function SessionCard({
   session,
+  workspace,
   showSource,
   stale = false,
+  onOpen,
   onArchive,
   onDelete,
   onFocus,
@@ -72,16 +70,15 @@ export function SessionCard({
   const [renaming, setRenaming] = useState(false);
 
   const archived = session.archivedAt != null;
-  const canFocus = !archived && session.status !== "ended";
+  const canFocus = !archived && session.status !== "ended" && !stale;
   const name = session.customTitle ?? session.title ?? session.sessionId.slice(0, 8);
   const model = prettyModel(session.model);
   const context = typeof session.contextTokens === "number" ? session.contextTokens : null;
-  const hasMetrics =
-    model !== null || context !== null || session.tokensIn != null || session.tokensOut != null;
-
   const limit = context !== null ? contextLimitFor(context, session.model) : 0;
   const pct = limit > 0 ? Math.min(100, ((context ?? 0) / limit) * 100) : 0;
   const level = pct < 60 ? "ok" : pct < 85 ? "warn" : "high";
+  const agentsRunning = session.agentsRunning ?? 0;
+  const agentsTotal = session.agentsTotal ?? 0;
 
   const stop = (event: MouseEvent) => event.stopPropagation();
   const submitRename = (value: string) => {
@@ -91,10 +88,8 @@ export function SessionCard({
 
   return (
     <article
-      className={`card card--${session.status} ${archived ? "card--archived" : ""} ${
-        stale ? "card--stale" : ""
-      } ${canFocus ? "card--clickable" : ""}`}
-      onClick={canFocus ? () => onFocus(session.sessionId) : undefined}
+      className={`card card--${session.status} ${archived ? "card--archived" : ""} ${stale ? "card--stale" : ""} card--clickable`}
+      onClick={() => onOpen(session.sessionId)}
     >
       <div className="card__head">
         {renaming ? (
@@ -115,8 +110,23 @@ export function SessionCard({
             {name}
           </span>
         )}
-        {showSource && session.source && <span className="src">{session.source}</span>}
         <span className="card__status">{stale ? "Inactive" : statusLabel[session.status]}</span>
+      </div>
+
+      <div className="card__badges">
+        <ClientBadge info={sessionClient(session)} />
+        {workspace && <span className="chip chip--ws">{workspace}</span>}
+        {showSource && session.source && <span className="src">{session.source}</span>}
+        {agentsTotal > 0 && (
+          <span className={`chip chip--agents ${agentsRunning > 0 ? "chip--agents-on" : ""}`}>
+            {agentsRunning}/{agentsTotal} subagents
+          </span>
+        )}
+        {(session.forks ?? 0) > 0 && (
+          <span className="chip chip--forks" title="People asking this session through a share">
+            {session.forks} fork{session.forks === 1 ? "" : "s"} · {session.remoteAsks ?? 0} ask{(session.remoteAsks ?? 0) === 1 ? "" : "s"}
+          </span>
+        )}
       </div>
 
       <p className="card__msg">{session.lastMessage ?? "—"}</p>
@@ -159,54 +169,41 @@ export function SessionCard({
                 onFocus(session.sessionId);
               }}
             >
-              Focus
+              <IconFocus /> Focus
             </button>
           )}
         </div>
         <div className="card__manage">
+          <button
+            className="act"
+            onClick={(event) => {
+              stop(event);
+              setRenaming(true);
+            }}
+          >
+            Rename
+          </button>
           {!archived && (
-            <>
-              <button
-                className="act"
-                onClick={(event) => {
-                  stop(event);
-                  setRenaming(true);
-                }}
-              >
-                Rename
-              </button>
-              <button
-                className="act"
-                onClick={(event) => {
-                  stop(event);
-                  onArchive(session.sessionId);
-                }}
-              >
-                Archive
-              </button>
-            </>
+            <button
+              className="act"
+              onClick={(event) => {
+                stop(event);
+                onArchive(session.sessionId);
+              }}
+            >
+              Archive
+            </button>
           )}
           {archived && !confirming && (
-            <>
-              <button
-                className="act"
-                onClick={(event) => {
-                  stop(event);
-                  setRenaming(true);
-                }}
-              >
-                Rename
-              </button>
-              <button
-                className="act"
-                onClick={(event) => {
-                  stop(event);
-                  setConfirming(true);
-                }}
-              >
-                Delete
-              </button>
-            </>
+            <button
+              className="act"
+              onClick={(event) => {
+                stop(event);
+                setConfirming(true);
+              }}
+            >
+              Delete
+            </button>
           )}
           {archived && confirming && (
             <>

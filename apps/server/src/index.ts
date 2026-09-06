@@ -1,10 +1,13 @@
 import cors from "cors";
-import express from "express";
+import express, { type ErrorRequestHandler } from "express";
 import { existsSync } from "node:fs";
+import { hostname } from "node:os";
 import { config } from "./config.js";
 import {
   applyHook,
   archiveSession,
+  endDeadSessions,
+  listAgents,
   createGroup,
   deleteGroup,
   deleteSession,
@@ -17,7 +20,16 @@ import {
   updateGroup,
 } from "./db.js";
 import { focusWindow } from "./focus.js";
+import { listCodexSessions } from "./codex-sessions.js";
+import { sessionLive } from "./live.js";
+import { runtimeSnapshot } from "./runtimes.js";
 import { ensureExtension } from "./ensure-extension.js";
+import { abortActiveRuns, delegationRouter } from "./delegation-routes.js";
+import { markRunningAsInterrupted } from "./delegation-store.js";
+import { createShareApp } from "./share-server.js";
+import { deleteOrphanShareForks, limitOf, listAsksForSession, listForksForSession, markInterruptedShareRequests } from "./share-store.js";
+import { markShareEndpoint, stopTunnel } from "./tunnel.js";
+import { abortAllAsks } from "./share-service.js";
 import { mergeHooks, windowsHooks, wslHooks } from "./hooks-control.js";
 import { readSessionName, readTranscript } from "./transcript.js";
 import { addClient, broadcast } from "./sse.js";
@@ -37,7 +49,8 @@ const kindByEvent: Record<string, HookKind> = {
   UserPromptSubmit: "user_prompt",
   Notification: "notification",
   Stop: "stop",
-  SubagentStop: "stop",
+  SubagentStart: "subagent_start",
+  SubagentStop: "subagent_stop",
   SessionEnd: "session_end",
 };
 
@@ -52,7 +65,7 @@ function transcriptPathFor(path: string | null, source: string | null): string |
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 
 app.post("/hook", (req, res) => {
   const body = req.body as Record<string, unknown>;
@@ -73,6 +86,13 @@ app.post("/hook", (req, res) => {
     tokensIn: asNumber(body.tokensIn),
     tokensOut: asNumber(body.tokensOut),
     contextTokens: asNumber(body.contextTokens),
+    agentId: asString(body.agentId),
+    agentType: asString(body.agentType),
+    client: asString(body.client),
+    claudePid: asNumber(body.claudePid),
+    transcriptPath: asString(body.transcriptPath),
+    agentMessage: asString(body.agentMessage),
+    shareLabel: asString(body.shareLabel),
   };
   const session = applyHook(payload);
   broadcast("session", session);
@@ -105,11 +125,18 @@ app.post("/hook/raw", (req, res) => {
     hostPid: null,
     shellPid: null,
     title,
-    message: asString(body.message),
+    message: asString(body.message) ?? asString(body.last_assistant_message)?.slice(0, 400) ?? null,
     model: transcript.model,
     tokensIn: transcript.tokensIn,
     tokensOut: transcript.tokensOut,
     contextTokens: transcript.contextTokens,
+    agentId: asString(body.agent_id),
+    agentType: asString(body.agent_type),
+    client: source && source.startsWith("wsl") ? "wsl" : "terminal",
+    claudePid: null,
+    transcriptPath,
+    agentMessage: asString(body.agent_id) ? (asString(body.last_assistant_message)?.slice(0, 400) ?? null) : null,
+    shareLabel: asString(body.share_label) ?? null,
   };
   const session = applyHook(payload);
   broadcast("session", session);
@@ -118,6 +145,31 @@ app.post("/hook/raw", (req, res) => {
 
 app.get("/api/sessions", (_req, res) => {
   res.json(listSessions());
+});
+
+app.get("/api/sessions/:id/agents", (req, res) => {
+  res.json(listAgents(req.params.id));
+});
+
+app.get("/api/sessions/:id/asks", (req, res) => {
+  res.json({ forks: listForksForSession(req.params.id), asks: listAsksForSession(req.params.id, limitOf(req.query.limit)) });
+});
+
+app.get("/api/sessions/:id/live", (req, res) => {
+  const live = sessionLive(req.params.id);
+  if (!live) {
+    res.status(404).json({ error: "session not found" });
+    return;
+  }
+  res.json(live);
+});
+
+app.get("/api/runtimes", (_req, res) => {
+  void runtimeSnapshot().then((snapshot) => res.json(snapshot));
+});
+
+app.get("/api/codex/sessions", (_req, res) => {
+  res.json(listCodexSessions());
 });
 
 app.patch("/api/sessions/:id", (req, res) => {
@@ -206,7 +258,7 @@ app.post("/api/groups/reorder", (req, res) => {
 });
 
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, hostname: hostname() });
 });
 
 app.get("/api/hooks", async (_req, res) => {
@@ -227,6 +279,8 @@ app.post("/api/hooks/uninstall", async (_req, res) => {
   void wslHooks("uninstall").then((wsl) => broadcast("hooks", mergeHooks(windows, wsl)));
 });
 
+app.use("/delegation", delegationRouter());
+
 app.get("/api/events", (_req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -241,9 +295,44 @@ if (config.staticDir && existsSync(config.staticDir)) {
   app.use(express.static(config.staticDir));
 }
 
+const jsonErrors: ErrorRequestHandler = (err: unknown, _req, res, _next) => {
+  const status =
+    err && typeof err === "object" && typeof (err as { status?: unknown }).status === "number"
+      ? (err as { status: number }).status
+      : 500;
+  res.status(status).json({ error: err instanceof Error ? err.message : "request failed" });
+};
+app.use(jsonErrors);
+
 app.listen(config.port, config.host, () => {
   console.log(`vbss-cchub server on http://${config.host}:${config.port}`);
+  if (config.delegationEnabled) {
+    markInterruptedShareRequests();
+    deleteOrphanShareForks();
+    createShareApp()
+      .listen(config.sharePort, config.shareHost, () => {
+        markShareEndpoint(null);
+        console.log(`share endpoint on http://${config.shareHost}:${config.sharePort} (share links only)`);
+      })
+      .on("error", (err: Error) => {
+        markShareEndpoint(err.message);
+        console.error(`share endpoint could not listen on ${config.sharePort}: ${err.message}`);
+      });
+    const interrupted = markRunningAsInterrupted();
+    if (interrupted > 0) console.log(`marked ${interrupted} delegation runs interrupted on restart`);
+    console.log("delegation enabled (loopback callers only)");
+  }
 });
+
+function shutdown(reason: string): void {
+  stopTunnel();
+  abortAllAsks(reason);
+  abortActiveRuns(reason);
+  process.exit(0);
+}
+
+process.on("SIGINT", () => shutdown("hub stopped"));
+process.on("SIGTERM", () => shutdown("hub stopped"));
 
 const PURGE_INTERVAL_MS = 3_600_000;
 
@@ -256,6 +345,13 @@ function purgeEmpty(): void {
 purgeEmpty();
 setInterval(purgeEmpty, PURGE_INTERVAL_MS).unref();
 
+function sweepDead(): void {
+  for (const session of endDeadSessions()) broadcast("session", session);
+}
+
+sweepDead();
+setInterval(sweepDead, 30_000).unref();
+
 ensureExtension();
 
 const parentPid = Number(process.env.HUB_PARENT_PID);
@@ -264,7 +360,7 @@ if (Number.isInteger(parentPid) && parentPid > 0) {
     try {
       process.kill(parentPid, 0);
     } catch {
-      process.exit(0);
+      shutdown("hub host exited");
     }
   }, 3000).unref();
 }

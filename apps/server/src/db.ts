@@ -3,11 +3,11 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "./config.js";
-import type { GroupRecord, HookKind, HookPayload, SessionRecord, SessionStatus } from "./types.js";
+import type { AgentRecord, GroupRecord, HookKind, HookPayload, SessionRecord, SessionStatus } from "./types.js";
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
-const db = new Database(config.dbPath);
+export const db = new Database(config.dbPath);
 db.pragma("journal_mode = WAL");
 
 db.exec(`
@@ -61,13 +61,104 @@ for (const [name, type] of [
   if (!existingColumns.has(name)) db.exec(`ALTER TABLE sessions ADD COLUMN ${name} ${type}`);
 }
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS agents (
+    agent_id        TEXT PRIMARY KEY,
+    session_id      TEXT NOT NULL,
+    agent_type      TEXT,
+    status          TEXT NOT NULL,
+    transcript_path TEXT,
+    last_message    TEXT,
+    started_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_agents_session ON agents(session_id, status);
+`);
+
+function ensureColumns(table: string, columns: [string, string][]): void {
+  const existing = new Set(
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((row) => row.name),
+  );
+  for (const [name, type] of columns) {
+    if (!existing.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);
+  }
+}
+
+ensureColumns("sessions", [
+  ["client", "TEXT"],
+  ["claude_pid", "INTEGER"],
+  ["transcript_path", "TEXT"],
+  ["share_label", "TEXT"],
+]);
+ensureColumns("agents", [
+  ["transcript_path", "TEXT"],
+  ["last_message", "TEXT"],
+]);
+
+const STALE_HOURS = Number(process.env.HUB_STALE_HOURS ?? 4);
+const STALE_MS = Number.isFinite(STALE_HOURS) && STALE_HOURS > 0 ? STALE_HOURS * 3_600_000 : 4 * 3_600_000;
+
+export function isProcessAlive(pid: number | null): boolean {
+  if (!Number.isInteger(pid) || (pid ?? 0) <= 0) return false;
+  try {
+    process.kill(pid as number, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const statusByKind: Record<HookKind, SessionStatus> = {
   session_start: "active",
   user_prompt: "active",
   notification: "waiting",
   stop: "idle",
   session_end: "ended",
+  subagent_start: "active",
+  subagent_stop: "active",
 };
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS hub_share_requests (
+    id TEXT PRIMARY KEY,
+    share_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    status TEXT NOT NULL,
+    answer TEXT,
+    error TEXT,
+    task_id TEXT,
+    session_id TEXT,
+    remote TEXT,
+    agent TEXT,
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS hub_share_forks (
+    share_id TEXT NOT NULL,
+    asker TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    parent_session_id TEXT,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER NOT NULL,
+    questions INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (share_id, asker)
+  );
+`);
+ensureColumns("hub_share_requests", [
+  ["asker", "TEXT"],
+  ["fork_session_id", "TEXT"],
+  ["parent_session_id", "TEXT"],
+]);
+
+const SESSION_SELECT = `
+  SELECT s.*,
+    (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.session_id AND a.status = 'running') AS agents_running,
+    (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.session_id) AS agents_total,
+    (SELECT COUNT(*) FROM hub_share_forks f WHERE f.parent_session_id = s.session_id) AS forks,
+    (SELECT COUNT(*) FROM hub_share_requests r WHERE r.parent_session_id = s.session_id) AS remote_asks
+  FROM sessions s
+`;
 
 interface SessionRow {
   session_id: string;
@@ -83,7 +174,15 @@ interface SessionRow {
   source: string | null;
   host_pid: number | null;
   shell_pid: number | null;
+  claude_pid: number | null;
+  client: string | null;
+  transcript_path: string | null;
+  share_label: string | null;
+  forks: number;
+  remote_asks: number;
   archived_at: number | null;
+  agents_running: number;
+  agents_total: number;
   started_at: number;
   updated_at: number;
 }
@@ -95,6 +194,13 @@ const toRecord = (row: SessionRow): SessionRecord => ({
   source: row.source,
   hostPid: row.host_pid,
   shellPid: row.shell_pid,
+  claudePid: row.claude_pid,
+  client: row.client,
+  transcriptPath: row.transcript_path,
+  shareLabel: row.share_label,
+  forks: row.forks ?? 0,
+  remoteAsks: row.remote_asks ?? 0,
+  stale: row.status !== "ended" && Date.now() - row.updated_at > STALE_MS,
   title: row.title,
   customTitle: row.custom_title,
   lastMessage: row.last_message,
@@ -103,21 +209,27 @@ const toRecord = (row: SessionRow): SessionRecord => ({
   tokensOut: row.tokens_out,
   contextTokens: row.context_tokens,
   archivedAt: row.archived_at,
+  agentsRunning: row.agents_running ?? 0,
+  agentsTotal: row.agents_total ?? 0,
   startedAt: row.started_at,
   updatedAt: row.updated_at,
 });
 
 const upsertStmt = db.prepare(`
   INSERT INTO sessions
-    (session_id, status, cwd, source, host_pid, shell_pid, title, last_message, model, tokens_in, tokens_out, context_tokens, started_at, updated_at)
+    (session_id, status, cwd, source, host_pid, shell_pid, claude_pid, client, transcript_path, share_label, title, last_message, model, tokens_in, tokens_out, context_tokens, started_at, updated_at)
   VALUES
-    (@sessionId, @status, @cwd, @source, @hostPid, @shellPid, @title, @message, @model, @tokensIn, @tokensOut, @contextTokens, @now, @now)
+    (@sessionId, @status, @cwd, @source, @hostPid, @shellPid, @claudePid, @client, @transcriptPath, @shareLabel, @title, @message, @model, @tokensIn, @tokensOut, @contextTokens, @now, @now)
   ON CONFLICT(session_id) DO UPDATE SET
     status = @status,
     cwd = COALESCE(@cwd, cwd),
     source = COALESCE(@source, source),
     host_pid = COALESCE(@hostPid, host_pid),
     shell_pid = CASE WHEN @hostPid IS NOT NULL THEN @shellPid ELSE shell_pid END,
+    claude_pid = COALESCE(@claudePid, claude_pid),
+    client = COALESCE(@client, client),
+    transcript_path = COALESCE(@transcriptPath, transcript_path),
+    share_label = COALESCE(@shareLabel, share_label),
     title = COALESCE(@title, title),
     last_message = COALESCE(@message, last_message),
     model = COALESCE(@model, model),
@@ -133,8 +245,46 @@ const insertEventStmt = db.prepare(`
   VALUES (@sessionId, @kind, @message, @now)
 `);
 
-const getStmt = db.prepare(`SELECT * FROM sessions WHERE session_id = ?`);
-const listStmt = db.prepare(`SELECT * FROM sessions ORDER BY updated_at DESC`);
+const getStmt = db.prepare(`${SESSION_SELECT} WHERE s.session_id = ?`);
+const listStmt = db.prepare(`${SESSION_SELECT} ORDER BY s.updated_at DESC`);
+const upsertAgentStmt = db.prepare(`
+  INSERT INTO agents (agent_id, session_id, agent_type, status, transcript_path, last_message, started_at, updated_at)
+  VALUES (@agentId, @sessionId, @agentType, @status, @transcriptPath, @lastMessage, @now, @now)
+  ON CONFLICT(agent_id) DO UPDATE SET
+    status = @status,
+    agent_type = COALESCE(@agentType, agent_type),
+    transcript_path = COALESCE(@transcriptPath, transcript_path),
+    last_message = COALESCE(@lastMessage, last_message),
+    updated_at = @now
+`);
+const endAgentsStmt = db.prepare(`UPDATE agents SET status = 'ended', updated_at = ? WHERE session_id = ? AND status = 'running'`);
+const listAgentsStmt = db.prepare(`SELECT * FROM agents WHERE session_id = ? ORDER BY started_at`);
+
+interface AgentRow {
+  agent_id: string;
+  session_id: string;
+  agent_type: string | null;
+  status: string;
+  transcript_path: string | null;
+  last_message: string | null;
+  started_at: number;
+  updated_at: number;
+}
+
+const toAgent = (row: AgentRow): AgentRecord => ({
+  agentId: row.agent_id,
+  sessionId: row.session_id,
+  agentType: row.agent_type,
+  status: row.status as AgentRecord["status"],
+  transcriptPath: row.transcript_path,
+  lastMessage: row.last_message,
+  startedAt: row.started_at,
+  updatedAt: row.updated_at,
+});
+
+export function listAgents(sessionId: string): AgentRecord[] {
+  return (listAgentsStmt.all(sessionId) as AgentRow[]).map(toAgent);
+}
 
 const apply = db.transaction((payload: HookPayload, now: number): SessionRecord => {
   const status = statusByKind[payload.kind];
@@ -151,6 +301,10 @@ const apply = db.transaction((payload: HookPayload, now: number): SessionRecord 
     tokensIn: payload.tokensIn,
     tokensOut: payload.tokensOut,
     contextTokens: payload.contextTokens,
+    claudePid: payload.claudePid,
+    client: payload.client,
+    transcriptPath: payload.transcriptPath,
+    shareLabel: payload.shareLabel,
     now,
   });
   insertEventStmt.run({
@@ -159,6 +313,18 @@ const apply = db.transaction((payload: HookPayload, now: number): SessionRecord 
     message: payload.message,
     now,
   });
+  if ((payload.kind === "subagent_start" || payload.kind === "subagent_stop") && payload.agentId) {
+    upsertAgentStmt.run({
+      agentId: payload.agentId,
+      sessionId: payload.sessionId,
+      agentType: payload.agentType,
+      status: payload.kind === "subagent_start" ? "running" : "ended",
+      transcriptPath: null,
+      lastMessage: payload.agentMessage,
+      now,
+    });
+  }
+  if (payload.kind === "session_end") endAgentsStmt.run(now, payload.sessionId);
   return toRecord(getStmt.get(payload.sessionId) as SessionRow);
 });
 
@@ -168,6 +334,29 @@ export function applyHook(payload: HookPayload): SessionRecord {
 
 export function listSessions(): SessionRecord[] {
   return (listStmt.all() as SessionRow[]).map(toRecord);
+}
+
+const liveWithPidStmt = db.prepare(
+  `SELECT session_id, COALESCE(claude_pid, shell_pid, host_pid) AS pid FROM sessions WHERE status != 'ended' AND COALESCE(claude_pid, shell_pid, host_pid) IS NOT NULL`,
+);
+const endSessionStmt = db.prepare(
+  `UPDATE sessions SET status = 'ended', last_message = COALESCE(last_message, 'process exited'), updated_at = ? WHERE session_id = ?`,
+);
+
+export function endDeadSessions(): SessionRecord[] {
+  const now = Date.now();
+  const ended: SessionRecord[] = [];
+  const sweep = db.transaction(() => {
+    for (const row of liveWithPidStmt.all() as { session_id: string; pid: number }[]) {
+      if (isProcessAlive(row.pid)) continue;
+      endSessionStmt.run(now, row.session_id);
+      endAgentsStmt.run(now, row.session_id);
+      insertEventStmt.run({ sessionId: row.session_id, kind: "session_end", message: "process exited", now });
+      ended.push(toRecord(getStmt.get(row.session_id) as SessionRow));
+    }
+  });
+  sweep();
+  return ended;
 }
 
 export function getSession(sessionId: string): SessionRecord | null {
