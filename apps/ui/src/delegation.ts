@@ -352,6 +352,9 @@ export async function getShareDoc(id: string, base: "auto" | "public" | "lan" | 
 
 export const listShareActivity = (limit = 40): Promise<ShareRequestRecord[]> => call("GET", `/shares/activity?limit=${limit}`);
 
+export const listShareRequests = (shareId: string, limit = 40): Promise<ShareRequestRecord[]> =>
+  call("GET", `/shares/${encodeURIComponent(shareId)}/requests?limit=${limit}`);
+
 export const getTunnel = (): Promise<TunnelStatus> => call("GET", "/tunnel");
 
 export const startTunnel = (): Promise<TunnelStatus> => call("POST", "/tunnel/start");

@@ -545,7 +545,6 @@ export function App() {
               tunnel={tunnel}
               onTunnelChanged={setTunnel}
               subscribeShareStream={subscribeShareStream}
-              ownerName={settings?.ownerName ?? ""}
               onOpenSettings={() => navigate("settings", "sharing")}
               onOpenTask={(id) => navigate("tasks", id)}
               onNotice={ok}
