@@ -2711,6 +2711,68 @@ h3 {
   flex: 1 1 200px;
 }
 
+.frow--top {
+  align-items: flex-start;
+}
+
+.frow--stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.share-split {
+  min-width: 0;
+}
+
+.pane--detail .details {
+  margin: 0;
+}
+
+.sharecards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card--share {
+  border-left-color: var(--ended);
+}
+
+.card--share-active {
+  border-left-color: var(--go);
+}
+
+.card--share-paused {
+  border-left-color: var(--pend);
+}
+
+.card--share-revoked,
+.card--share-expired {
+  border-left-color: var(--hold);
+  opacity: 0.72;
+}
+
+.trustpills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.drawer__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
 @media (max-width: 1100px) {
   .share-grid {
     grid-template-columns: 1fr;
