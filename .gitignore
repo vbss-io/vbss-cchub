@@ -21,3 +21,6 @@ pids/
 
 # internal planning docs — not for the public repo
 PLANO.md
+
+# Claude Code agent worktrees
+.claude/worktrees/
