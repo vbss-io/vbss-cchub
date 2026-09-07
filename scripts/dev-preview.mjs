@@ -86,11 +86,13 @@ const seedData = async () => {
     { sessionId: "preview-active", kind: "user_prompt", client: "terminal", cwd: repoRoot, model: "claude-opus-4-8", title: "Refactor the executor", claudePid: process.pid, updatedAt: now - 2 * minute },
     { sessionId: "preview-waiting", kind: "notification", client: "vscode", cwd: repoRoot, model: "claude-sonnet-5", title: "Waiting on approval", claudePid: process.pid, updatedAt: now - 20 * minute },
     { sessionId: "preview-old", kind: "session_start", client: "claude-desktop", cwd: repoRoot, model: "claude-opus-4-8", title: "Yesterday's session", updatedAt: now - 26 * hour },
+    { sessionId: "preview-ended", kind: "session_start", client: "terminal", cwd: repoRoot, model: "claude-opus-4-8", title: "Finished cleanup", updatedAt: now - 3 * hour },
+    { sessionId: "preview-ended", kind: "session_end", client: "terminal", cwd: repoRoot, model: "claude-opus-4-8", title: "Finished cleanup", updatedAt: now - 2 * hour },
   ];
   for (const session of sessions) await post("/hook", session);
-  await post("/delegation/reports", { text: "Preview seeded: three sessions and a couple of reports.", kind: "note", source: "dev-preview" });
+  await post("/delegation/reports", { text: "Preview seeded: four sessions (one ended) and a couple of reports.", kind: "note", source: "dev-preview" });
   await post("/delegation/reports", { text: "Everything is green on the preview.", kind: "progress", source: "dev-preview" });
-  console.log("[seed] posted 3 sessions + 2 reports");
+  console.log("[seed] posted 4 sessions (1 ended) + 2 reports");
 };
 
 const nodeBin = process.execPath;
