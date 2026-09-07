@@ -251,6 +251,18 @@ describe("hub surface", () => {
     assert.equal((await http("GET", "/delegation/tasks/ghost/events")).status, 404);
   });
 
+  it("resolves a unique task id prefix on every /tasks/:id route", async () => {
+    const created = await http("POST", "/delegation/tasks", { body: { prompt: "prefix me", workspace: "pilot" } });
+    const id = (created.json as Detail).task.id;
+    await waitSettled(id);
+    const short = await http("GET", `/delegation/tasks/${id.slice(0, 8)}`);
+    assert.equal(short.status, 200);
+    assert.equal((short.json as Detail).task.id, id);
+    assert.equal((await http("GET", `/delegation/tasks/${id.slice(0, 8)}/events`)).status, 200);
+    assert.equal((await http("GET", `/delegation/tasks/${id.slice(0, 3)}`)).status, 404);
+    assert.equal((await http("GET", "/delegation/tasks/zzzzzzzz")).status, 404);
+  });
+
   it("archives a settled task, hides it from the default list and validates the run timeout", async () => {
     const created = await http("POST", "/delegation/tasks", { body: { prompt: "archive me", workspace: "pilot" } });
     const id = (created.json as Detail).task.id;

@@ -19,6 +19,7 @@ import {
   updateSettings,
   setTaskOrigin,
   listTasksByOrigin,
+  resolveTaskId,
 } from "./delegation-store.js";
 import { delegationGuard } from "./delegation-security.js";
 import { abortRun, BadRequestError, NotFoundError, brainNote, delegateTask, startRun } from "./delegation-launch.js";
@@ -358,6 +359,14 @@ export function delegationRouter(): Router {
     } catch (err) {
       sendError(res, err);
     }
+  });
+
+  router.param("id", (req, _res, next, value: string) => {
+    if (req.baseUrl.endsWith("/delegation") && req.path.startsWith("/tasks/")) {
+      const resolved = resolveTaskId(value);
+      if (resolved) req.params.id = resolved;
+    }
+    next();
   });
 
   router.get("/tasks/:id", (req, res) => {
