@@ -151,12 +151,56 @@ ensureColumns("hub_share_requests", [
   ["parent_session_id", "TEXT"],
 ]);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS hub_tasks (
+    id                TEXT PRIMARY KEY,
+    title             TEXT NOT NULL,
+    prompt            TEXT NOT NULL,
+    workspace         TEXT NOT NULL,
+    repo              TEXT,
+    cwd               TEXT NOT NULL,
+    add_dirs          TEXT NOT NULL,
+    runner            TEXT NOT NULL,
+    requested_model   TEXT,
+    permission_mode   TEXT,
+    sandbox           TEXT,
+    status            TEXT NOT NULL,
+    session_id        TEXT,
+    created_by        TEXT,
+    origin_session_id TEXT,
+    origin_client     TEXT,
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL
+  );
+`);
+ensureColumns("hub_tasks", [
+  ["origin_session_id", "TEXT"],
+  ["origin_client", "TEXT"],
+]);
+
+const isHelper = (alias: string): string =>
+  `${alias}.client = 'claude-desktop' AND ${alias}.cwd IS NOT NULL AND (LOWER(${alias}.cwd) LIKE '%\\scratch-workspaces\\%' OR LOWER(${alias}.cwd) LIKE '%/scratch-workspaces/%')`;
+
+const parentOf = (alias: string): string => `(
+    SELECT p.session_id FROM sessions p
+    WHERE p.host_pid = ${alias}.host_pid
+      AND p.client = 'claude-desktop'
+      AND p.session_id != ${alias}.session_id
+      AND NOT (${isHelper("p")})
+    ORDER BY p.started_at DESC LIMIT 1
+  )`;
+
 const SESSION_SELECT = `
   SELECT s.*,
     (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.session_id AND a.status = 'running') AS agents_running,
     (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.session_id) AS agents_total,
     (SELECT COUNT(*) FROM hub_share_forks f WHERE f.parent_session_id = s.session_id) AS forks,
-    (SELECT COUNT(*) FROM hub_share_requests r WHERE r.parent_session_id = s.session_id) AS remote_asks
+    (SELECT COUNT(*) FROM hub_share_requests r WHERE r.parent_session_id = s.session_id) AS remote_asks,
+    (SELECT COUNT(*) FROM hub_tasks dt WHERE dt.origin_session_id = s.session_id) AS delegated,
+    (SELECT parent_session_id FROM hub_share_forks f WHERE f.session_id = s.session_id LIMIT 1) AS fork_of,
+    (CASE WHEN ${isHelper("s")} THEN ${parentOf("s")} ELSE NULL END) AS helper_of,
+    (SELECT COUNT(*) FROM sessions h WHERE ${isHelper("h")} AND h.status != 'ended' AND ${parentOf("h")} = s.session_id) AS helpers,
+    (SELECT COUNT(*) FROM sessions h WHERE ${isHelper("h")} AND ${parentOf("h")} = s.session_id) AS helpers_total
   FROM sessions s
 `;
 
@@ -180,6 +224,11 @@ interface SessionRow {
   share_label: string | null;
   forks: number;
   remote_asks: number;
+  delegated: number;
+  fork_of: string | null;
+  helper_of: string | null;
+  helpers: number;
+  helpers_total: number;
   archived_at: number | null;
   agents_running: number;
   agents_total: number;
@@ -198,8 +247,13 @@ const toRecord = (row: SessionRow): SessionRecord => ({
   client: row.client,
   transcriptPath: row.transcript_path,
   shareLabel: row.share_label,
+  forkOf: row.fork_of ?? null,
   forks: row.forks ?? 0,
   remoteAsks: row.remote_asks ?? 0,
+  delegatedTasks: row.delegated ?? 0,
+  helperOf: row.helper_of ?? null,
+  helpers: row.helpers ?? 0,
+  helpersTotal: row.helpers_total ?? 0,
   stale: row.status !== "ended" && Date.now() - row.updated_at > STALE_MS,
   title: row.title,
   customTitle: row.custom_title,
@@ -222,7 +276,7 @@ const upsertStmt = db.prepare(`
     (@sessionId, @status, @cwd, @source, @hostPid, @shellPid, @claudePid, @client, @transcriptPath, @shareLabel, @title, @message, @model, @tokensIn, @tokensOut, @contextTokens, @now, @now)
   ON CONFLICT(session_id) DO UPDATE SET
     status = @status,
-    cwd = COALESCE(@cwd, cwd),
+    cwd = CASE WHEN @pinCwd = 1 THEN COALESCE(@cwd, cwd) ELSE COALESCE(cwd, @cwd) END,
     source = COALESCE(@source, source),
     host_pid = COALESCE(@hostPid, host_pid),
     shell_pid = CASE WHEN @hostPid IS NOT NULL THEN @shellPid ELSE shell_pid END,
@@ -292,6 +346,7 @@ const apply = db.transaction((payload: HookPayload, now: number): SessionRecord 
     sessionId: payload.sessionId,
     status,
     cwd: payload.cwd,
+    pinCwd: payload.kind === "session_start" ? 1 : 0,
     source: payload.source,
     hostPid: payload.hostPid,
     shellPid: payload.shellPid,
@@ -328,8 +383,8 @@ const apply = db.transaction((payload: HookPayload, now: number): SessionRecord 
   return toRecord(getStmt.get(payload.sessionId) as SessionRow);
 });
 
-export function applyHook(payload: HookPayload): SessionRecord {
-  return apply(payload, Date.now());
+export function applyHook(payload: HookPayload, at?: number): SessionRecord {
+  return apply(payload, at ?? Date.now());
 }
 
 export function listSessions(): SessionRecord[] {
@@ -361,6 +416,19 @@ export function endDeadSessions(): SessionRecord[] {
 
 export function getSession(sessionId: string): SessionRecord | null {
   const row = getStmt.get(sessionId) as SessionRow | undefined;
+  return row ? toRecord(row) : null;
+}
+
+const sessionByPidStmt = db.prepare(
+  `${SESSION_SELECT}
+   WHERE s.claude_pid = @pid OR s.host_pid = @pid OR s.shell_pid = @pid
+   ORDER BY CASE WHEN s.claude_pid = @pid THEN 0 WHEN s.host_pid = @pid THEN 1 ELSE 2 END, s.updated_at DESC
+   LIMIT 1`,
+);
+
+export function sessionByPid(pid: number | null): SessionRecord | null {
+  if (!Number.isInteger(pid) || (pid ?? 0) <= 0) return null;
+  const row = sessionByPidStmt.get({ pid }) as SessionRow | undefined;
   return row ? toRecord(row) : null;
 }
 

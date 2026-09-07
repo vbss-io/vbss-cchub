@@ -23,3 +23,11 @@ export function repoOf(workspaces: WorkspaceRecord[], cwd: string | null | undef
   }
   return null;
 }
+
+export function shortFolder(cwd: string | null | undefined): string {
+  if (!cwd) return "—";
+  const parts = cwd.replace(/[\\/]+$/, "").split(/[\\/]/);
+  const anchor = parts.findIndex((part) => part.toLowerCase() === ".workspaces");
+  if (anchor >= 0 && anchor < parts.length - 1) return parts.slice(anchor + 1).join("/");
+  return parts.slice(-2).join("/");
+}

@@ -34,18 +34,27 @@ const newTask = (title: string, runner: "claude" | "codex" = "claude") =>
     permissionMode: null,
     sandbox: null,
     createdBy: "test",
+    originSessionId: null,
+    originClient: null,
   });
 
 describe("settings", () => {
   it("falls back to environment defaults and persists updates", () => {
-    assert.deepEqual(store.getSettings(), { workspacesRoot: null, editorCommand: "code", secondBrainRoot: null, autonomy: "full", ownerName: userInfo().username });
+    assert.deepEqual(store.getSettings(), { workspacesRoot: null, editorCommand: "code", secondBrainRoot: null, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60 });
     const updated = store.updateSettings({ workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir });
-    assert.deepEqual(updated, { workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir, autonomy: "full", ownerName: userInfo().username });
+    assert.deepEqual(updated, { workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60 });
     assert.equal(store.updateSettings({ ownerName: "Vitor" }).ownerName, "Vitor");
     assert.equal(store.updateSettings({ autonomy: "safe" }).autonomy, "safe");
     store.updateSettings({ autonomy: "full" });
     assert.equal(store.updateSettings({ workspacesRoot: null }).workspacesRoot, null);
     assert.equal(store.getSettings().editorCommand, "cursor");
+  });
+
+  it("clamps the run timeout to the allowed range", () => {
+    assert.equal(store.updateSettings({ runTimeoutMinutes: 90 }).runTimeoutMinutes, 90);
+    assert.equal(store.updateSettings({ runTimeoutMinutes: 1 }).runTimeoutMinutes, 5);
+    assert.equal(store.updateSettings({ runTimeoutMinutes: 5000 }).runTimeoutMinutes, 720);
+    store.updateSettings({ runTimeoutMinutes: 60 });
   });
 });
 
@@ -86,6 +95,75 @@ describe("tasks and runs", () => {
     assert.deepEqual(detail?.reports, []);
   });
 
+  it("lets a task origin be set afterwards", () => {
+    const task = store.createTask({
+      title: "late origin",
+      prompt: "x",
+      workspace: "pilot",
+      repo: null,
+      cwd: "C:/x",
+      addDirs: [],
+      runner: "claude",
+      model: null,
+      permissionMode: null,
+      sandbox: null,
+      createdBy: "test",
+      originSessionId: null,
+      originClient: null,
+    });
+    const updated = store.setTaskOrigin(task.id, "sess-late", "claude-code");
+    assert.equal(updated?.originSessionId, "sess-late");
+    assert.equal(updated?.originClient, "claude-code");
+  });
+
+  it("lists the tasks delegated by one session, archived included", () => {
+    const base = {
+      prompt: "x",
+      workspace: "pilot",
+      repo: null,
+      cwd: join(dataDir, "pilot"),
+      addDirs: [],
+      runner: "claude" as const,
+      model: null,
+      permissionMode: null,
+      sandbox: null,
+      createdBy: "mcp",
+      originClient: "claude-code" as const,
+    };
+    const first = store.createTask({ ...base, title: "first", originSessionId: "sess-origin" });
+    const second = store.createTask({ ...base, title: "second", originSessionId: "sess-origin" });
+    store.createTask({ ...base, title: "other", originSessionId: "sess-other" });
+    store.archiveTask(second.id);
+    const mine = store.listTasksByOrigin("sess-origin");
+    assert.deepEqual(mine.map((task) => task.title).sort(), ["first", "second"]);
+    assert.ok(mine.every((task) => task.originSessionId === "sess-origin"));
+    assert.equal(mine.find((task) => task.id === first.id)?.archivedAt, null);
+    assert.ok(mine.find((task) => task.id === second.id)?.archivedAt);
+  });
+
+  it("persists the delegation origin session and client", () => {
+    const task = store.createTask({
+      title: "origin",
+      prompt: "do origin",
+      workspace: "pilot",
+      repo: "repo-a",
+      cwd: join(dataDir, "pilot"),
+      addDirs: [],
+      runner: "claude",
+      model: null,
+      permissionMode: null,
+      sandbox: null,
+      createdBy: "mcp",
+      originSessionId: "origin-sess",
+      originClient: "claude-code",
+    });
+    assert.equal(task.originSessionId, "origin-sess");
+    assert.equal(task.originClient, "claude-code");
+    const reloaded = store.getTask(task.id);
+    assert.equal(reloaded?.originSessionId, "origin-sess");
+    assert.equal(reloaded?.originClient, "claude-code");
+  });
+
   it("keeps the task session null when the launch failed before a session was observed", () => {
     const task = newTask("dead");
     const run = store.beginRun({ taskId: task.id, kind: "launch", runner: "claude", prompt: "p", model: null, permissionMode: null, sessionId: "planned" });
@@ -122,6 +200,22 @@ describe("tasks and runs", () => {
     for (let index = 1; index < all.length; index += 1) {
       assert.ok((all[index - 1]?.updatedAt ?? 0) >= (all[index]?.updatedAt ?? 0));
     }
+  });
+});
+
+describe("archive", () => {
+  it("hides archived tasks from the default list and restores them on unarchive", () => {
+    const task = newTask("archivable");
+    const run = store.beginRun({ taskId: task.id, kind: "launch", runner: "claude", prompt: "p", model: null, permissionMode: null, sessionId: "s" });
+    store.finishRun({ runId: run.id, taskId: task.id, status: "completed", effectiveModel: null, sessionId: "s", result: "ok", error: null, exitCode: 0 });
+    const archived = store.archiveTask(task.id);
+    assert.equal(typeof archived?.archivedAt, "number");
+    assert.equal(store.listTasks({ limit: 500 }).some((t) => t.id === task.id), false);
+    assert.equal(store.listTasks({ limit: 500, includeArchived: true }).some((t) => t.id === task.id), true);
+    assert.equal(store.listTasks({ status: "completed", limit: 500 }).some((t) => t.id === task.id), false);
+    const restored = store.unarchiveTask(task.id);
+    assert.equal(restored?.archivedAt, null);
+    assert.equal(store.listTasks({ limit: 500 }).some((t) => t.id === task.id), true);
   });
 });
 

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelTask,
   continueTask,
-  createReport,
   getTask,
   getTaskEvents,
   type RunEventRecord,
@@ -11,13 +10,21 @@ import {
   type TaskRecord,
   type TaskStatus,
 } from "../delegation";
+import {
+  archiveTask,
+  listArchivedTasks,
+  probeArchiveSupport,
+  retryTask,
+  taskArchivedAt,
+  unarchiveTask,
+} from "../delegation-actions";
+import { inFlight, needsYou, TASK_STATUS_LABEL, TaskCard, taskOrigin, whyOf, type RetryMode } from "../components/TaskCard";
 import { relativeTime } from "../time";
-import type { RunEventMessage } from "../types";
+import type { RunEventMessage, SessionRecord } from "../types";
+import { Markdown } from "../markdown";
 import { ReportRow } from "./ReportsView";
 
-type Tone = "go" | "pend" | "hold" | "muted";
-
-const STATUS_TONE: Record<TaskStatus, Tone> = {
+const STATUS_TONE: Record<TaskStatus, string> = {
   pending: "pend",
   running: "pend",
   attention: "pend",
@@ -27,27 +34,11 @@ const STATUS_TONE: Record<TaskStatus, Tone> = {
   cancelled: "muted",
 };
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  pending: "Pending",
-  running: "Running",
-  attention: "Needs you",
-  completed: "Completed",
-  failed: "Failed",
-  interrupted: "Interrupted",
-  cancelled: "Cancelled",
-};
+type Filter = "active" | "running" | "attention" | "done" | "all" | "archived";
 
-type Filter = "all" | "live" | "attention" | "done";
-
-const inFlight = (status: TaskStatus): boolean => status === "pending" || status === "running";
-const needsYou = (status: TaskStatus): boolean => status === "attention" || status === "failed" || status === "interrupted";
-
-const cliSnippet = (taskId: string): string =>
-  `echo '${JSON.stringify({ action: "continue", taskId, prompt: "..." })}' | node apps/server/dist/cli.js`;
-
-const copyText = (text: string): void => {
-  void navigator.clipboard?.writeText(text).catch(() => undefined);
-};
+const DAY = 24 * 3_600_000;
+const isActive = (status: TaskStatus): boolean => inFlight(status) || needsYou(status);
+const isDone = (status: TaskStatus): boolean => status === "completed" || status === "cancelled";
 
 interface LogLine {
   key: string;
@@ -91,14 +82,18 @@ function RunCard({ run }: { run: RunRecord }) {
         <span className="muted">
           #{run.seq} · {run.kind}
         </span>
-        <span className={`tag tag--${STATUS_TONE[run.status]} tag--${run.status}`}>{STATUS_LABEL[run.status]}</span>
+        <span className={`tag tag--${STATUS_TONE[run.status]} tag--${run.status}`}>{TASK_STATUS_LABEL[run.status]}</span>
         <span className="chip">{run.runner}</span>
         {run.effectiveModel && <span className="chip">{run.effectiveModel}</span>}
         {run.permissionMode && <span className="chip">{run.permissionMode}</span>}
         <time className="muted run__time">{relativeTime(run.finishedAt ?? run.startedAt)}</time>
       </header>
       <p className="run__prompt">{run.prompt}</p>
-      {run.result && <pre className="run__result">{run.result}</pre>}
+      {run.result && (
+        <div className="run__result">
+          <Markdown text={run.result} />
+        </div>
+      )}
       {run.error && <p className="run__error">{run.error}</p>}
     </article>
   );
@@ -106,31 +101,49 @@ function RunCard({ run }: { run: RunRecord }) {
 
 interface Props {
   tasks: TaskRecord[];
+  sessions: Record<string, SessionRecord>;
   enabled: boolean;
   selectedId: string | null;
   tick: number;
   onSelect: (taskId: string | null) => void;
+  onOpenSession: (sessionId: string) => void;
   subscribeRunEvents: (listener: (event: RunEventMessage) => void) => () => void;
   onRefresh: () => Promise<void>;
   onOpenSettings: () => void;
   onError: (text: string) => void;
 }
 
-export function TasksView({ tasks, enabled, selectedId, tick, onSelect, subscribeRunEvents, onRefresh, onOpenSettings, onError }: Props) {
-  const [filter, setFilter] = useState<Filter>("all");
+export function TasksView({ tasks, sessions, enabled, selectedId, tick, onSelect, onOpenSession, subscribeRunEvents, onRefresh, onOpenSettings, onError }: Props) {
+  const [filter, setFilter] = useState<Filter>("active");
+  const [query, setQuery] = useState("");
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
   const [liveText, setLiveText] = useState<{ runId: string; lines: LogLine[] } | null>(null);
   const [followUp, setFollowUp] = useState("");
-  const [note, setNote] = useState("");
+  const [showContinue, setShowContinue] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [archived, setArchived] = useState<TaskRecord[]>([]);
+  const [archiveSupported, setArchiveSupported] = useState(true);
 
   const loadDetail = useCallback(async (id: string) => {
     const [nextDetail, nextEvents] = await Promise.all([getTask(id), getTaskEvents(id)]);
     setDetail(nextDetail);
     setEvents(nextEvents);
     setLiveText(null);
+    setShowContinue(false);
+    setFollowUp("");
   }, []);
+
+  useEffect(() => {
+    void probeArchiveSupport().then(setArchiveSupported);
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) return;
+    void listArchivedTasks()
+      .then(setArchived)
+      .catch(() => setArchived([]));
+  }, [enabled, tick]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -166,18 +179,33 @@ export function TasksView({ tasks, enabled, selectedId, tick, onSelect, subscrib
     });
   }, [selectedId, subscribeRunEvents]);
 
-  const shown = useMemo(
-    () =>
-      tasks.filter((task) => {
-        if (filter === "live") return inFlight(task.status);
-        if (filter === "attention") return needsYou(task.status);
-        if (filter === "done") return task.status === "completed" || task.status === "cancelled";
-        return true;
-      }),
-    [tasks, filter],
-  );
+  const live = useMemo(() => tasks.filter((task) => taskArchivedAt(task) == null), [tasks]);
+  const counts = useMemo(() => {
+    const running = live.filter((task) => inFlight(task.status)).length;
+    const needYou = live.filter((task) => needsYou(task.status)).length;
+    const doneToday = live.filter((task) => task.status === "completed" && Date.now() - task.updatedAt < DAY).length;
+    const failed = live.filter((task) => task.status === "failed").length;
+    return { running, needYou, doneToday, failed };
+  }, [live]);
+
+  const shown = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const source = filter === "archived" ? archived : live;
+    const matchesQuery = (task: TaskRecord): boolean =>
+      needle.length === 0 || `${task.title} ${task.workspace} ${task.repo ?? ""}`.toLowerCase().includes(needle);
+    return source.filter((task) => {
+      if (!matchesQuery(task)) return false;
+      if (filter === "active") return isActive(task.status);
+      if (filter === "running") return inFlight(task.status);
+      if (filter === "attention") return needsYou(task.status);
+      if (filter === "done") return isDone(task.status);
+      return true;
+    });
+  }, [filter, query, live, archived]);
 
   const running = detail ? inFlight(detail.task.status) : false;
+  const detailArchived = detail ? taskArchivedAt(detail.task) != null : false;
+  const detailWhy = detail ? whyOf(detail.task) : null;
   const lastRun = detail?.runs[detail.runs.length - 1] ?? null;
   const logLines = useMemo<LogLine[]>(() => {
     if (liveText && lastRun && liveText.runId === lastRun.id) return liveText.lines;
@@ -185,32 +213,58 @@ export function TasksView({ tasks, enabled, selectedId, tick, onSelect, subscrib
     return events.filter((event) => event.runId === lastRun.id).map((event) => ({ key: String(event.id), kind: event.kind, text: event.text }));
   }, [liveText, events, lastRun]);
 
-  const act = async (action: () => Promise<void>) => {
-    setBusy(true);
-    try {
-      await action();
-      await onRefresh();
-      if (selectedId) await loadDetail(selectedId);
-    } catch (err) {
-      onError(err instanceof Error ? err.message : "action failed");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const act = useCallback(
+    async (action: () => Promise<void>) => {
+      setBusy(true);
+      try {
+        await action();
+        await onRefresh();
+        if (selectedId) await loadDetail(selectedId);
+      } catch (err) {
+        onError(err instanceof Error ? err.message : "action failed");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [onRefresh, selectedId, loadDetail, onError],
+  );
+
+  const doArchive = useCallback((id: string) => void act(async () => await archiveTask(id)), [act]);
+  const doUnarchive = useCallback((id: string) => void act(async () => await unarchiveTask(id)), [act]);
+  const doCancel = useCallback((id: string) => void act(async () => void (await cancelTask(id))), [act]);
+  const doRetry = useCallback(
+    (task: TaskRecord, mode: RetryMode) => void act(async () => await retryTask(task.id, mode === "autonomous" ? "bypassPermissions" : null)),
+    [act],
+  );
+
+  const filters: { key: Filter; label: string; count: number }[] = [
+    { key: "active", label: "Active", count: live.filter((task) => isActive(task.status)).length },
+    { key: "running", label: "Running", count: counts.running },
+    { key: "attention", label: "Needs you", count: counts.needYou },
+    { key: "done", label: "Done", count: live.filter((task) => isDone(task.status)).length },
+    { key: "all", label: "All", count: live.length },
+    { key: "archived", label: "Archived", count: archived.length },
+  ];
+
+  const detailOrigin = detail ? taskOrigin(detail.task, sessions) : null;
 
   return (
     <div className="view view--split">
       <section className="pane pane--list">
+        <p className="tasks__summary">
+          <strong>{counts.running}</strong> running · <strong>{counts.needYou}</strong> need you · <strong>{counts.doneToday}</strong> done today ·{" "}
+          <strong>{counts.failed}</strong> failed
+        </p>
         <div className="filters filters--tight">
-          {(["all", "live", "attention", "done"] as Filter[]).map((item) => (
-            <button key={item} className={`pill ${filter === item ? "pill--on" : ""}`} onClick={() => setFilter(item)}>
-              {item === "all" ? "All" : item === "live" ? "Running" : item === "attention" ? "Needs you" : "Done"}
-              <span className="pill__count">
-                {item === "all" ? tasks.length : item === "live" ? tasks.filter((t) => inFlight(t.status)).length : item === "attention" ? tasks.filter((t) => needsYou(t.status)).length : tasks.filter((t) => t.status === "completed" || t.status === "cancelled").length}
-              </span>
+          {filters.map((item) => (
+            <button key={item.key} className={`pill ${filter === item.key ? "pill--on" : ""}`} onClick={() => setFilter(item.key)}>
+              {item.label}
+              <span className="pill__count">{item.count}</span>
             </button>
           ))}
         </div>
+        <input className="in" placeholder="search title or workspace" value={query} onChange={(event) => setQuery(event.target.value)} />
+
         {!enabled && <p className="callout">The hub surface is off on this server. See Settings › Hooks and connections.</p>}
         {enabled && tasks.length === 0 && (
           <p className="callout">
@@ -221,30 +275,29 @@ export function TasksView({ tasks, enabled, selectedId, tick, onSelect, subscrib
             .
           </p>
         )}
-        <ul className="tasklist">
+
+        <div className="taskcards">
           {shown.map((task) => (
-            <li key={task.id}>
-              <button className={`taskrow ${selectedId === task.id ? "taskrow--on" : ""}`} onClick={() => onSelect(task.id)}>
-                <span className="taskrow__title">{task.title}</span>
-                <span className="taskrow__meta">
-                  {task.workspace}
-                  {task.repo ? `/${task.repo}` : ""} · {task.runner}
-                  {task.createdBy ? ` · via ${task.createdBy}` : ""}
-                </span>
-                <span className="taskrow__foot">
-                  <span className={`tag tag--${STATUS_TONE[task.status]} tag--${task.status}`}>{STATUS_LABEL[task.status]}</span>
-                  <time className="muted">{relativeTime(task.updatedAt)}</time>
-                </span>
-                {needsYou(task.status) && task.lastError && <span className="taskrow__error">{task.lastError}</span>}
-              </button>
-            </li>
+            <TaskCard
+              key={task.id}
+              task={task}
+              origin={taskOrigin(task, sessions)}
+              selected={selectedId === task.id}
+              archiveSupported={archiveSupported}
+              busy={busy}
+              onSelect={onSelect}
+              onOpenSession={onOpenSession}
+              onCancel={doCancel}
+              onArchive={doArchive}
+              onRetry={doRetry}
+            />
           ))}
-          {enabled && tasks.length > 0 && shown.length === 0 && <li className="empty">Nothing in this filter.</li>}
-        </ul>
+          {enabled && shown.length === 0 && <p className="empty">Nothing in this filter.</p>}
+        </div>
       </section>
 
       <section className="pane pane--detail">
-        {!detail && <p className="empty">Select a task to follow it.</p>}
+        {!detail && <p className="empty">Select a task to see what it is doing.</p>}
         {detail && (
           <>
             <header className="detail__head">
@@ -252,50 +305,121 @@ export function TasksView({ tasks, enabled, selectedId, tick, onSelect, subscrib
                 <h2>{detail.task.title}</h2>
                 <p className="muted small">
                   {detail.task.workspace}
-                  {detail.task.repo ? ` / ${detail.task.repo}` : ""} · {detail.task.runner}
-                  {detail.task.createdBy ? ` · via ${detail.task.createdBy}` : ""} · runs in <span className="path">{detail.task.cwd}</span>
+                  {detail.task.repo ? ` / ${detail.task.repo}` : ""} · {detail.task.runner} · runs in <span className="path">{detail.task.cwd}</span>
                   {detail.task.addDirs.length > 0 ? ` (+${detail.task.addDirs.length} repos attached)` : ""}
                 </p>
-              </div>
-              <div className="detail__actions">
-                <span className={`tag tag--${STATUS_TONE[detail.task.status]} tag--${detail.task.status}`}>{STATUS_LABEL[detail.task.status]}</span>
-                {running && (
-                  <button className="act act--danger" disabled={busy} onClick={() => void act(async () => void (await cancelTask(detail.task.id)))}>
-                    Cancel run
-                  </button>
+                {detailOrigin && (
+                  <p className="muted small">
+                    {detailOrigin.sessionId ? (
+                      <button className="link" onClick={() => onOpenSession(detailOrigin.sessionId!)}>
+                        {detailOrigin.label}
+                      </button>
+                    ) : (
+                      detailOrigin.label
+                    )}
+                  </p>
                 )}
               </div>
+              <span className={`tag tag--${detail.task.status}`}>{TASK_STATUS_LABEL[detail.task.status]}</span>
             </header>
 
-            <section className="panel">
-              <h3>{running ? "Live output" : "Last run output"}</h3>
-              <LiveLog lines={logLines} running={running} />
-            </section>
+            {detailWhy && (
+              <div className="why why--pane">
+                <span className="why__headline">{detailWhy.headline}</span>
+                {detailWhy.detail && <span className="why__detail">{detailWhy.detail}</span>}
+                <div className="why__actions">
+                  <button className="act act--focus" disabled={busy} onClick={() => doRetry(detail.task, detailWhy.retry)}>
+                    {detailWhy.retry === "autonomous" ? "Retry autonomous" : "Retry"}
+                  </button>
+                  <button
+                    className="act"
+                    disabled={busy || !archiveSupported}
+                    title={archiveSupported ? undefined : "archive arrives with the server update"}
+                    onClick={() => doArchive(detail.task.id)}
+                  >
+                    Archive
+                  </button>
+                </div>
+              </div>
+            )}
 
-            <section className="panel">
-              <h3>Continue</h3>
-              <textarea
-                className="in area"
-                placeholder={running ? "running… wait for it to finish" : "send a follow-up into the same session"}
-                value={followUp}
-                onChange={(event) => setFollowUp(event.target.value)}
-                disabled={running}
-              />
-              <div className="actions">
-                <button
-                  className="act act--focus"
-                  disabled={busy || running || followUp.trim().length === 0}
-                  onClick={() =>
-                    void act(async () => {
-                      await continueTask(detail.task.id, { prompt: followUp.trim() });
-                      setFollowUp("");
-                    })
-                  }
-                >
+            <div className="detail__actionbar">
+              {!showContinue && (
+                <button className="act" disabled={running} onClick={() => setShowContinue(true)}>
                   Continue
                 </button>
+              )}
+              {running && (
+                <button className="act act--danger" disabled={busy} onClick={() => doCancel(detail.task.id)}>
+                  Cancel
+                </button>
+              )}
+              {detailArchived ? (
+                <button className="act" disabled={busy} onClick={() => doUnarchive(detail.task.id)}>
+                  Unarchive
+                </button>
+              ) : (
+                <button
+                  className="act"
+                  disabled={busy || running || !archiveSupported}
+                  title={archiveSupported ? undefined : "archive arrives with the server update"}
+                  onClick={() => doArchive(detail.task.id)}
+                >
+                  Archive
+                </button>
+              )}
+              {detail.task.sessionId && (
+                <button className="act" onClick={() => onOpenSession(detail.task.sessionId!)}>
+                  Open session
+                </button>
+              )}
+            </div>
+
+            {showContinue && (
+              <section className="panel">
+                <h3>Continue</h3>
+                <textarea
+                  className="in area"
+                  autoFocus
+                  placeholder={running ? "running… wait for it to finish" : "send a follow-up into the same session"}
+                  value={followUp}
+                  onChange={(event) => setFollowUp(event.target.value)}
+                  disabled={running}
+                />
+                <div className="actions">
+                  <button className="act act--ghost" onClick={() => { setShowContinue(false); setFollowUp(""); }}>
+                    Cancel
+                  </button>
+                  <button
+                    className="act act--focus"
+                    disabled={busy || running || followUp.trim().length === 0}
+                    onClick={() =>
+                      void act(async () => {
+                        await continueTask(detail.task.id, { prompt: followUp.trim() });
+                        setFollowUp("");
+                        setShowContinue(false);
+                      })
+                    }
+                  >
+                    Send
+                  </button>
+                </div>
+              </section>
+            )}
+
+            <details className="panel askbox">
+              <summary>What was asked</summary>
+              <div className="askbox__body">
+                <Markdown text={detail.task.prompt} />
               </div>
-            </section>
+            </details>
+
+            {running && (
+              <section className="panel">
+                <h3>Live output</h3>
+                <LiveLog lines={logLines} running={running} />
+              </section>
+            )}
 
             <section className="panel">
               <h3>Runs</h3>
@@ -303,54 +427,20 @@ export function TasksView({ tasks, enabled, selectedId, tick, onSelect, subscrib
                 {detail.runs.map((run) => (
                   <RunCard key={run.id} run={run} />
                 ))}
+                {detail.runs.length === 0 && <p className="muted">No runs recorded yet.</p>}
               </div>
             </section>
 
-            <section className="panel">
-              <h3>Reports and notes</h3>
-              <ul className="reports">
-                {detail.reports.map((report) => (
-                  <ReportRow key={report.id} report={report} />
-                ))}
-                {detail.reports.length === 0 && <li className="muted">No reports on this task yet.</li>}
-              </ul>
-              <div className="row">
-                <input className="in" placeholder="leave a note on this task" value={note} onChange={(event) => setNote(event.target.value)} />
-                <button
-                  className="act"
-                  disabled={busy || note.trim().length === 0}
-                  onClick={() =>
-                    void act(async () => {
-                      await createReport({ text: note.trim(), kind: "note", taskId: detail.task.id });
-                      setNote("");
-                    })
-                  }
-                >
-                  Note
-                </button>
-              </div>
-            </section>
-
-            <section className="panel">
-              <h3>Ids</h3>
-              <dl className="details">
-                <dt>Task id</dt>
-                <dd>
-                  <code>{detail.task.id}</code>
-                  <button className="act act--ghost" onClick={() => copyText(detail.task.id)}>
-                    Copy
-                  </button>
-                </dd>
-                <dt>Session</dt>
-                <dd>
-                  <code>{detail.task.sessionId ?? "not started"}</code>
-                </dd>
-                <dt>From another conversation</dt>
-                <dd>
-                  <pre className="snippet">{cliSnippet(detail.task.id)}</pre>
-                </dd>
-              </dl>
-            </section>
+            {detail.reports.length > 0 && (
+              <section className="panel">
+                <h3>Reports</h3>
+                <ul className="reports">
+                  {detail.reports.map((report) => (
+                    <ReportRow key={report.id} report={report} />
+                  ))}
+                </ul>
+              </section>
+            )}
           </>
         )}
       </section>

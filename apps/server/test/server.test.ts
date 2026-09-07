@@ -93,7 +93,7 @@ describe("hub surface", () => {
   });
 
   it("stores settings, discovers workspaces and creates or updates them", async () => {
-    assert.deepEqual((await http("GET", "/delegation/settings")).json, { workspacesRoot: null, editorCommand: "code", secondBrainRoot: null, autonomy: "full", ownerName: userInfo().username });
+    assert.deepEqual((await http("GET", "/delegation/settings")).json, { workspacesRoot: null, editorCommand: "code", secondBrainRoot: null, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60 });
     assert.equal((await http("PUT", "/delegation/settings", { body: { workspacesRoot: join(box.tmp, "nope") } })).status, 400);
     const saved = await http("PUT", "/delegation/settings", { body: { workspacesRoot: box.root, secondBrainRoot: box.brain } });
     assert.equal(saved.status, 200);
@@ -251,6 +251,67 @@ describe("hub surface", () => {
     assert.equal((await http("GET", "/delegation/tasks/ghost/events")).status, 404);
   });
 
+  it("archives a settled task, hides it from the default list and validates the run timeout", async () => {
+    const created = await http("POST", "/delegation/tasks", { body: { prompt: "archive me", workspace: "pilot" } });
+    const id = (created.json as Detail).task.id;
+    await waitSettled(id);
+    const archived = await http("POST", `/delegation/tasks/${id}/archive`);
+    assert.equal(archived.status, 200);
+    assert.equal(typeof (archived.json as { archivedAt: number }).archivedAt, "number");
+    const list = (await http("GET", "/delegation/tasks?limit=200")).json as { id: string }[];
+    assert.equal(list.some((task) => task.id === id), false);
+    const withArchived = (await http("GET", "/delegation/tasks?limit=200&archived=1")).json as { id: string }[];
+    assert.equal(withArchived.some((task) => task.id === id), true);
+    const unarchived = await http("POST", `/delegation/tasks/${id}/unarchive`);
+    assert.equal((unarchived.json as { archivedAt: number | null }).archivedAt, null);
+    assert.equal((await http("POST", "/delegation/tasks/ghost/archive")).status, 404);
+
+    const running = await http("POST", "/delegation/tasks", { body: { prompt: "sleep:8000", workspace: "pilot" } });
+    const runningId = (running.json as Detail).task.id;
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal((await http("POST", `/delegation/tasks/${runningId}/archive`)).status, 409);
+    await http("POST", `/delegation/tasks/${runningId}/cancel`);
+    await waitSettled(runningId);
+
+    assert.equal((await http("PUT", "/delegation/settings", { body: { runTimeoutMinutes: 2 } })).status, 400);
+    assert.equal((await http("PUT", "/delegation/settings", { body: { runTimeoutMinutes: 120 } })).status, 200);
+    assert.equal(((await http("GET", "/delegation/settings")).json as { runTimeoutMinutes: number }).runTimeoutMinutes, 120);
+    await http("PUT", "/delegation/settings", { body: { runTimeoutMinutes: 60 } });
+  });
+
+  it("cancels a delegated run that overruns the configured timeout", async () => {
+    const tbox = makeSandbox("cch-timeout-");
+    const tserver = await startServer(tbox, { HUB_DELEGATION: "1", HUB_DELEGATION_TIMEOUT_MIN: "0.05" });
+    try {
+      await fetch(`${tserver.base}/delegation/settings`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ workspacesRoot: tbox.root }),
+      });
+      const created = await fetch(`${tserver.base}/delegation/tasks`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "sleep:6000", workspace: "pilot" }),
+      });
+      const id = ((await created.json()) as Detail).task.id;
+      const detail = await waitFor(async () => {
+        const res = await fetch(`${tserver.base}/delegation/tasks/${id}`);
+        const value = (await res.json()) as Detail;
+        return settled(value.task.status) ? value : null;
+      }, 15000);
+      assert.equal(detail.task.status, "cancelled");
+      assert.match(detail.runs[0]?.error ?? "", /timed out after/);
+    } finally {
+      tserver.child.kill();
+      await new Promise((r) => setTimeout(r, 400));
+      try {
+        rmSync(tbox.tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      } catch {
+        /* sqlite file can linger on Windows; temp dir is disposable */
+      }
+    }
+  });
+
   it("deletes workspaces with or without their context folder", async () => {
     await http("POST", "/delegation/workspaces", { body: { name: "temp-del", repos: [box.repoA] } });
     const kept = await http("DELETE", "/delegation/workspaces/temp-del");
@@ -318,6 +379,30 @@ describe("hub surface", () => {
     assert.equal(codex[0]?.client, "codex-app");
   });
 
+  it("renames, archives and hides a Codex thread and serves its live timeline", async () => {
+    const id = "01a0aaaa-0000-7000-8000-000000000001";
+    const live = (await http("GET", `/api/codex/${id}/live`)).json as { entries: { role: string; tool: string | null; text: string }[] };
+    assert.deepEqual(live.entries.map((entry) => [entry.role, entry.tool, entry.text]), [
+      ["user", null, "Fix the flaky test in repo-a\nand report back"],
+      ["assistant", null, "Looking into the flaky test."],
+      ["tool", "shell", "npm test"],
+      ["result", null, "3 tests passed"],
+    ]);
+    assert.equal((await http("GET", "/api/codex/ghost-id/live")).status, 404);
+
+    const renamed = await http("PATCH", `/api/codex/${id}`, { body: { title: "Flaky hunt" } });
+    assert.equal((renamed.json as { customTitle: string }).customTitle, "Flaky hunt");
+    const archived = await http("POST", `/api/codex/${id}/archive`);
+    assert.equal(typeof (archived.json as { archivedAt: number }).archivedAt, "number");
+    const unarchived = await http("POST", `/api/codex/${id}/unarchive`);
+    assert.equal((unarchived.json as { archivedAt: number | null }).archivedAt, null);
+
+    const deleted = await http("DELETE", `/api/codex/${id}`);
+    assert.deepEqual(deleted.json, { ok: true });
+    const list = (await http("GET", "/api/codex/sessions")).json as { id: string }[];
+    assert.equal(list.some((session) => session.id === id), false);
+  });
+
   it("reports connect status inside the sandbox home and installs the Codex MCP entry", async () => {
     const status = (await http("GET", "/delegation/connect")).json as {
       shell: { bash: { path: string; installed: boolean } };
@@ -354,7 +439,23 @@ describe("hub surface", () => {
 });
 
 after(async () => {
-  for (const child of children) child.kill();
-  await new Promise((r) => setTimeout(r, 300));
-  rmSync(box.tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  await Promise.all(
+    children.map(
+      (child) =>
+        new Promise<void>((resolve) => {
+          if (child.exitCode != null || child.signalCode != null) {
+            resolve();
+            return;
+          }
+          child.once("exit", () => resolve());
+          child.kill();
+        }),
+    ),
+  );
+  await new Promise((r) => setTimeout(r, 500));
+  try {
+    rmSync(box.tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
+  } catch {
+    /* Windows can keep the sqlite file locked briefly after exit; the temp dir is disposable */
+  }
 });

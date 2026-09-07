@@ -18,7 +18,7 @@ async function main() {
   const threadId = resume ?? `thread-${randomUUID().slice(0, 8)}`;
   const mode = process.env.FAKE_CODEX_MODE ?? "";
   const capture = process.env.FAKE_CODEX_CAPTURE;
-  if (capture) writeFileSync(capture, JSON.stringify({ argv, cwd: process.cwd(), prompt }));
+  if (capture) writeFileSync(capture, JSON.stringify({ argv, cwd: process.cwd(), prompt, env: { HUB_TASK_ID: process.env.HUB_TASK_ID ?? null, HUB_RUN_ID: process.env.HUB_RUN_ID ?? null } }));
   const sleepDirective = /sleep:(\d+)/.exec(prompt);
 
   emit({ type: "thread.started", thread_id: threadId });

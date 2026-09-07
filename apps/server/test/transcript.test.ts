@@ -5,7 +5,7 @@ import { describe, it } from "node:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { guessTranscriptPath } from "../src/live.js";
-import { readTranscriptTail } from "../src/transcript.js";
+import { readTranscript, readTranscriptTail, readTranscriptTailAsync } from "../src/transcript.js";
 
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
@@ -31,6 +31,13 @@ describe("transcript tail", () => {
     assert.deepEqual(readTranscriptTail(null), []);
   });
 
+  it("reads the same tail without blocking the event loop", async () => {
+    const sync = readTranscriptTail(join(fixtures, "transcript-sample.jsonl"), 3);
+    assert.deepEqual(await readTranscriptTailAsync(join(fixtures, "transcript-sample.jsonl"), 3), sync);
+    assert.deepEqual(await readTranscriptTailAsync(join(fixtures, "nope.jsonl")), []);
+    assert.deepEqual(await readTranscriptTailAsync(null), []);
+  });
+
   it("reads subagent transcripts the same way", () => {
     const entries = readTranscriptTail(join(fixtures, "agent-sample.jsonl"));
     assert.deepEqual(
@@ -41,6 +48,22 @@ describe("transcript tail", () => {
         ["assistant", "8"],
       ],
     );
+  });
+});
+
+describe("transcript title", () => {
+  it("prefers a /rename custom-title over the ai-title", () => {
+    const info = readTranscript(join(fixtures, "transcript-title-sample.jsonl"));
+    assert.equal(info.title, "User renamed this");
+    assert.equal(info.model, "claude-x");
+  });
+
+  it("falls back to the ai-title when there is no custom-title", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cch-title-"));
+    const file = join(dir, "t.jsonl");
+    writeFileSync(file, `${JSON.stringify({ type: "ai-title", aiTitle: "Only AI" })}\n`);
+    assert.equal(readTranscript(file).title, "Only AI");
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

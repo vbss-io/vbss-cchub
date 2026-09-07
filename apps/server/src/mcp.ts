@@ -22,6 +22,17 @@ interface RpcRequest {
 
 const base = (process.env.HUB_URL ?? `http://127.0.0.1:${config.port}`).replace(/\/$/, "");
 
+const originClientHint = (): "claude-code" | "codex" | undefined => {
+  if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) return "claude-code";
+  if (process.env.CODEX_SANDBOX || process.env.CODEX_SANDBOX_NETWORK_DISABLED) return "codex";
+  return undefined;
+};
+
+const originFields = (): { originPid: number; originClient?: string } => ({
+  originPid: process.ppid,
+  originClient: originClientHint(),
+});
+
 const asString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim().length > 0 ? value : undefined;
 
@@ -106,7 +117,7 @@ const TOOLS: ToolDefinition[] = [
       },
       ["workspace", "prompt"],
     ),
-    call: (args) => http("POST", "/delegation/tasks", { ...args, source: "mcp" }),
+    call: (args) => http("POST", "/delegation/tasks", { ...args, ...originFields(), source: "mcp" }),
   },
   {
     name: "hub_task",
@@ -127,7 +138,7 @@ const TOOLS: ToolDefinition[] = [
       { taskId: { type: "string" }, prompt: { type: "string" }, model: { type: "string" } },
       ["taskId", "prompt"],
     ),
-    call: (args) => http("POST", taskPath(args, "/continue"), { prompt: args.prompt, model: args.model }),
+    call: (args) => http("POST", taskPath(args, "/continue"), { prompt: args.prompt, model: args.model, ...originFields() }),
   },
   {
     name: "hub_cancel",
@@ -136,21 +147,30 @@ const TOOLS: ToolDefinition[] = [
     call: (args) => http("POST", taskPath(args, "/cancel")),
   },
   {
+    name: "hub_task_archive",
+    description: "Archive a settled delegated task so it drops out of the default task lists and overview; pass unarchive to bring it back. Running or pending tasks cannot be archived.",
+    inputSchema: objectSchema({ taskId: { type: "string" }, unarchive: { type: "boolean" } }, ["taskId"]),
+    call: (args) => http("POST", taskPath(args, args.unarchive === true ? "/unarchive" : "/archive")),
+  },
+  {
     name: "hub_report",
     description:
-      "Report progress, a result, a blocker or a note to the hub so any other conversation (or the human) can see it. Attach it to a task or a session when you have the id.",
+      "Report progress, a result, a blocker or a note to the hub so any other conversation (or the human) can see it. Attach it to a task or a session when you have the id. When you omit taskId, it defaults to the HUB_TASK_ID of the delegated run you are in, so your report lands on the right task.",
     inputSchema: objectSchema(
       {
         text: { type: "string" },
         kind: { type: "string", enum: ["progress", "result", "blocked", "note"] },
-        taskId: { type: "string" },
+        taskId: { type: "string", description: "Defaults to HUB_TASK_ID when omitted inside a delegated run" },
         sessionId: { type: "string" },
         workspace: { type: "string" },
         source: { type: "string", description: "Who is reporting, e.g. claude-code, codex, gpt-live" },
       },
       ["text"],
     ),
-    call: (args) => http("POST", "/delegation/reports", { source: "mcp", ...args }),
+    call: (args) => {
+      const taskId = asString(args.taskId) ?? asString(process.env.HUB_TASK_ID);
+      return http("POST", "/delegation/reports", { source: "mcp", ...args, taskId });
+    },
   },
   {
     name: "hub_reports",

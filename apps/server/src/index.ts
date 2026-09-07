@@ -1,6 +1,7 @@
+import { join } from "node:path";
 import cors from "cors";
 import express, { type ErrorRequestHandler } from "express";
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { config } from "./config.js";
 import {
@@ -20,7 +21,14 @@ import {
   updateGroup,
 } from "./db.js";
 import { focusWindow } from "./focus.js";
-import { listCodexSessions } from "./codex-sessions.js";
+import { codexLiveEntries, findCodexRollout } from "./codex-sessions.js";
+import {
+  archiveCodexThread,
+  hideCodexThread,
+  listCodexSessions,
+  setCodexTitle,
+  unarchiveCodexThread,
+} from "./codex-store.js";
 import { sessionLive } from "./live.js";
 import { runtimeSnapshot } from "./runtimes.js";
 import { ensureExtension } from "./ensure-extension.js";
@@ -94,7 +102,8 @@ app.post("/hook", (req, res) => {
     agentMessage: asString(body.agentMessage),
     shareLabel: asString(body.shareLabel),
   };
-  const session = applyHook(payload);
+  const seededAt = process.env.HUB_DEV_SEED === "1" ? asNumber(body.updatedAt) : null;
+  const session = applyHook(payload, seededAt ?? undefined);
   broadcast("session", session);
   res.json(session);
 });
@@ -156,20 +165,95 @@ app.get("/api/sessions/:id/asks", (req, res) => {
 });
 
 app.get("/api/sessions/:id/live", (req, res) => {
-  const live = sessionLive(req.params.id);
-  if (!live) {
-    res.status(404).json({ error: "session not found" });
-    return;
-  }
-  res.json(live);
+  void sessionLive(req.params.id).then((live) => {
+    if (!live) {
+      res.status(404).json({ error: "session not found" });
+      return;
+    }
+    res.json(live);
+  });
 });
 
 app.get("/api/runtimes", (_req, res) => {
   void runtimeSnapshot().then((snapshot) => res.json(snapshot));
 });
 
+const uiErrorLog = join(config.dataDir, "ui-errors.log");
+
+app.post("/api/ui-error", (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const entry = {
+    at: new Date().toISOString(),
+    view: typeof body.view === "string" ? body.view.slice(0, 40) : "unknown",
+    message: typeof body.message === "string" ? body.message.slice(0, 500) : "",
+    stack: typeof body.stack === "string" ? body.stack.slice(0, 4000) : "",
+    componentStack: typeof body.componentStack === "string" ? body.componentStack.slice(0, 2000) : "",
+  };
+  appendFileSync(uiErrorLog, `${JSON.stringify(entry)}\n`);
+  console.error(`ui error in ${entry.view}: ${entry.message}`);
+  res.status(204).end();
+});
+
+app.get("/api/ui-errors", (req, res) => {
+  const limit = limitOf(req.query.limit, 20, 200);
+  if (!existsSync(uiErrorLog)) {
+    res.json([]);
+    return;
+  }
+  const lines = readFileSync(uiErrorLog, "utf8").trim().split("\n").filter(Boolean).slice(-limit);
+  res.json(lines.map((line) => JSON.parse(line) as Record<string, unknown>));
+});
+
 app.get("/api/codex/sessions", (_req, res) => {
   res.json(listCodexSessions());
+});
+
+app.post("/api/codex/focus", async (_req, res) => {
+  const snapshot = await runtimeSnapshot();
+  const pid = snapshot.codexApp.pids[0] ?? null;
+  if (!pid) {
+    res.status(409).json({ ok: false, reason: "the Codex app is not running" });
+    return;
+  }
+  res.json(await focusWindow(pid, null));
+});
+
+app.get("/api/codex/:id/live", (req, res) => {
+  const limit = Math.min(Math.max(Number(req.query.limit) || 40, 1), 500);
+  const file = findCodexRollout(req.params.id);
+  if (!file) {
+    res.status(404).json({ error: "thread not found" });
+    return;
+  }
+  res.json({ entries: codexLiveEntries(file, limit) });
+});
+
+const codexThreadFor = (id: string) => listCodexSessions().find((session) => session.id === id) ?? null;
+
+app.patch("/api/codex/:id", (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const title = typeof body.title === "string" ? body.title : null;
+  setCodexTitle(req.params.id, title);
+  broadcast("codex", listCodexSessions());
+  res.json(codexThreadFor(req.params.id) ?? { id: req.params.id });
+});
+
+app.post("/api/codex/:id/archive", (req, res) => {
+  archiveCodexThread(req.params.id);
+  broadcast("codex", listCodexSessions());
+  res.json(codexThreadFor(req.params.id) ?? { id: req.params.id });
+});
+
+app.post("/api/codex/:id/unarchive", (req, res) => {
+  unarchiveCodexThread(req.params.id);
+  broadcast("codex", listCodexSessions());
+  res.json(codexThreadFor(req.params.id) ?? { id: req.params.id });
+});
+
+app.delete("/api/codex/:id", (req, res) => {
+  hideCodexThread(req.params.id);
+  broadcast("codex", listCodexSessions());
+  res.json({ ok: true });
 });
 
 app.patch("/api/sessions/:id", (req, res) => {

@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { userInfo } from "node:os";
+import type { CodexRunLink } from "./codex-sessions.js";
 import { config } from "./config.js";
 import { db } from "./db.js";
 import type {
   CodexSandbox,
   DelegationSettings,
+  OriginClient,
   PermissionMode,
   ReportKind,
   ReportRecord,
@@ -16,6 +18,7 @@ import type {
   TaskRecord,
   TaskStatus,
 } from "./delegation-types.js";
+import { RUN_TIMEOUT_DEFAULT, RUN_TIMEOUT_MAX, RUN_TIMEOUT_MIN } from "./delegation-types.js";
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS hub_settings (
@@ -37,6 +40,8 @@ db.exec(`
     status            TEXT NOT NULL,
     session_id        TEXT,
     created_by        TEXT,
+    origin_session_id TEXT,
+    origin_client     TEXT,
     created_at        INTEGER NOT NULL,
     updated_at        INTEGER NOT NULL
   );
@@ -81,6 +86,17 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_hub_run_events_run ON hub_run_events(run_id, id);
 `);
 
+const hubTaskColumns = new Set(
+  (db.prepare(`PRAGMA table_info(hub_tasks)`).all() as { name: string }[]).map((column) => column.name),
+);
+for (const [name, type] of [
+  ["origin_session_id", "TEXT"],
+  ["origin_client", "TEXT"],
+  ["archived_at", "INTEGER"],
+] as const) {
+  if (!hubTaskColumns.has(name)) db.exec(`ALTER TABLE hub_tasks ADD COLUMN ${name} ${type}`);
+}
+
 const MAX_EVENTS_PER_RUN = 2_000;
 const MAX_EVENT_TEXT = 20_000;
 
@@ -99,6 +115,9 @@ interface TaskRow {
   status: string;
   session_id: string | null;
   created_by: string | null;
+  origin_session_id: string | null;
+  origin_client: string | null;
+  archived_at: number | null;
   created_at: number;
   updated_at: number;
   last_error: string | null;
@@ -168,8 +187,11 @@ const toTask = (row: TaskRow): TaskRecord => ({
   status: row.status as TaskStatus,
   sessionId: row.session_id,
   createdBy: row.created_by,
+  originSessionId: row.origin_session_id,
+  originClient: row.origin_client as OriginClient | null,
   lastError: row.last_error,
   runsCount: row.runs_count ?? 0,
+  archivedAt: row.archived_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -227,15 +249,22 @@ function defaultOwnerName(): string {
   }
 }
 
+function clampRunTimeout(value: number): number {
+  if (!Number.isFinite(value)) return RUN_TIMEOUT_DEFAULT;
+  return Math.min(Math.max(Math.round(value), RUN_TIMEOUT_MIN), RUN_TIMEOUT_MAX);
+}
+
 export function getSettings(): DelegationSettings {
   const rows = listSettingsStmt.all() as { key: string; value: string | null }[];
   const stored = new Map(rows.map((row) => [row.key, row.value]));
+  const storedTimeout = stored.get("runTimeoutMinutes");
   return {
     workspacesRoot: stored.get("workspacesRoot") ?? config.workspacesRoot,
     editorCommand: stored.get("editorCommand") ?? config.editorCommand,
     secondBrainRoot: stored.get("secondBrainRoot") ?? config.secondBrainRoot,
     autonomy: stored.get("autonomy") === "safe" ? "safe" : "full",
     ownerName: stored.get("ownerName") ?? defaultOwnerName(),
+    runTimeoutMinutes: storedTimeout != null ? clampRunTimeout(Number(storedTimeout)) : RUN_TIMEOUT_DEFAULT,
   };
 }
 
@@ -255,6 +284,9 @@ export function updateSettings(patch: Partial<DelegationSettings>): DelegationSe
     if (patch.secondBrainRoot !== undefined) upsertSettingStmt.run("secondBrainRoot", patch.secondBrainRoot);
     if (patch.autonomy !== undefined) upsertSettingStmt.run("autonomy", patch.autonomy);
     if (patch.ownerName !== undefined) upsertSettingStmt.run("ownerName", patch.ownerName);
+    if (patch.runTimeoutMinutes !== undefined) {
+      upsertSettingStmt.run("runTimeoutMinutes", String(clampRunTimeout(patch.runTimeoutMinutes)));
+    }
   });
   apply();
   return getSettings();
@@ -269,14 +301,23 @@ const TASK_SELECT = `
 
 const insertTaskStmt = db.prepare(`
   INSERT INTO hub_tasks
-    (id, title, prompt, workspace, repo, cwd, add_dirs, runner, requested_model, permission_mode, sandbox, status, created_by, created_at, updated_at)
+    (id, title, prompt, workspace, repo, cwd, add_dirs, runner, requested_model, permission_mode, sandbox, status, created_by, origin_session_id, origin_client, created_at, updated_at)
   VALUES
-    (@id, @title, @prompt, @workspace, @repo, @cwd, @addDirs, @runner, @requestedModel, @permissionMode, @sandbox, @status, @createdBy, @now, @now)
+    (@id, @title, @prompt, @workspace, @repo, @cwd, @addDirs, @runner, @requestedModel, @permissionMode, @sandbox, @status, @createdBy, @originSessionId, @originClient, @now, @now)
 `);
 const getTaskStmt = db.prepare(`${TASK_SELECT} WHERE t.id = ?`);
 const listTasksStmt = db.prepare(`${TASK_SELECT} ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`);
+const listTasksActiveStmt = db.prepare(
+  `${TASK_SELECT} WHERE t.archived_at IS NULL ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`,
+);
 const listTasksByStatusStmt = db.prepare(
   `${TASK_SELECT} WHERE t.status = ? ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`,
+);
+const listTasksByStatusActiveStmt = db.prepare(
+  `${TASK_SELECT} WHERE t.status = ? AND t.archived_at IS NULL ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`,
+);
+const listTasksByOriginStmt = db.prepare(
+  `${TASK_SELECT} WHERE t.origin_session_id = ? ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`,
 );
 const listRunsStmt = db.prepare(`SELECT * FROM hub_runs WHERE task_id = ? ORDER BY seq`);
 const getRunStmt = db.prepare(`SELECT * FROM hub_runs WHERE id = ?`);
@@ -343,6 +384,8 @@ export function createTask(input: {
   permissionMode: PermissionMode | null;
   sandbox: CodexSandbox | null;
   createdBy: string | null;
+  originSessionId: string | null;
+  originClient: OriginClient | null;
 }): TaskRecord {
   const id = randomUUID();
   insertTaskStmt.run({
@@ -359,9 +402,30 @@ export function createTask(input: {
     sandbox: input.sandbox,
     status: "pending",
     createdBy: input.createdBy,
+    originSessionId: input.originSessionId,
+    originClient: input.originClient,
     now: Date.now(),
   });
   return toTask(getTaskStmt.get(id) as TaskRow);
+}
+
+const setOriginStmt = db.prepare(`UPDATE hub_tasks SET origin_session_id = @originSessionId, origin_client = @originClient, updated_at = @now WHERE id = @id`);
+
+export function setTaskOrigin(id: string, originSessionId: string | null, originClient: OriginClient | null): TaskRecord | null {
+  setOriginStmt.run({ id, originSessionId, originClient, now: Date.now() });
+  return getTask(id);
+}
+
+const setArchivedStmt = db.prepare(`UPDATE hub_tasks SET archived_at = @archivedAt, updated_at = @now WHERE id = @id`);
+
+export function archiveTask(id: string): TaskRecord | null {
+  setArchivedStmt.run({ id, archivedAt: Date.now(), now: Date.now() });
+  return getTask(id);
+}
+
+export function unarchiveTask(id: string): TaskRecord | null {
+  setArchivedStmt.run({ id, archivedAt: null, now: Date.now() });
+  return getTask(id);
 }
 
 export function getTask(id: string): TaskRecord | null {
@@ -369,12 +433,19 @@ export function getTask(id: string): TaskRecord | null {
   return row ? toTask(row) : null;
 }
 
-export function listTasks(options: { status?: TaskStatus | null; limit?: number } = {}): TaskRecord[] {
+export function listTasks(
+  options: { status?: TaskStatus | null; limit?: number; includeArchived?: boolean } = {},
+): TaskRecord[] {
   const limit = Math.min(Math.max(options.limit ?? 100, 1), 500);
+  const includeArchived = options.includeArchived ?? false;
   const rows = options.status
-    ? (listTasksByStatusStmt.all(options.status, limit) as TaskRow[])
-    : (listTasksStmt.all(limit) as TaskRow[]);
+    ? ((includeArchived ? listTasksByStatusStmt : listTasksByStatusActiveStmt).all(options.status, limit) as TaskRow[])
+    : ((includeArchived ? listTasksStmt : listTasksActiveStmt).all(limit) as TaskRow[]);
   return rows.map(toTask);
+}
+
+export function listTasksByOrigin(originSessionId: string, limit = 100): TaskRecord[] {
+  return (listTasksByOriginStmt.all(originSessionId, Math.min(Math.max(limit, 1), 500)) as TaskRow[]).map(toTask);
 }
 
 export function getTaskDetail(id: string): TaskDetail | null {
@@ -503,4 +574,21 @@ export function listRunEvents(runId: string): RunEventRecord[] {
 
 export function listTaskEvents(taskId: string): RunEventRecord[] {
   return (listEventsByTaskStmt.all(taskId) as RunEventRow[]).map(toRunEvent);
+}
+
+const codexRunLinksStmt = db.prepare(`
+  SELECT r.session_id AS threadId, r.task_id AS taskId, r.status, r.seq, t.title AS taskTitle
+  FROM hub_runs r
+  LEFT JOIN hub_tasks t ON t.id = r.task_id
+  WHERE r.runner = 'codex' AND r.session_id IS NOT NULL
+  ORDER BY r.seq ASC
+`);
+
+export function listCodexRunLinks(): CodexRunLink[] {
+  const rows = codexRunLinksStmt.all() as { threadId: string; taskId: string; status: string; seq: number; taskTitle: string | null }[];
+  const byThread = new Map<string, CodexRunLink>();
+  for (const row of rows) {
+    byThread.set(row.threadId, { threadId: row.threadId, taskId: row.taskId, latestRunStatus: row.status, taskTitle: row.taskTitle });
+  }
+  return [...byThread.values()];
 }

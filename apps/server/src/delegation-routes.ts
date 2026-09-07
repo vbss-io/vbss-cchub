@@ -1,11 +1,12 @@
 import { Router } from "express";
-import { listCodexSessions } from "./codex-sessions.js";
+import { listCodexSessions } from "./codex-store.js";
 import { config } from "./config.js";
-import { listSessions } from "./db.js";
+import { getSession, listSessions, sessionByPid } from "./db.js";
 import { broadcast } from "./sse.js";
 import { brainToday } from "./second-brain.js";
 import { runtimeSnapshot } from "./runtimes.js";
 import {
+  archiveTask,
   createReport,
   getSettings,
   getTask,
@@ -14,7 +15,10 @@ import {
   listTaskEvents,
   listTasks,
   TaskBusyError,
+  unarchiveTask,
   updateSettings,
+  setTaskOrigin,
+  listTasksByOrigin,
 } from "./delegation-store.js";
 import { delegationGuard } from "./delegation-security.js";
 import { abortRun, BadRequestError, NotFoundError, brainNote, delegateTask, startRun } from "./delegation-launch.js";
@@ -24,12 +28,16 @@ export { abortActiveRuns } from "./delegation-launch.js";
 import {
   AUTONOMY_LEVELS,
   CODEX_SANDBOXES,
+  ORIGIN_CLIENTS,
   PERMISSION_MODES,
   REPORT_KINDS,
+  RUN_TIMEOUT_MAX,
+  RUN_TIMEOUT_MIN,
   RUNNERS,
   TASK_STATUSES,
   type Autonomy,
   type CodexSandbox,
+  type OriginClient,
   type PermissionMode,
   type ReportKind,
   type RunKind,
@@ -78,6 +86,23 @@ const sendError = (res: { status: (code: number) => { json: (body: unknown) => v
   res.status(err instanceof BadRequestError ? 400 : err instanceof NotFoundError ? 404 : 500).json({ error: message });
 };
 
+const clipText = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+async function resolveOrigin(
+  originPid: number | null,
+  hint: OriginClient | null,
+): Promise<{ originSessionId: string | null; originClient: OriginClient | null }> {
+  if (originPid && Number.isInteger(originPid) && originPid > 0) {
+    const session = sessionByPid(originPid);
+    if (session) return { originSessionId: session.sessionId, originClient: "claude-code" };
+    const runtimes = await runtimeSnapshot();
+    if (runtimes.codexApp.pids.includes(originPid) || runtimes.codexCli.pids.includes(originPid)) {
+      return { originSessionId: null, originClient: "codex" };
+    }
+  }
+  return { originSessionId: null, originClient: hint };
+}
+
 export function delegationRouter(): Router {
   const router = Router();
   router.use(delegationGuard);
@@ -90,7 +115,15 @@ export function delegationRouter(): Router {
 
   router.put("/settings", (req, res) => {
     const body = req.body as Record<string, unknown>;
-    const patch: { workspacesRoot?: string | null; editorCommand?: string; secondBrainRoot?: string | null; autonomy?: Autonomy; ownerName?: string } = {};
+    const patch: { workspacesRoot?: string | null; editorCommand?: string; secondBrainRoot?: string | null; autonomy?: Autonomy; ownerName?: string; runTimeoutMinutes?: number } = {};
+    if ("runTimeoutMinutes" in body) {
+      const minutes = typeof body.runTimeoutMinutes === "number" ? body.runTimeoutMinutes : Number(body.runTimeoutMinutes);
+      if (!Number.isFinite(minutes) || minutes < RUN_TIMEOUT_MIN || minutes > RUN_TIMEOUT_MAX) {
+        res.status(400).json({ error: `runTimeoutMinutes must be between ${RUN_TIMEOUT_MIN} and ${RUN_TIMEOUT_MAX}` });
+        return;
+      }
+      patch.runTimeoutMinutes = minutes;
+    }
     if ("ownerName" in body) {
       const name = asString(body.ownerName);
       if (!name || name.trim().length > 60) {
@@ -259,6 +292,24 @@ export function delegationRouter(): Router {
           updatedAt: session.updatedAt,
         });
         const tasks = listTasks({ limit: 100 });
+        const taskBrief = (task: TaskRecord) => ({
+          id: task.id,
+          title: task.title,
+          prompt: clipText(task.prompt, 200),
+          workspace: task.workspace,
+          repo: task.repo,
+          runner: task.runner,
+          status: task.status,
+          sessionId: task.sessionId,
+          createdBy: task.createdBy,
+          originSessionId: task.originSessionId,
+          originClient: task.originClient,
+          lastError: task.lastError ? clipText(task.lastError, 300) : null,
+          runsCount: task.runsCount,
+          reposAttached: task.addDirs.length,
+          createdAt: task.createdAt,
+          updatedAt: task.updatedAt,
+        });
         res.json({
           runtimes,
           sessions: {
@@ -273,9 +324,10 @@ export function delegationRouter(): Router {
             .slice(0, 20)
             .map((s) => ({ ...s, workspace: workspaceFor(workspaces, s.cwd)?.name ?? null })),
           tasks: {
-            inFlight: tasks.filter((t) => t.status === "running" || t.status === "pending"),
-            attention: tasks.filter((t) => t.status === "attention" || t.status === "failed" || t.status === "interrupted").slice(0, 20),
-            recent: tasks.slice(0, 10),
+            inFlight: tasks.filter((t) => t.status === "running" || t.status === "pending").map(taskBrief),
+            attention: tasks.filter((t) => t.status === "attention" || t.status === "failed" || t.status === "interrupted").slice(0, 20).map(taskBrief),
+            recent: tasks.slice(0, 10).map(taskBrief),
+            note: "task entries are brief; use hub_task for the full prompt, run log and attached repos",
           },
           reports: listReports({ limit: 10 }),
           workspaces: workspaces.map((w) => ({ name: w.name, repos: w.repos.length })),
@@ -297,7 +349,12 @@ export function delegationRouter(): Router {
     try {
       const status = oneOf<TaskStatus>(req.query.status, TASK_STATUSES, "status");
       const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
-      res.json(listTasks({ status, limit: Number.isFinite(limit) ? limit : undefined }));
+      const includeArchived = req.query.archived === "1" || req.query.archived === "true";
+      if (typeof req.query.origin === "string" && req.query.origin) {
+        res.json(listTasksByOrigin(req.query.origin, Number.isFinite(limit) ? limit : undefined));
+        return;
+      }
+      res.json(listTasks({ status, limit: Number.isFinite(limit) ? limit : undefined, includeArchived }));
     } catch (err) {
       sendError(res, err);
     }
@@ -322,22 +379,32 @@ export function delegationRouter(): Router {
 
   router.post("/tasks", (req, res) => {
     const body = req.body as Record<string, unknown>;
-    try {
-      const detail = delegateTask({
-        prompt: asString(body.prompt),
-        workspace: asString(body.workspace),
-        repo: asString(body.repo),
-        runner: oneOf<Runner>(body.runner, RUNNERS, "runner"),
-        model: asString(body.model),
-        permissionMode: oneOf<PermissionMode>(body.permissionMode, PERMISSION_MODES, "permissionMode"),
-        sandbox: oneOf<CodexSandbox>(body.sandbox, CODEX_SANDBOXES, "sandbox"),
-        title: asString(body.title),
-        source: asString(body.source),
-      });
-      res.status(201).json(detail);
-    } catch (err) {
-      sendError(res, err);
-    }
+    void (async () => {
+      try {
+        const originPid = typeof body.originPid === "number" ? body.originPid : null;
+        const originHint = oneOf<OriginClient>(body.originClient, ORIGIN_CLIENTS, "originClient");
+        const explicitOrigin = typeof body.originSessionId === "string" ? getSession(body.originSessionId) : null;
+        const origin = explicitOrigin
+          ? { originSessionId: explicitOrigin.sessionId, originClient: (explicitOrigin.client === "share" ? "share" : "claude-code") as OriginClient }
+          : await resolveOrigin(originPid, originHint);
+        const detail = delegateTask({
+          prompt: asString(body.prompt),
+          workspace: asString(body.workspace),
+          repo: asString(body.repo),
+          runner: oneOf<Runner>(body.runner, RUNNERS, "runner"),
+          model: asString(body.model),
+          permissionMode: oneOf<PermissionMode>(body.permissionMode, PERMISSION_MODES, "permissionMode"),
+          sandbox: oneOf<CodexSandbox>(body.sandbox, CODEX_SANDBOXES, "sandbox"),
+          title: asString(body.title),
+          source: asString(body.source),
+          originSessionId: origin.originSessionId,
+          originClient: origin.originClient,
+        });
+        res.status(201).json(detail);
+      } catch (err) {
+        sendError(res, err);
+      }
+    })();
   });
 
   router.post("/tasks/:id/continue", (req, res) => {
@@ -375,6 +442,51 @@ export function delegationRouter(): Router {
       throw err;
     }
     res.status(201).json(getTaskDetail(task.id));
+  });
+
+  router.patch("/tasks/:id/origin", (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    const task = getTask(req.params.id);
+    if (!task) {
+      res.status(404).json({ error: "task not found" });
+      return;
+    }
+    const session = typeof body.originSessionId === "string" ? getSession(body.originSessionId) : null;
+    if (!session) {
+      res.status(400).json({ error: "originSessionId must be a session known to the hub" });
+      return;
+    }
+    const updated = setTaskOrigin(task.id, session.sessionId, session.client === "share" ? "share" : "claude-code");
+    broadcast("delegation", { taskId: task.id });
+    const refreshed = getSession(session.sessionId);
+    if (refreshed) broadcast("session", refreshed);
+    res.json(updated);
+  });
+
+  router.post("/tasks/:id/archive", (req, res) => {
+    const task = getTask(req.params.id);
+    if (!task) {
+      res.status(404).json({ error: "task not found" });
+      return;
+    }
+    if (task.status === "running" || task.status === "pending") {
+      res.status(409).json({ error: "cannot archive a running or pending task" });
+      return;
+    }
+    const updated = archiveTask(task.id);
+    broadcast("delegation", { taskId: task.id });
+    res.json(updated);
+  });
+
+  router.post("/tasks/:id/unarchive", (req, res) => {
+    const task = getTask(req.params.id);
+    if (!task) {
+      res.status(404).json({ error: "task not found" });
+      return;
+    }
+    const updated = unarchiveTask(task.id);
+    broadcast("delegation", { taskId: task.id });
+    res.json(updated);
   });
 
   router.post("/tasks/:id/cancel", (req, res) => {

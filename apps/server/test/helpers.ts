@@ -94,12 +94,11 @@ export function sandboxEnv(box: Sandbox, extra: Record<string, string>): NodeJS.
     FAKE_CODEX_CAPTURE: box.codexCapture,
     HUB_SHARE_FORK_IDLE_MS: "400",
     HUB_SHARE_ENV_PASSTHROUGH: "FAKE_CLAUDE_CAPTURE,FAKE_CLAUDE_DELAY_MS,FAKE_CLAUDE_MODE,FAKE_CODEX_CAPTURE",
-    ...extra,
   };
-  for (const key of ["HUB_RESOURCE_DIR", "HUB_WORKSPACES_ROOT", "HUB_EDITOR", "HUB_TRUSTED_ORIGINS", "HUB_SECOND_BRAIN"]) {
+  for (const key of ["HUB_RESOURCE_DIR", "HUB_WORKSPACES_ROOT", "HUB_EDITOR", "HUB_TRUSTED_ORIGINS", "HUB_SECOND_BRAIN", "HUB_DELEGATION"]) {
     delete env[key];
   }
-  return env;
+  return { ...env, ...extra };
 }
 
 export function freePort(): Promise<number> {

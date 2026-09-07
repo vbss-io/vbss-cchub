@@ -9,7 +9,6 @@ const dataDir = process.env.HUB_DATA_DIR ?? join(homeDir, ".vbss-cchub");
 const resourceDir = process.env.HUB_RESOURCE_DIR ?? null;
 const serverDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const emptyTtlHours = Number(process.env.HUB_EMPTY_TTL_HOURS ?? 12);
-const runTimeoutMinutes = Number(process.env.HUB_DELEGATION_TIMEOUT_MIN ?? 30);
 
 function parseJsonStringArray(raw: string | undefined): string[] {
   if (!raw) return [];
@@ -87,6 +86,4 @@ export const config = {
   codexHome,
   codexConfigPath: join(codexHome, "config.toml"),
   codexSessionsDir: join(codexHome, "sessions"),
-  runTimeoutMs:
-    Number.isFinite(runTimeoutMinutes) && runTimeoutMinutes > 0 ? runTimeoutMinutes * 60_000 : 0,
 } as const;
