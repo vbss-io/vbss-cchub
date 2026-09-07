@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { bestLink, maskLink, ShareCard, untilText } from "../components/ShareCard";
 import {
@@ -42,10 +43,12 @@ interface Props {
   onOpenTask: (taskId: string) => void;
   onNotice: (text: string) => void;
   onError: (text: string) => void;
+  panelHost: HTMLElement | null;
 }
 
 type Expiry = "24" | "168" | "720" | "never";
-type DetailTab = "activity" | "details";
+type DetailTab = "activity" | "details" | "actions";
+type ShareFilter = "active" | "paused" | "expired" | "all";
 
 interface Draft {
   label: string;
@@ -119,19 +122,8 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-interface FormProps {
-  draft: Draft;
-  setDraft: (draft: Draft) => void;
-  workspaces: WorkspaceRecord[];
-  sessionOptions: SessionRecord[];
-  creating: boolean;
-  onSubmit: () => void;
-  onClose: () => void;
-}
-
-function ShareForm({ draft, setDraft, workspaces, sessionOptions, creating, onSubmit, onClose }: FormProps) {
+function SharePanel({ ariaLabel, onClose, children }: { ariaLabel: string; onClose: () => void; children: ReactNode }) {
   const panelRef = useRef<HTMLElement | null>(null);
-  const workspace = workspaces.find((item) => item.name === draft.workspace) ?? null;
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -151,104 +143,91 @@ function ShareForm({ draft, setDraft, workspaces, sessionOptions, creating, onSu
   }, [onClose]);
 
   return (
-    <aside ref={panelRef} className="drawer" role="dialog" aria-label="New share">
-      <header className="drawer__header">
-        <div className="drawer__title">
-          <h2>New share</h2>
-        </div>
-        <div className="drawer__actions">
-          <button className="act act--icon" onClick={onClose} aria-label="Close">
-            <IconClose />
-          </button>
-        </div>
-      </header>
-
-      <div className="drawer__body">
-        <label className="field">
-          <span>Label</span>
-          <input className="in" placeholder="Will · nexus doubts" value={draft.label} onChange={(event) => setDraft({ ...draft, label: event.target.value })} />
-        </label>
-        <div className="frow frow--fields frow--top">
-          <label className="field">
-            <span>Workspace</span>
-            <select className="in" value={draft.workspace} onChange={(event) => setDraft({ ...draft, workspace: event.target.value, repo: "" })}>
-              {workspaces.map((item) => (
-                <option key={item.name} value={item.name}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Repository (optional)</span>
-            <select className="in" value={draft.repo} onChange={(event) => setDraft({ ...draft, repo: event.target.value })}>
-              <option value="">whole workspace</option>
-              {(workspace?.repos ?? []).map((repo) => (
-                <option key={repo.name} value={repo.name}>
-                  {repo.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div className="field">
-          <span>Trust level</span>
-          <div className="trustpills">
-            {TRUST_OPTIONS.map((option) => (
-              <button
-                key={option.key}
-                type="button"
-                className={`pill ${draft.trust === option.key ? "pill--on" : ""}`}
-                title={option.detail}
-                onClick={() => setDraft({ ...draft, trust: option.key })}
-              >
-                {option.title}
-              </button>
-            ))}
-          </div>
-          <small>{TRUST_SUMMARY[draft.trust]}</small>
-        </div>
-        <div className="frow frow--fields frow--top">
-          <label className="field">
-            <span>Answer from a session (optional)</span>
-            <select className="in" value={draft.sessionId} onChange={(event) => setDraft({ ...draft, sessionId: event.target.value })}>
-              <option value="">fresh context of the workspace</option>
-              {sessionOptions.map((session) => (
-                <option key={session.sessionId} value={session.sessionId}>
-                  {sessionTitle(session)}
-                </option>
-              ))}
-            </select>
-            <small>Forks the session: the whole conversation history becomes readable by the asker. The original stays untouched.</small>
-          </label>
-          <label className="field">
-            <span>Expires</span>
-            <select className="in" value={draft.expiry} onChange={(event) => setDraft({ ...draft, expiry: event.target.value as Expiry })}>
-              {(Object.keys(EXPIRY_LABEL) as Expiry[]).map((key) => (
-                <option key={key} value={key}>
-                  {EXPIRY_LABEL[key]}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <label className="field">
-          <span>Note for their assistant (optional)</span>
-          <textarea className="in" rows={2} placeholder="Context the asker should know, e.g. which feature this is about" value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} />
-        </label>
-      </div>
-
-      <footer className="drawer__foot">
-        <button className="act act--focus" disabled={creating || !draft.workspace} onClick={onSubmit}>
-          {creating ? "Creating…" : "Create link"}
-        </button>
-      </footer>
+    <aside ref={panelRef} className="drawer" role="dialog" aria-label={ariaLabel}>
+      {children}
     </aside>
   );
 }
 
+interface ActionsProps {
+  share: ShareRecord;
+  onPause: (share: ShareRecord) => void;
+  onResume: (share: ShareRecord) => void;
+  onNewKey: (share: ShareRecord) => void;
+  onRevoke: (share: ShareRecord) => void;
+  onDelete: (share: ShareRecord) => void;
+}
+
+function ShareActions({ share, onPause, onResume, onNewKey, onRevoke, onDelete }: ActionsProps) {
+  const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => {
+    setConfirmRevoke(false);
+    setConfirmDelete(false);
+  }, [share.id, share.state]);
+  const revokable = share.state === "active" || share.state === "paused";
+  const removable = share.state === "revoked" || share.state === "expired";
+
+  return (
+    <div className="shareactions">
+      <p className="hint">Manage this link. Revoked or expired links can be deleted for good.</p>
+      <div className="shareactions__row">
+        {share.state === "active" && (
+          <button className="act" onClick={() => onPause(share)}>
+            Pause
+          </button>
+        )}
+        {share.state === "paused" && (
+          <button className="act" onClick={() => onResume(share)}>
+            Resume
+          </button>
+        )}
+        {revokable && (
+          <button className="act" title="Generates a new key; the old link stops working" onClick={() => onNewKey(share)}>
+            New key
+          </button>
+        )}
+      </div>
+      <div className="shareactions__row shareactions__row--danger">
+        {revokable && !confirmRevoke && (
+          <button className="act act--danger" onClick={() => setConfirmRevoke(true)}>
+            Revoke
+          </button>
+        )}
+        {revokable && confirmRevoke && (
+          <>
+            <span className="muted small">Stops the link right away. It cannot be undone.</span>
+            <button className="act act--ghost" onClick={() => setConfirmRevoke(false)}>
+              Cancel
+            </button>
+            <button className="act act--danger" onClick={() => { setConfirmRevoke(false); onRevoke(share); }}>
+              Confirm revoke
+            </button>
+          </>
+        )}
+        {removable && !confirmDelete && (
+          <button className="act act--danger" onClick={() => setConfirmDelete(true)}>
+            Delete
+          </button>
+        )}
+        {removable && confirmDelete && (
+          <>
+            <span className="muted small">Removes the record and its files for good.</span>
+            <button className="act act--ghost" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </button>
+            <button className="act act--danger" onClick={() => { setConfirmDelete(false); onDelete(share); }}>
+              Confirm delete
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function ShareView(props: Props) {
-  const { enabled, workspaces, sessions, param, tick, tunnel, onTunnelChanged, subscribeShareStream, onOpenSettings, onOpenTask, onNotice, onError } = props;
+  const { enabled, workspaces, sessions, param, tick, tunnel, onTunnelChanged, subscribeShareStream, onOpenSettings, onOpenTask, onNotice, onError, panelHost } = props;
   const [shares, setShares] = useState<ShareRecord[]>([]);
   const [files, setFiles] = useState<Record<string, ShareFile[]>>({});
   const [liveText, setLiveText] = useState<Record<string, string>>({});
@@ -258,7 +237,8 @@ export function ShareView(props: Props) {
   const [firewall, setFirewall] = useState<FirewallStatus | null>(null);
   const [firewallBusy, setFirewallBusy] = useState(false);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<ShareFilter>("active");
+  const [query, setQuery] = useState("");
   const [detailTab, setDetailTab] = useState<DetailTab>("activity");
   const [detailRequests, setDetailRequests] = useState<ShareRequestRecord[]>([]);
   const [handoff, setHandoff] = useState<{ id: string; text: string } | null>(null);
@@ -353,11 +333,7 @@ export function ShareView(props: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formOpen, param, workspaces, sessions]);
 
-  const selected = selectedId ? (shares.find((item) => item.id === selectedId) ?? null) : null;
-  useEffect(() => {
-    if (!param || formOpen) return;
-    if (shares.some((item) => item.id === param)) setSelectedId(param);
-  }, [param, formOpen, shares]);
+  const selected = !formOpen && param ? (shares.find((item) => item.id === param) ?? null) : null;
   useEffect(() => {
     if (!selected) {
       setDetailRequests([]);
@@ -375,8 +351,11 @@ export function ShareView(props: Props) {
   const openForm = () => {
     location.hash = "#/share/new";
   };
-  const closeForm = () => {
+  const closePanel = () => {
     location.hash = "#/share";
+  };
+  const openShare = (id: string) => {
+    location.hash = `#/share/${id}`;
   };
 
   const workspace = workspaces.find((item) => item.name === draft.workspace) ?? null;
@@ -407,11 +386,10 @@ export function ShareView(props: Props) {
         note: draft.note.trim() || null,
         expiresInHours: draft.expiry === "never" ? null : Number(draft.expiry),
       });
-      setSelectedId(share.id);
       setDetailTab("details");
       onNotice("share link created");
-      closeForm();
       await load();
+      openShare(share.id);
     } catch (err) {
       onError(err instanceof Error ? err.message : "could not create the share");
     } finally {
@@ -447,7 +425,7 @@ export function ShareView(props: Props) {
   const remove = async (share: ShareRecord) => {
     try {
       await deleteShare(share.id);
-      if (selectedId === share.id) setSelectedId(null);
+      if (param === share.id) closePanel();
       onNotice("share deleted");
       await load();
     } catch (err) {
@@ -475,8 +453,8 @@ export function ShareView(props: Props) {
 
   const showHandoff = async (share: ShareRecord) => {
     try {
-      setSelectedId(share.id);
       setDetailTab("details");
+      openShare(share.id);
       setHandoff({ id: share.id, text: await getShareDoc(share.id) });
     } catch (err) {
       onError(err instanceof Error ? err.message : "handoff unavailable");
@@ -501,8 +479,6 @@ export function ShareView(props: Props) {
   const tunnelLabel =
     tunnel?.state === "installing" ? "installing ngrok…" : tunnel?.state === "starting" ? "starting…" : tunnelOn ? "Stop tunnel" : "Start tunnel";
 
-  const selectShare = (id: string) => setSelectedId((current) => (current === id ? null : id));
-
   if (!enabled) {
     return (
       <div className="view view--share">
@@ -513,14 +489,263 @@ export function ShareView(props: Props) {
     );
   }
 
+  const counts: Record<ShareFilter, number> = {
+    active: shares.filter((share) => share.state === "active").length,
+    paused: shares.filter((share) => share.state === "paused").length,
+    expired: shares.filter((share) => share.state === "expired").length,
+    all: shares.length,
+  };
+  const filters: { key: ShareFilter; label: string }[] = [
+    { key: "active", label: "Active" },
+    { key: "paused", label: "Paused" },
+    { key: "expired", label: "Expired" },
+    { key: "all", label: "All" },
+  ];
+  const needle = query.trim().toLowerCase();
+  const filtered = shares.filter((share) => {
+    if (needle && !`${share.label} ${share.workspace} ${share.repo ?? ""}`.toLowerCase().includes(needle)) return false;
+    if (filter === "all") return true;
+    return share.state === filter;
+  });
+
   const selectedLink = selected ? bestLink(selected) : null;
   const selectedSession = selected?.sessionId ? sessions[selected.sessionId] : undefined;
+
+  const detailPanel = selected && (
+    <SharePanel ariaLabel={selected.label} onClose={closePanel}>
+      <header className="drawer__header">
+        <div className="drawer__title">
+          <h2 title={selected.label}>{selected.label}</h2>
+          <div className="card__badges">
+            <span className={`tag tag--share-${selected.state}`}>{selected.state}</span>
+            <span className={`tag tag--trust-${selected.trust}`}>{TRUST_LABEL[selected.trust]}</span>
+            <span className="chip chip--ws">
+              {selected.workspace}
+              {selected.repo ? ` / ${selected.repo}` : ""}
+            </span>
+          </div>
+        </div>
+        <div className="drawer__actions">
+          <button className="act act--icon" onClick={closePanel} aria-label="Close">
+            <IconClose />
+          </button>
+        </div>
+      </header>
+
+      <div className="drawer__tabs">
+        <button className={`pill ${detailTab === "activity" ? "pill--on" : ""}`} onClick={() => setDetailTab("activity")}>
+          Activity {detailRequests.length > 0 && <span className="pill__count">{detailRequests.length}</span>}
+        </button>
+        <button className={`pill ${detailTab === "details" ? "pill--on" : ""}`} onClick={() => setDetailTab("details")}>
+          Details
+        </button>
+        <button className={`pill ${detailTab === "actions" ? "pill--on" : ""}`} onClick={() => setDetailTab("actions")}>
+          Actions
+        </button>
+      </div>
+
+      <div className="drawer__body">
+        {detailTab === "activity" && (
+          <>
+            {detailRequests.length === 0 && <p className="hint">Questions and requests that arrive through this share show up here, with the answers.</p>}
+            <ul className="activity">
+              {detailRequests.map((item) => (
+                <li key={item.id} className="activity__item">
+                  <div className="activity__head">
+                    <span className={`tag tag--req-${item.status}`}>{item.status}</span>
+                    <strong>{item.asker ?? item.label}</strong>
+                    <span className="muted small">
+                      {item.kind === "ask" ? "asked" : item.kind === "implement" ? "requested" : "sent"} {relativeTime(item.createdAt)}
+                      {item.remote ? ` · from ${item.remote}` : ""}
+                      {item.forkSessionId ? ` · fork ${item.forkSessionId.slice(0, 8)}` : ""}
+                    </span>
+                    {item.taskId && (
+                      <button className="linklike" onClick={() => onOpenTask(item.taskId as string)}>
+                        open task
+                      </button>
+                    )}
+                  </div>
+                  <p className="activity__prompt">{item.prompt}</p>
+                  {item.status === "running" && liveText[item.id] && <pre className="activity__live">{liveText[item.id]}</pre>}
+                  {item.answer && (
+                    <details className="activity__answer">
+                      <summary>answer</summary>
+                      <div className="activity__answer-body">
+                        <Markdown text={item.answer} />
+                      </div>
+                    </details>
+                  )}
+                  {item.error && <span className="taskrow__error">{item.error}</span>}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+
+        {detailTab === "details" && selectedLink && (
+          <dl className="details">
+            <dt>Link</dt>
+            <dd>
+              <div className="frow">
+                <code className="share-link">{maskLink(selectedLink.url)}</code>
+                <button className="act" disabled={!selected.active} onClick={() => void copy(selectedLink.url, `${selectedLink.kind} link`)}>
+                  <IconCopy /> Copy
+                </button>
+              </div>
+            </dd>
+            <dt>Trust</dt>
+            <dd>{TRUST_LABEL[selected.trust]}</dd>
+            <dt>Workspace</dt>
+            <dd>
+              {selected.workspace}
+              {selected.repo ? ` / ${selected.repo}` : ""}
+            </dd>
+            <dt>Expiry</dt>
+            <dd>{selected.expiresAt ? untilText(selected.expiresAt) : "never (until revoked)"}</dd>
+            <dt>Answered from</dt>
+            <dd>{selected.sessionId ? (selectedSession ? sessionTitle(selectedSession) : selected.sessionId.slice(0, 8)) : "fresh context of the workspace"}</dd>
+            <dt>Note</dt>
+            <dd>{selected.note ?? "—"}</dd>
+            <dt>Files</dt>
+            <dd>
+              <button className="act" onClick={() => void toggleFiles(selected)}>
+                {files[selected.id] ? "Hide files" : "Show files"}
+                {files[selected.id] ? ` (${files[selected.id]!.length})` : ""}
+              </button>
+            </dd>
+            <dt>Handoff</dt>
+            <dd>
+              <button className="act" disabled={!selected.active} onClick={() => void showHandoff(selected)}>
+                Load handoff .md
+              </button>
+              {handoff && handoff.id === selected.id && (
+                <div className="frow frow--stack">
+                  <textarea className="in in--doc" readOnly value={handoff.text} onFocus={(event) => event.currentTarget.select()} />
+                  <button className="act" onClick={() => void copy(handoff.text, "handoff")}>
+                    <IconCopy /> Copy handoff
+                  </button>
+                </div>
+              )}
+            </dd>
+          </dl>
+        )}
+
+        {detailTab === "actions" && (
+          <ShareActions
+            share={selected}
+            onPause={(item) => void patch(item, { paused: true }, "share paused")}
+            onResume={(item) => void patch(item, { paused: false }, "share resumed")}
+            onNewKey={(item) => void patch(item, { rotate: true }, "new key generated; the old link no longer works")}
+            onRevoke={(item) => void patch(item, { revoke: true }, "share revoked")}
+            onDelete={(item) => void remove(item)}
+          />
+        )}
+      </div>
+    </SharePanel>
+  );
+
+  const formPanel = formOpen && (
+    <SharePanel ariaLabel="New share" onClose={closePanel}>
+      <header className="drawer__header">
+        <div className="drawer__title">
+          <h2>New share</h2>
+        </div>
+        <div className="drawer__actions">
+          <button className="act act--icon" onClick={closePanel} aria-label="Close">
+            <IconClose />
+          </button>
+        </div>
+      </header>
+
+      <div className="drawer__body">
+        <label className="field">
+          <span>Label</span>
+          <input className="in" placeholder="Will · nexus doubts" value={draft.label} onChange={(event) => setDraft({ ...draft, label: event.target.value })} />
+        </label>
+        <div className="frow frow--fields frow--top">
+          <label className="field">
+            <span>Workspace</span>
+            <select className="in" value={draft.workspace} onChange={(event) => setDraft({ ...draft, workspace: event.target.value, repo: "" })}>
+              {workspaces.map((item) => (
+                <option key={item.name} value={item.name}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Repository (optional)</span>
+            <select className="in" value={draft.repo} onChange={(event) => setDraft({ ...draft, repo: event.target.value })}>
+              <option value="">whole workspace</option>
+              {(workspace?.repos ?? []).map((repo) => (
+                <option key={repo.name} value={repo.name}>
+                  {repo.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="field">
+          <span>Trust level</span>
+          <div className="trustpills">
+            {TRUST_OPTIONS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className={`pill ${draft.trust === option.key ? "pill--on" : ""}`}
+                title={option.detail}
+                onClick={() => setDraft({ ...draft, trust: option.key })}
+              >
+                {option.title}
+              </button>
+            ))}
+          </div>
+          <small>{TRUST_SUMMARY[draft.trust]}</small>
+        </div>
+        <div className="frow frow--fields frow--top">
+          <label className="field">
+            <span>Answer from a session (optional)</span>
+            <select className="in" value={draft.sessionId} onChange={(event) => setDraft({ ...draft, sessionId: event.target.value })}>
+              <option value="">fresh context of the workspace</option>
+              {sessionOptions.map((session) => (
+                <option key={session.sessionId} value={session.sessionId}>
+                  {sessionTitle(session)}
+                </option>
+              ))}
+            </select>
+            <small>Forks the session: the whole conversation history becomes readable by the asker. The original stays untouched.</small>
+          </label>
+          <label className="field">
+            <span>Expires</span>
+            <select className="in" value={draft.expiry} onChange={(event) => setDraft({ ...draft, expiry: event.target.value as Expiry })}>
+              {(Object.keys(EXPIRY_LABEL) as Expiry[]).map((key) => (
+                <option key={key} value={key}>
+                  {EXPIRY_LABEL[key]}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="field">
+          <span>Note for their assistant (optional)</span>
+          <textarea className="in" rows={2} placeholder="Context the asker should know, e.g. which feature this is about" value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} />
+        </label>
+      </div>
+
+      <footer className="drawer__foot">
+        <button className="act act--focus" disabled={creating || !draft.workspace} onClick={() => void submit()}>
+          {creating ? "Creating…" : "Create link"}
+        </button>
+      </footer>
+    </SharePanel>
+  );
+
+  const panel = formOpen ? formPanel : detailPanel;
 
   return (
     <div className="view view--share">
       <section className="panel">
-        <h3>Reach</h3>
-        <div className="reach">
+        <div className="reach reach--compact">
           {tunnel?.endpointError && (
             <div className="reach__row">
               <span className="tag tag--share-revoked">share endpoint down</span>
@@ -531,29 +756,20 @@ export function ShareView(props: Props) {
           )}
           <div className="reach__row">
             <span className={`tag ${tunnel?.lanUrl ? "tag--go" : "tag--muted"}`}>LAN</span>
-            {tunnel?.lanUrl ? <code className="share-link">{tunnel.lanUrl}</code> : <span className="muted">{tunnel ? "no LAN address found" : "checking…"}</span>}
-            <span className="muted small">people on the same network</span>
-            {firewall === null && <span className="tag tag--muted">checking firewall…</span>}
+            {tunnel?.lanUrl ? <code className="share-link">{tunnel.lanUrl}</code> : <span className="muted small">{tunnel ? "no LAN address" : "checking…"}</span>}
+            {firewall === null && <span className="tag tag--muted">firewall…</span>}
             {firewall?.supported && firewall.allowed === false && (
-              <>
-                <span className="tag tag--warn">Windows Firewall blocks it</span>
-                <button className="act" disabled={firewallBusy} onClick={() => void allowLan()} title="Adds an inbound rule for the share port; Windows asks for admin">
-                  {firewallBusy ? "waiting for Windows…" : "Allow LAN (asks admin)"}
-                </button>
-              </>
+              <button className="act" disabled={firewallBusy} onClick={() => void allowLan()} title="Adds an inbound rule for the share port; Windows asks for admin">
+                {firewallBusy ? "waiting…" : "Allow LAN (admin)"}
+              </button>
             )}
             {firewall?.supported && firewall.allowed === true && <span className="tag tag--go">firewall ok</span>}
-          </div>
-          <div className="reach__row">
+            <span className="reach__sep" />
             <span className={`tag ${tunnelOn ? "tag--go" : "tag--muted"}`}>Internet</span>
-            {tunnelOn && tunnel?.publicUrl ? <code className="share-link">{tunnel.publicUrl}</code> : <span className="muted">tunnel off</span>}
+            {tunnelOn && tunnel?.publicUrl ? <code className="share-link">{tunnel.publicUrl}</code> : <span className="muted small">tunnel off</span>}
             <button className={`act ${tunnelOn ? "" : "act--focus"}`} disabled={tunnelBusy} onClick={() => void toggleTunnel()}>
               {tunnelLabel}
             </button>
-            <span className="muted small">
-              ngrok · {tunnel?.installed ? "installed" : "installs itself on first start"}
-              {tunnel && !tunnel.authtokenSet ? " · uses your ngrok config" : ""}
-            </span>
             {tunnel?.state === "error" && tunnel.error && <span className="taskrow__error">{tunnel.error}</span>}
           </div>
         </div>
@@ -567,160 +783,44 @@ export function ShareView(props: Props) {
         </p>
       </section>
 
-      <div className="view--split share-split">
-        <section className="pane pane--list">
-          <div className="panel__head">
-            <h3>Shares</h3>
-            <button className="act act--focus" onClick={openForm}>
-              New share
+      <div className="sharetoolbar">
+        <div className="filters filters--tight">
+          {filters.map((item) => (
+            <button key={item.key} className={`pill ${filter === item.key ? "pill--on" : ""}`} onClick={() => setFilter(item.key)}>
+              {item.label}
+              <span className="pill__count">{counts[item.key]}</span>
             </button>
-          </div>
-          {shares.length === 0 && <p className="hint">No share yet. Press New share, or open a session and press Share.</p>}
-          <div className="sharecards">
-            {shares.map((share) => (
-              <ShareCard
-                key={share.id}
-                share={share}
-                selected={selectedId === share.id}
-                files={files[share.id]}
-                onSelect={selectShare}
-                onCopy={(url, what) => void copy(url, what)}
-                onHandoff={(item) => void showHandoff(item)}
-                onToggleFiles={(item) => void toggleFiles(item)}
-                onPause={(item) => void patch(item, { paused: true }, "share paused")}
-                onResume={(item) => void patch(item, { paused: false }, "share resumed")}
-                onNewKey={(item) => void patch(item, { rotate: true }, "new key generated; the old link no longer works")}
-                onRevoke={(item) => void patch(item, { revoke: true }, "share revoked")}
-                onDelete={(item) => void remove(item)}
-              />
-            ))}
-          </div>
-        </section>
-
-        <section className="pane pane--detail">
-          {!selected && <p className="empty">Select a share to see its activity and details.</p>}
-          {selected && (
-            <>
-              <header className="detail__head">
-                <div>
-                  <h2>{selected.label}</h2>
-                  <p className="muted small">
-                    {selected.workspace}
-                    {selected.repo ? ` / ${selected.repo}` : ""} · id {selected.id}
-                  </p>
-                </div>
-                <span className={`tag tag--share-${selected.state}`}>{selected.state}</span>
-              </header>
-
-              <div className="drawer__tabs">
-                <button className={`pill ${detailTab === "activity" ? "pill--on" : ""}`} onClick={() => setDetailTab("activity")}>
-                  Activity {detailRequests.length > 0 && <span className="pill__count">{detailRequests.length}</span>}
-                </button>
-                <button className={`pill ${detailTab === "details" ? "pill--on" : ""}`} onClick={() => setDetailTab("details")}>
-                  Details
-                </button>
-              </div>
-
-              {detailTab === "activity" && (
-                <>
-                  {detailRequests.length === 0 && <p className="hint">Questions and requests that arrive through this share show up here, with the answers.</p>}
-                  <ul className="activity">
-                    {detailRequests.map((item) => (
-                      <li key={item.id} className="activity__item">
-                        <div className="activity__head">
-                          <span className={`tag tag--req-${item.status}`}>{item.status}</span>
-                          <strong>{item.asker ?? item.label}</strong>
-                          <span className="muted small">
-                            {item.kind === "ask" ? "asked" : item.kind === "implement" ? "requested" : "sent"} {relativeTime(item.createdAt)}
-                            {item.remote ? ` · from ${item.remote}` : ""}
-                            {item.forkSessionId ? ` · fork ${item.forkSessionId.slice(0, 8)}` : ""}
-                          </span>
-                          {item.taskId && (
-                            <button className="linklike" onClick={() => onOpenTask(item.taskId as string)}>
-                              open task
-                            </button>
-                          )}
-                        </div>
-                        <p className="activity__prompt">{item.prompt}</p>
-                        {item.status === "running" && liveText[item.id] && <pre className="activity__live">{liveText[item.id]}</pre>}
-                        {item.answer && (
-                          <details className="activity__answer">
-                            <summary>answer</summary>
-                            <div className="activity__answer-body">
-                              <Markdown text={item.answer} />
-                            </div>
-                          </details>
-                        )}
-                        {item.error && <span className="taskrow__error">{item.error}</span>}
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-
-              {detailTab === "details" && selectedLink && (
-                <dl className="details">
-                  <dt>Link</dt>
-                  <dd>
-                    <div className="frow">
-                      <code className="share-link">{maskLink(selectedLink.url)}</code>
-                      <button className="act" disabled={!selected.active} onClick={() => void copy(selectedLink.url, `${selectedLink.kind} link`)}>
-                        <IconCopy /> Copy
-                      </button>
-                    </div>
-                  </dd>
-                  <dt>Trust</dt>
-                  <dd>{TRUST_LABEL[selected.trust]}</dd>
-                  <dt>Workspace</dt>
-                  <dd>
-                    {selected.workspace}
-                    {selected.repo ? ` / ${selected.repo}` : ""}
-                  </dd>
-                  <dt>Expiry</dt>
-                  <dd>{selected.expiresAt ? untilText(selected.expiresAt) : "never (until revoked)"}</dd>
-                  <dt>Answered from</dt>
-                  <dd>{selected.sessionId ? (selectedSession ? sessionTitle(selectedSession) : selected.sessionId.slice(0, 8)) : "fresh context of the workspace"}</dd>
-                  <dt>Note</dt>
-                  <dd>{selected.note ?? "—"}</dd>
-                  <dt>Files</dt>
-                  <dd>
-                    <button className="act" onClick={() => void toggleFiles(selected)}>
-                      {files[selected.id] ? "Hide files" : "Show files"}
-                      {files[selected.id] ? ` (${files[selected.id]!.length})` : ""}
-                    </button>
-                  </dd>
-                  <dt>Handoff</dt>
-                  <dd>
-                    <button className="act" disabled={!selected.active} onClick={() => void showHandoff(selected)}>
-                      Load handoff .md
-                    </button>
-                    {handoff && handoff.id === selected.id && (
-                      <div className="frow frow--stack">
-                        <textarea className="in in--doc" readOnly value={handoff.text} onFocus={(event) => event.currentTarget.select()} />
-                        <button className="act" onClick={() => void copy(handoff.text, "handoff")}>
-                          <IconCopy /> Copy handoff
-                        </button>
-                      </div>
-                    )}
-                  </dd>
-                </dl>
-              )}
-            </>
-          )}
-        </section>
+          ))}
+        </div>
+        <input className="in sharetoolbar__search" placeholder="search label or workspace" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <button className="act act--focus sharetoolbar__new" onClick={openForm}>
+          New share
+        </button>
       </div>
 
-      {formOpen && (
-        <ShareForm
-          draft={draft}
-          setDraft={setDraft}
-          workspaces={workspaces}
-          sessionOptions={sessionOptions}
-          creating={creating}
-          onSubmit={() => void submit()}
-          onClose={closeForm}
-        />
-      )}
+      {shares.length === 0 && <p className="hint">No share yet. Press New share, or open a session and press Share.</p>}
+      <div className="grid sharegrid">
+        {filtered.map((share) => (
+          <ShareCard
+            key={share.id}
+            share={share}
+            selected={param === share.id}
+            files={files[share.id]}
+            onSelect={openShare}
+            onCopy={(url, what) => void copy(url, what)}
+            onHandoff={(item) => void showHandoff(item)}
+            onToggleFiles={(item) => void toggleFiles(item)}
+            onPause={(item) => void patch(item, { paused: true }, "share paused")}
+            onResume={(item) => void patch(item, { paused: false }, "share resumed")}
+            onNewKey={(item) => void patch(item, { rotate: true }, "new key generated; the old link no longer works")}
+            onRevoke={(item) => void patch(item, { revoke: true }, "share revoked")}
+            onDelete={(item) => void remove(item)}
+          />
+        ))}
+        {shares.length > 0 && filtered.length === 0 && <p className="empty">Nothing in this filter.</p>}
+      </div>
+
+      {panelHost && panel && createPortal(panel, panelHost)}
 
       {manualCopy && (
         <ConfirmDialog
