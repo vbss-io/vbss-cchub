@@ -1,6 +1,6 @@
 import { useState, type MouseEvent } from "react";
 import { ClientBadge, claudeClient, sessionClient } from "../clients";
-import { IconFocus } from "../icons";
+import { IconFocus, IconStar } from "../icons";
 import { relativeTime } from "../time";
 import type { SessionRecord, SessionStatus } from "../types";
 import { shortFolder } from "../wsmatch";
@@ -56,6 +56,7 @@ interface Props {
   onDelete: (sessionId: string) => void;
   onFocus: (sessionId: string) => void;
   onRename: (sessionId: string, title: string) => void;
+  onFavorite: (sessionId: string, favorite: boolean) => void;
 }
 
 export function SessionCard({
@@ -70,11 +71,13 @@ export function SessionCard({
   onDelete,
   onFocus,
   onRename,
+  onFavorite,
 }: Props) {
   const [confirming, setConfirming] = useState(false);
   const [renaming, setRenaming] = useState(false);
 
   const archived = session.archivedAt != null;
+  const favorite = session.favoriteAt != null;
   const canFocus = !archived && session.status !== "ended" && !stale;
   const name = session.customTitle ?? session.title ?? session.sessionId.slice(0, 8);
   const model = prettyModel(session.model);
@@ -93,10 +96,20 @@ export function SessionCard({
 
   return (
     <article
-      className={`card card--${session.status} ${archived ? "card--archived" : ""} ${stale ? "card--stale" : ""} card--clickable`}
+      className={`card card--${session.status} ${archived ? "card--archived" : ""} ${stale ? "card--stale" : ""} ${favorite ? "card--favorite" : ""} card--clickable`}
       onClick={() => onOpen(session.sessionId)}
     >
       <div className="card__head">
+        <button
+          className={`card__star ${favorite ? "card__star--on" : ""}`}
+          title={favorite ? "Unfavorite" : "Favorite"}
+          onClick={(event) => {
+            stop(event);
+            onFavorite(session.sessionId, !favorite);
+          }}
+        >
+          <IconStar filled={favorite} />
+        </button>
         {renaming ? (
           <input
             className="in card__rename"

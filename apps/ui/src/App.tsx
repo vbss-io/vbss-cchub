@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, renameCodexThread, renameSession, reorderGroups, setHooks, subscribe, unarchiveCodexThread, updateGroup, type HooksStatus, type ShareStreamEvent } from "./api";
+import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, renameCodexThread, renameSession, reorderGroups, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type HooksStatus, type ShareStreamEvent } from "./api";
 import { isHubRun } from "./clients";
 import { BrandMark, Wordmark } from "./components/BrandMark";
 import { CodexDrawer } from "./components/CodexDrawer";
@@ -479,6 +479,14 @@ export function App() {
               onArchive={(id) => void archiveSession(id)}
               onDelete={(id) => void deleteSession(id)}
               onRename={(id, title) => void renameSession(id, title)}
+              onFavorite={(id, favorite) => {
+                setSessions((prev) => {
+                  const before = prev[id];
+                  if (!before) return prev;
+                  return { ...prev, [id]: { ...before, favoriteAt: favorite ? Date.now() : null } };
+                });
+                void setSessionFavorite(id, favorite);
+              }}
               onOpenCodex={openCodex}
               onRenameCodex={(id, title) => void renameCodexThread(id, title)}
               onArchiveCodex={(id) => void archiveCodexThread(id)}

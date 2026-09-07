@@ -27,6 +27,7 @@ export interface SessionRecord {
   tokensOut: number | null;
   contextTokens: number | null;
   archivedAt: number | null;
+  favoriteAt?: number | null;
   agentsRunning?: number;
   agentsTotal?: number;
   shareLabel?: string | null;
