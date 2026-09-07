@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, lstatSync, rmdirSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { TaskRecord, WorktreeInfo } from "./delegation-types.js";
 
@@ -138,37 +138,94 @@ export async function worktreeStatus(task: TaskRecord): Promise<WorktreeInfo> {
   return info;
 }
 
+const mergeLocks = new Set<string>();
+
+async function findWorktreeOnBranch(main: string, branch: string): Promise<string | null> {
+  const out = await gitAsync(main, ["worktree", "list", "--porcelain"]);
+  for (const block of out.split(/\r?\n\r?\n/)) {
+    let path: string | null = null;
+    let onBranch = false;
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith("worktree ")) path = line.slice("worktree ".length).trim();
+      else if (line.startsWith("branch ") && line.slice("branch ".length).trim() === `refs/heads/${branch}`) onBranch = true;
+    }
+    if (path && onBranch) return path;
+  }
+  return null;
+}
+
+async function runMerge(cwd: string, branch: string): Promise<void> {
+  try {
+    await gitAsync(cwd, ["merge", "--no-ff", "--no-edit", branch]);
+  } catch (err) {
+    let files: string[] = [];
+    try {
+      const conflicts = await gitAsync(cwd, ["diff", "--name-only", "--diff-filter=U"]);
+      files = conflicts.length === 0 ? [] : conflicts.split(/\r?\n/);
+    } catch {
+      files = [];
+    }
+    try {
+      await gitAsync(cwd, ["merge", "--abort"]);
+    } catch {
+      void err;
+    }
+    throw new WorktreeError("merge conflict", 409, files);
+  }
+}
+
 export async function mergeTaskWorktree(task: TaskRecord): Promise<void> {
   if (task.isolation !== "worktree" || !task.worktreePath) throw new WorktreeError("task has no worktree", 404);
   if (!task.branch || !task.baseBranch) throw new WorktreeError("task has no worktree branch", 409);
   if (!existsSync(task.worktreePath)) throw new WorktreeError("the worktree folder is gone; discard it first", 409);
   const main = worktreeMainRepo(task.worktreePath);
   if (!main) throw new WorktreeError("could not resolve the original checkout of the worktree", 409);
-  const currentBranch = await gitAsync(main, ["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (currentBranch !== task.baseBranch) {
-    throw new WorktreeError(`the checkout is on "${currentBranch}", not the base branch "${task.baseBranch}"; check it out before merging`, 409);
-  }
-  if ((await gitAsync(task.worktreePath, ["status", "--porcelain"])).length > 0) {
-    throw new WorktreeError("the worktree has uncommitted changes; commit or discard them before merging", 409);
-  }
-  const pending = await gitAsync(task.worktreePath, ["log", `${task.baseBranch}..${task.branch}`, "--format=%H"]);
-  if (pending.length === 0) throw new WorktreeError("nothing to merge", 409);
+  const branch = task.branch;
+  const baseBranch = task.baseBranch;
+  const lockKey = normalizePath(main);
+  if (mergeLocks.has(lockKey)) throw new WorktreeError("a merge of this repository is already in flight", 409);
+  mergeLocks.add(lockKey);
   try {
-    await gitAsync(main, ["merge", "--no-ff", "--no-edit", task.branch]);
-  } catch (err) {
-    let files: string[] = [];
+    if ((await gitAsync(task.worktreePath, ["status", "--porcelain"])).length > 0) {
+      throw new WorktreeError("the worktree has uncommitted changes; commit or discard them before merging", 409);
+    }
+    const pending = await gitAsync(task.worktreePath, ["log", `${baseBranch}..${branch}`, "--format=%H"]);
+    if (pending.length === 0) throw new WorktreeError("nothing to merge", 409);
+
+    const currentBranch = await gitAsync(main, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    if (currentBranch === baseBranch) {
+      await runMerge(main, branch);
+      return;
+    }
+
+    const existing = await findWorktreeOnBranch(main, baseBranch);
+    if (existing) {
+      await runMerge(existing, branch);
+      return;
+    }
+
+    const tmp = join(dirname(task.worktreePath), `_merge-${task8Of(task.id)}`);
     try {
-      const conflicts = await gitAsync(main, ["diff", "--name-only", "--diff-filter=U"]);
-      files = conflicts.length === 0 ? [] : conflicts.split(/\r?\n/);
-    } catch {
-      files = [];
+      await gitAsync(main, ["worktree", "add", tmp, baseBranch]);
+    } catch (err) {
+      throw new WorktreeError(`could not create a temporary worktree on "${baseBranch}" to merge into: ${err instanceof Error ? err.message : String(err)}`, 409);
     }
     try {
-      await gitAsync(main, ["merge", "--abort"]);
-    } catch {
-      void err;
+      await runMerge(tmp, branch);
+    } finally {
+      try {
+        await gitAsync(main, ["worktree", "remove", "--force", tmp]);
+      } catch {
+        try {
+          await gitAsync(main, ["worktree", "prune"]);
+        } catch {
+          void 0;
+        }
+      }
+      if (existsSync(tmp)) removeFolder(tmp);
     }
-    throw new WorktreeError("merge conflict", 409, files);
+  } finally {
+    mergeLocks.delete(lockKey);
   }
 }
 

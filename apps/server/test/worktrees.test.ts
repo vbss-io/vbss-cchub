@@ -183,4 +183,77 @@ describe("worktrees", () => {
       (err: unknown) => err instanceof WorktreeError && err.status === 400,
     );
   });
+
+  it("merges into the base branch when the checkout sits on another branch, without touching it", async () => {
+    const offBox = mkdtempSync(join(tmpdir(), "cch-wtoff-"));
+    const offRepo = join(offBox, "repo");
+    const offRoot = join(offBox, "ws");
+    try {
+      initRepo(offRepo);
+      mkdirSync(offRoot, { recursive: true });
+      const id = randomUUID();
+      const created = createTaskWorktree({ repoPath: offRepo, repoName: "repo", taskId: id, root: offRoot });
+      writeFileSync(join(created.path, "feature.txt"), "hello\n");
+      git(created.path, "add", "-A");
+      git(created.path, "commit", "-m", "add feature");
+      git(offRepo, "checkout", "-b", "other");
+      const worktreesBefore = git(offRepo, "worktree", "list");
+      await mergeTaskWorktree(makeTask({ id, worktreePath: created.path, branch: created.branch, baseBranch: created.baseBranch }));
+      assert.equal(git(offRepo, "rev-parse", "--abbrev-ref", "HEAD"), "other");
+      assert.equal(git(offRepo, "status", "--porcelain"), "");
+      assert.match(git(offRepo, "log", "main", "-1", "--format=%s"), /Merge branch/);
+      assert.equal(existsSync(join(offRoot, ".worktrees", "repo", `_merge-${id.slice(0, 8)}`)), false);
+      assert.equal(git(offRepo, "worktree", "list"), worktreesBefore);
+    } finally {
+      try {
+        rmSync(offBox, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      } catch {
+        /* disposable */
+      }
+    }
+  });
+
+  it("aborts a conflicting off-branch merge with a 409 and leaves no temp worktree", async () => {
+    const cBox = mkdtempSync(join(tmpdir(), "cch-wtoffc-"));
+    const cRepo = join(cBox, "repo");
+    const cRoot = join(cBox, "ws");
+    try {
+      initRepo(cRepo);
+      mkdirSync(cRoot, { recursive: true });
+      writeFileSync(join(cRepo, "shared.txt"), "one\n");
+      git(cRepo, "add", "-A");
+      git(cRepo, "commit", "-m", "shared");
+      const id = randomUUID();
+      const created = createTaskWorktree({ repoPath: cRepo, repoName: "repo", taskId: id, root: cRoot });
+      writeFileSync(join(created.path, "shared.txt"), "worktree edit\n");
+      git(created.path, "add", "-A");
+      git(created.path, "commit", "-m", "worktree edit");
+      writeFileSync(join(cRepo, "shared.txt"), "base edit\n");
+      git(cRepo, "add", "-A");
+      git(cRepo, "commit", "-m", "base edit");
+      const baseHead = git(cRepo, "rev-parse", "main");
+      git(cRepo, "checkout", "-b", "other");
+      const worktreesBefore = git(cRepo, "worktree", "list");
+      await assert.rejects(
+        () => mergeTaskWorktree(makeTask({ id, worktreePath: created.path, branch: created.branch, baseBranch: created.baseBranch })),
+        (err: unknown) => {
+          assert.ok(err instanceof WorktreeError);
+          assert.equal(err.status, 409);
+          assert.equal(err.message, "merge conflict");
+          assert.ok((err.files ?? []).includes("shared.txt"));
+          return true;
+        },
+      );
+      assert.equal(git(cRepo, "rev-parse", "main"), baseHead);
+      assert.equal(git(cRepo, "rev-parse", "--abbrev-ref", "HEAD"), "other");
+      assert.equal(existsSync(join(cRoot, ".worktrees", "repo", `_merge-${id.slice(0, 8)}`)), false);
+      assert.equal(git(cRepo, "worktree", "list"), worktreesBefore);
+    } finally {
+      try {
+        rmSync(cBox, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      } catch {
+        /* disposable */
+      }
+    }
+  });
 });

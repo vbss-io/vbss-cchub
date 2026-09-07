@@ -233,11 +233,15 @@ needs a `repo` of the workspace and that repo must be a git checkout on a branch
   branch or touch other worktrees. The base branch stays untouched until you merge.
 - **Follow it**: `GET /delegation/tasks/:id/worktree` (also embedded under `worktree` in the task detail)
   returns `{ path, branch, baseBranch, exists, dirty, commits, diffStat, mergedAt }`.
-- **Merge**: `POST /delegation/tasks/:id/merge` runs `git merge --no-ff --no-edit hub/<task8>` in the
-  original checkout and sets `mergedAt`. It answers `409` when the task is still running/pending, when the
-  checkout is not on the base branch, when the worktree has uncommitted changes, or when there is nothing
-  to merge; on a conflict it runs `git merge --abort` and answers `409 { error: "merge conflict", files }`,
-  leaving the checkout clean. The worktree is kept (discard is a separate step).
+- **Merge**: `POST /delegation/tasks/:id/merge` runs `git merge --no-ff --no-edit hub/<task8>` onto the
+  base branch and sets `mergedAt`. If the original checkout is already on the base branch the merge runs
+  there; otherwise the base branch is merged without disturbing the user's current checkout — into whatever
+  worktree already has the base branch checked out, or into a throwaway `_merge-<task8>` worktree it creates
+  next to the task worktree and removes afterwards. It answers `409` when the task is still running/pending,
+  when the worktree has uncommitted changes, when there is nothing to merge, or when another merge of the
+  same repo is already in flight (a per-repo lock serialises them); on a conflict it runs `git merge --abort`
+  and answers `409 { error: "merge conflict", files }`, leaving every checkout clean and the base branch
+  untouched. The worktree is kept (discard is a separate step).
 - **Discard**: `POST /delegation/tasks/:id/worktree/discard` runs `git worktree remove --force` and
   `git branch -D hub/<task8>`, then clears `worktreePath` (branch/base/mergedAt stay for history).
 - **MCP**: `hub_delegate` takes `isolation`; `hub_task_merge` (taskId, `discard?`) merges or, with
