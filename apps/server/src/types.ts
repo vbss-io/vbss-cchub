@@ -65,8 +65,13 @@ export interface SessionRecord {
   client: string | null;
   transcriptPath: string | null;
   shareLabel: string | null;
+  forkOf: string | null;
   forks: number;
   remoteAsks: number;
+  delegatedTasks: number;
+  helperOf: string | null;
+  helpers: number;
+  helpersTotal: number;
   stale: boolean;
   title: string | null;
   customTitle: string | null;

@@ -65,7 +65,7 @@ async function streamingMain() {
       const prompt = Array.isArray(content) ? content.map((part) => part.text ?? "").join("") : String(content ?? "");
       turns += 1;
       if (capture) {
-        writeFileSync(capture, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), prompt, turns, pid: process.pid, env: { HUB_TRACK_SDK: process.env.HUB_TRACK_SDK ?? null, HUB_DELEGATED: process.env.HUB_DELEGATED ?? null, HUB_SKIP: process.env.HUB_SKIP ?? null, HUB_PORT: process.env.HUB_PORT ?? null, HUB_GUARD_SHELL: process.env.HUB_GUARD_SHELL ?? null, HUB_SHARE_LABEL: process.env.HUB_SHARE_LABEL ?? null, HUB_WRITE_SCOPE: process.env.HUB_WRITE_SCOPE ?? null } }));
+        writeFileSync(capture, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), prompt, turns, pid: process.pid, env: { HUB_TRACK_SDK: process.env.HUB_TRACK_SDK ?? null, HUB_DELEGATED: process.env.HUB_DELEGATED ?? null, HUB_SKIP: process.env.HUB_SKIP ?? null, HUB_PORT: process.env.HUB_PORT ?? null, HUB_GUARD_SHELL: process.env.HUB_GUARD_SHELL ?? null, HUB_SHARE_LABEL: process.env.HUB_SHARE_LABEL ?? null, HUB_WRITE_SCOPE: process.env.HUB_WRITE_SCOPE ?? null, HUB_TASK_ID: process.env.HUB_TASK_ID ?? null, HUB_RUN_ID: process.env.HUB_RUN_ID ?? null } }));
       }
       if (prompt === "die") process.exit(3);
       await respond(prompt, sessionId, model, resume !== null && turns === 1 && !fork ? true : resume !== null, mode, delay);
@@ -99,6 +99,8 @@ async function main() {
           HUB_SKIP: process.env.HUB_SKIP ?? null,
           HUB_PORT: process.env.HUB_PORT ?? null,
           HUB_GUARD_SHELL: process.env.HUB_GUARD_SHELL ?? null,
+          HUB_TASK_ID: process.env.HUB_TASK_ID ?? null,
+          HUB_RUN_ID: process.env.HUB_RUN_ID ?? null,
         },
       }),
     );

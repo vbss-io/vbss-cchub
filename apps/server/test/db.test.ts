@@ -49,14 +49,35 @@ before(async () => {
 });
 
 describe("sessions", () => {
+  it("keeps the folder a session started in when later hooks report another cwd", () => {
+    db.applyHook(payload({ sessionId: "s-cwd", kind: "session_start", cwd: "C:\\work\\repo" }));
+    const moved = db.applyHook(payload({ sessionId: "s-cwd", kind: "user_prompt", cwd: "C:\\work\\repo\\docs\\deep" }));
+    assert.equal(moved.cwd, "C:\\work\\repo");
+    const restarted = db.applyHook(payload({ sessionId: "s-cwd", kind: "session_start", cwd: "C:\\other" }));
+    assert.equal(restarted.cwd, "C:\\other");
+  });
+
   it("keeps the client, claude pid and transcript path of a session", () => {
     const session = db.applyHook(payload({ client: "vscode", claudePid: process.pid, transcriptPath: "C:\\t\\s.jsonl" }));
     assert.equal(session.client, "vscode");
     assert.equal(session.claudePid, process.pid);
     assert.equal(session.transcriptPath, "C:\\t\\s.jsonl");
     assert.equal(session.stale, false);
+    assert.equal(session.forkOf, null);
     const later = db.applyHook(payload({ kind: "user_prompt", client: null }));
     assert.equal(later.client, "vscode");
+  });
+
+  it("resolves the parent session of a share fork", () => {
+    db.applyHook(payload({ sessionId: "s-parent" }));
+    db.applyHook(payload({ sessionId: "s-fork", client: "share" }));
+    db.db
+      .prepare(
+        `INSERT INTO hub_share_forks (share_id, asker, session_id, parent_session_id, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run("share-1", "asker-1", "s-fork", "s-parent", Date.now(), Date.now());
+    assert.equal(db.getSession("s-fork")?.forkOf, "s-parent");
+    assert.equal(db.getSession("s-parent")?.forkOf, null);
   });
 
   it("ends sessions whose Claude process is gone and leaves live ones alone", async () => {
@@ -80,6 +101,73 @@ describe("sessions", () => {
     assert.equal(old?.status, "waiting");
     assert.equal(old?.stale, true);
     assert.equal(db.getSession("s-alive")?.stale, false);
+  });
+
+  it("folds Claude Desktop scratch helpers into the original session", () => {
+    db.applyHook(
+      payload({ sessionId: "d-parent", client: "claude-desktop", hostPid: 9100, cwd: "C:\\work\\repo" }),
+    );
+    db.applyHook(
+      payload({
+        sessionId: "d-help-1",
+        client: "claude-desktop",
+        hostPid: 9100,
+        cwd: "C:\\Users\\v\\AppData\\Roaming\\Claude\\scratch-workspaces\\a1",
+      }),
+    );
+    db.applyHook(
+      payload({
+        sessionId: "d-help-2",
+        client: "claude-desktop",
+        hostPid: 9100,
+        cwd: "C:/Users/v/AppData/Roaming/Claude/scratch-workspaces/b2",
+      }),
+    );
+    db.applyHook(
+      payload({
+        sessionId: "d-help-2",
+        kind: "session_end",
+        client: "claude-desktop",
+        hostPid: 9100,
+        cwd: "C:/Users/v/AppData/Roaming/Claude/scratch-workspaces/b2",
+      }),
+    );
+
+    assert.equal(db.getSession("d-help-1")?.helperOf, "d-parent");
+    assert.equal(db.getSession("d-help-2")?.helperOf, "d-parent");
+    const parent = db.getSession("d-parent");
+    assert.equal(parent?.helperOf, null);
+    assert.equal(parent?.helpersTotal, 2);
+    assert.equal(parent?.helpers, 1);
+    assert.equal(db.getSession("s-alive")?.helpersTotal, 0);
+  });
+
+  it("leaves a scratch helper with no Desktop parent unparented", () => {
+    db.applyHook(
+      payload({
+        sessionId: "d-orphan",
+        client: "claude-desktop",
+        hostPid: 9200,
+        cwd: "C:\\Users\\v\\AppData\\Roaming\\Claude\\scratch-workspaces\\z9",
+      }),
+    );
+    assert.equal(db.getSession("d-orphan")?.helperOf, null);
+  });
+
+  it("finds a session by its claude/host/shell pid and counts delegated tasks", () => {
+    db.applyHook(payload({ sessionId: "s-origin", claudePid: 424242, hostPid: 424243, client: "terminal" }));
+    assert.equal(db.sessionByPid(424242)?.sessionId, "s-origin");
+    assert.equal(db.sessionByPid(424243)?.sessionId, "s-origin");
+    assert.equal(db.sessionByPid(999999), null);
+    assert.equal(db.getSession("s-origin")?.delegatedTasks, 0);
+    const now = Date.now();
+    db.db
+      .prepare(
+        `INSERT INTO hub_tasks (id, title, prompt, workspace, repo, cwd, add_dirs, runner, status, origin_session_id, origin_client, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("task-origin", "t", "p", "pilot", null, "C:\\work\\repo", "[]", "claude", "pending", "s-origin", "claude-code", now, now);
+    assert.equal(db.getSession("s-origin")?.delegatedTasks, 1);
   });
 
   it("records the last assistant message of a subagent", () => {

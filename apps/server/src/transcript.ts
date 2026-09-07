@@ -1,4 +1,5 @@
 import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 
 export interface SessionName {
@@ -44,6 +45,7 @@ export interface TranscriptInfo {
 interface TranscriptLine {
   type?: string;
   aiTitle?: string;
+  customTitle?: string;
   timestamp?: string;
   message?: { model?: string; usage?: Record<string, number>; content?: unknown; role?: string };
 }
@@ -68,6 +70,8 @@ export function readTranscript(path: string | null): TranscriptInfo {
   let tokensIn = 0;
   let tokensOut = 0;
   let lastUsage: Record<string, number> | null = null;
+  let aiTitle: string | null = null;
+  let customTitle: string | null = null;
 
   for (const line of lines) {
     let entry: TranscriptLine;
@@ -76,7 +80,8 @@ export function readTranscript(path: string | null): TranscriptInfo {
     } catch {
       continue;
     }
-    if (entry.type === "ai-title" && typeof entry.aiTitle === "string") out.title = entry.aiTitle;
+    if (entry.type === "ai-title" && typeof entry.aiTitle === "string") aiTitle = entry.aiTitle;
+    if (entry.type === "custom-title" && typeof entry.customTitle === "string") customTitle = entry.customTitle;
     if (entry.type === "assistant" && entry.message) {
       if (typeof entry.message.model === "string") out.model = entry.message.model;
       const usage = entry.message.usage;
@@ -88,6 +93,7 @@ export function readTranscript(path: string | null): TranscriptInfo {
     }
   }
 
+  out.title = customTitle ?? aiTitle;
   if (lastUsage) {
     out.contextTokens =
       (lastUsage.input_tokens ?? 0) +
@@ -136,6 +142,25 @@ function readTailText(path: string): string {
     return firstBreak >= 0 ? text.slice(firstBreak + 1) : "";
   } finally {
     closeSync(fd);
+  }
+}
+
+const dropPartialFirstLine = (text: string, start: number): string => {
+  if (start === 0) return text;
+  const firstBreak = text.indexOf("\n");
+  return firstBreak >= 0 ? text.slice(firstBreak + 1) : "";
+};
+
+async function readTailTextAsync(path: string): Promise<string> {
+  const handle = await open(path, "r");
+  try {
+    const { size } = await handle.stat();
+    const start = Math.max(0, size - TAIL_BYTES);
+    const buffer = Buffer.alloc(size - start);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+    return dropPartialFirstLine(buffer.toString("utf8", 0, bytesRead), start);
+  } finally {
+    await handle.close();
   }
 }
 
@@ -204,14 +229,7 @@ function entriesFromLine(entry: TranscriptLine): TranscriptEntry[] {
   return [];
 }
 
-export function readTranscriptTail(path: string | null, limit = 40): TranscriptEntry[] {
-  if (!path) return [];
-  let text: string;
-  try {
-    text = readTailText(path);
-  } catch {
-    return [];
-  }
+function entriesFromTail(text: string, limit: number): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   for (const line of text.split("\n")) {
     const trimmed = line.trim();
@@ -223,4 +241,22 @@ export function readTranscriptTail(path: string | null, limit = 40): TranscriptE
     }
   }
   return entries.slice(-limit);
+}
+
+export function readTranscriptTail(path: string | null, limit = 40): TranscriptEntry[] {
+  if (!path) return [];
+  try {
+    return entriesFromTail(readTailText(path), limit);
+  } catch {
+    return [];
+  }
+}
+
+export async function readTranscriptTailAsync(path: string | null, limit = 40): Promise<TranscriptEntry[]> {
+  if (!path) return [];
+  try {
+    return entriesFromTail(await readTailTextAsync(path), limit);
+  } catch {
+    return [];
+  }
 }

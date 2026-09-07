@@ -7,6 +7,7 @@ import type {
   RuntimeSnapshot,
   SessionLive,
   SessionRecord,
+  TranscriptEntry,
 } from "./types";
 
 const envUrl = import.meta.env.VITE_HUB_URL as string | undefined;
@@ -47,6 +48,21 @@ export const fetchRuntimes = (): Promise<RuntimeSnapshot> => getJson("/api/runti
 
 export const fetchCodexSessions = (): Promise<CodexSessionRecord[]> => getJson("/api/codex/sessions");
 
+export const fetchCodexLive = (id: string, limit = 40): Promise<{ entries: TranscriptEntry[] }> =>
+  getJson(`/api/codex/${encodeURIComponent(id)}/live?limit=${limit}`);
+
+export const renameCodexThread = (id: string, title: string): Promise<void> =>
+  send("PATCH", `/api/codex/${encodeURIComponent(id)}`, { title });
+
+export const archiveCodexThread = (id: string): Promise<void> =>
+  send("POST", `/api/codex/${encodeURIComponent(id)}/archive`);
+
+export const unarchiveCodexThread = (id: string): Promise<void> =>
+  send("POST", `/api/codex/${encodeURIComponent(id)}/unarchive`);
+
+export const deleteCodexThread = (id: string): Promise<void> =>
+  send("DELETE", `/api/codex/${encodeURIComponent(id)}`);
+
 export const fetchAgents = (sessionId: string): Promise<AgentRecord[]> =>
   getJson(`/api/sessions/${encodeURIComponent(sessionId)}/agents`);
 
@@ -65,6 +81,8 @@ export interface FocusResult {
 
 export const focusSession = (sessionId: string): Promise<FocusResult> =>
   send("POST", `/api/sessions/${encodeURIComponent(sessionId)}/focus`);
+
+export const focusCodexApp = (): Promise<FocusResult> => send("POST", "/api/codex/focus");
 
 export const archiveSession = (sessionId: string): Promise<void> =>
   send("POST", `/api/sessions/${encodeURIComponent(sessionId)}/archive`);
@@ -89,6 +107,7 @@ export const reorderGroups = (ids: string[]): Promise<void> => send("POST", "/ap
 
 export interface HubEvents {
   onSession: (session: SessionRecord) => void;
+  onCodex?: (sessions: CodexSessionRecord[]) => void;
   onRemoved?: (sessionId: string) => void;
   onGroups?: (groups: GroupRecord[]) => void;
   onHooks?: (hooks: HooksStatus) => void;
@@ -118,6 +137,7 @@ export function subscribe(handlers: HubEvents): () => void {
   const source = new EventSource(`${base}/api/events`);
   const data = <T>(event: Event): T => JSON.parse((event as MessageEvent<string>).data) as T;
   source.addEventListener("session", (event) => handlers.onSession(data<SessionRecord>(event)));
+  source.addEventListener("codex", (event) => handlers.onCodex?.(data<CodexSessionRecord[]>(event)));
   source.addEventListener("removed", (event) => handlers.onRemoved?.(data<{ sessionId: string }>(event).sessionId));
   source.addEventListener("groups", (event) => handlers.onGroups?.(data<GroupRecord[]>(event)));
   source.addEventListener("hooks", (event) => handlers.onHooks?.(data<HooksStatus>(event)));
@@ -129,3 +149,12 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("share-stream", (event) => handlers.onShareStream?.(data<ShareStreamEvent>(event)));
   return () => source.close();
 }
+
+export const reportUiError = (view: string, error: Error, componentStack: string | null): Promise<void> =>
+  fetch(`${hubBase}/api/ui-error`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ view, message: error.message, stack: error.stack ?? "", componentStack: componentStack ?? "" }),
+  })
+    .then(() => undefined)
+    .catch(() => undefined);

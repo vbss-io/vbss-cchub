@@ -83,6 +83,21 @@ describe("mcp server", () => {
     assert.deepEqual(workspaces[0]?.repos.map((repo) => repo.name), ["repo-a", "repo-b"]);
   });
 
+  it("keeps the overview brief so it never hits the tool result cap", async () => {
+    const longPrompt = "x".repeat(5_000);
+    const created = parseText<{ task: { id: string } }>(await callTool("hub_delegate", { workspace: "pilot", prompt: longPrompt }));
+    await waitFor(async () => {
+      const detail = parseText<{ task: { status: string } }>(await callTool("hub_task", { taskId: created.task.id }));
+      return detail.task.status === "running" || detail.task.status === "pending" ? null : detail;
+    }, 15000);
+    const overview = parseText<{ tasks: { recent: { id: string; prompt: string; reposAttached: number; addDirs?: unknown }[] } }>(await callTool("hub_overview"));
+    const entry = overview.tasks.recent.find((item) => item.id === created.task.id);
+    assert.ok(entry);
+    assert.ok(entry.prompt.length <= 201);
+    assert.equal(entry.addDirs, undefined);
+    assert.equal(typeof entry.reposAttached, "number");
+  });
+
   it("delegates into a workspace, follows the task and reads the overview", async () => {
     const created = parseText<{ task: { id: string; cwd: string; addDirs: string[] } }>(
       await callTool("hub_delegate", { workspace: "pilot", repo: "repo-b", prompt: "ping from mcp" }),
@@ -107,6 +122,19 @@ describe("mcp server", () => {
     assert.equal(overview.reports[0]?.text, "mcp says hi");
   });
 
+  it("sends originPid so the hub resolves the delegating session", async () => {
+    await fetch(`${hub.base}/hook`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "session_start", sessionId: "mcp-origin", claudePid: process.pid, client: "terminal", cwd: box.contextDir }),
+    });
+    const created = parseText<{ task: { id: string; originSessionId: string | null; originClient: string | null } }>(
+      await callTool("hub_delegate", { workspace: "pilot", prompt: "origin ping" }),
+    );
+    assert.equal(created.task.originSessionId, "mcp-origin");
+    assert.equal(created.task.originClient, "claude-code");
+  });
+
   it("still answers a request when the client closes stdin right after sending it", async () => {
     const oneShot = spawn(process.execPath, ["--import", "tsx", join(serverDir, "src", "mcp.ts")], {
       cwd: serverDir,
@@ -122,6 +150,43 @@ describe("mcp server", () => {
     const reply = JSON.parse(output.trim().split("\n")[0] ?? "{}") as { id: number; result: ToolResult };
     assert.equal(reply.id, 7);
     assert.equal(parseText<{ name: string }[]>(reply.result)[0]?.name, "pilot");
+  });
+
+  it("defaults hub_report to HUB_TASK_ID when the caller omits taskId", async () => {
+    const created = parseText<{ task: { id: string } }>(await callTool("hub_delegate", { workspace: "pilot", prompt: "task for report default" }));
+    const taskId = created.task.id;
+    const oneShot = spawn(process.execPath, ["--import", "tsx", join(serverDir, "src", "mcp.ts")], {
+      cwd: serverDir,
+      env: sandboxEnv(box, { HUB_PORT: String(hub.port), HUB_TASK_ID: taskId }),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const output = await new Promise<string>((resolve) => {
+      let out = "";
+      oneShot.stdout?.on("data", (chunk: Buffer) => (out += chunk.toString()));
+      oneShot.on("close", () => resolve(out));
+      oneShot.stdin?.end(`${JSON.stringify({ jsonrpc: "2.0", id: 21, method: "tools/call", params: { name: "hub_report", arguments: { text: "auto-attached", kind: "note" } } })}\n`);
+    });
+    const reply = JSON.parse(output.trim().split("\n")[0] ?? "{}") as { result: ToolResult };
+    assert.equal(reply.result.isError, false);
+    const reports = parseText<{ taskId: string | null; text: string }[]>(await callTool("hub_reports", { taskId }));
+    assert.ok(reports.some((report) => report.text === "auto-attached" && report.taskId === taskId));
+  });
+
+  it("archives and unarchives a settled task through hub_task_archive", async () => {
+    const created = parseText<{ task: { id: string } }>(await callTool("hub_delegate", { workspace: "pilot", prompt: "archive via mcp" }));
+    const taskId = created.task.id;
+    await waitFor(async () => {
+      const detail = parseText<{ task: { status: string } }>(await callTool("hub_task", { taskId }));
+      return ["pending", "running"].includes(detail.task.status) ? null : detail;
+    }, 15000);
+    const archived = await callTool("hub_task_archive", { taskId });
+    assert.equal(archived.isError, false);
+    const list = parseText<{ id: string }[]>(await callTool("hub_tasks", { limit: 200 }));
+    assert.equal(list.some((task) => task.id === taskId), false);
+    const restored = await callTool("hub_task_archive", { taskId, unarchive: true });
+    assert.equal(restored.isError, false);
+    const after = parseText<{ id: string }[]>(await callTool("hub_tasks", { limit: 200 }));
+    assert.ok(after.some((task) => task.id === taskId));
   });
 
   it("surfaces tool errors without breaking the stream", async () => {

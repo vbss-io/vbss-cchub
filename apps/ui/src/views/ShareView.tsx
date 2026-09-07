@@ -20,6 +20,7 @@ import {
   type WorkspaceRecord,
 } from "../delegation";
 import { IconCopy } from "../icons";
+import { Markdown } from "../markdown";
 import { isStale } from "../stale";
 import { relativeTime } from "../time";
 import type { SessionRecord } from "../types";
@@ -621,7 +622,9 @@ export function ShareView(props: Props) {
               {item.answer && (
                 <details className="activity__answer">
                   <summary>answer</summary>
-                  <pre>{item.answer}</pre>
+                  <div className="activity__answer-body">
+                    <Markdown text={item.answer} />
+                  </div>
                 </details>
               )}
               {item.error && <span className="taskrow__error">{item.error}</span>}

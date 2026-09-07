@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
-import { config } from "./config.js";
 import { runTask, type RunEvent } from "./executor.js";
 import { broadcast } from "./sse.js";
 import { appendHubSource } from "./second-brain.js";
 import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail } from "./delegation-store.js";
-import type { CodexSandbox, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
+import type { CodexSandbox, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
 import { finishShareRequestByTask, getShare } from "./share-store.js";
+import { getSession } from "./db.js";
 import { SHARE_CREATED_BY_PREFIX, implementGuardrail, implementProfile, type RunProfile, type TrustLevel } from "./share-types.js";
 import { discoverWorkspaces, findRepo, findWorkspace, isDirectory, samePath } from "./workspaces.js";
 
@@ -108,6 +108,19 @@ class RunLog {
   }
 }
 
+const TIMEOUT_WARNING_MS = 5 * 60_000;
+const TIMEOUT_WARNING_TEXT = "5 minutes left before the run timeout";
+
+export function resolveRunTimeoutMs(): number {
+  const envRaw = process.env.HUB_DELEGATION_TIMEOUT_MIN;
+  if (envRaw !== undefined && envRaw.trim() !== "") {
+    const minutes = Number(envRaw);
+    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60_000 : 0;
+  }
+  const minutes = getSettings().runTimeoutMinutes;
+  return minutes > 0 ? minutes * 60_000 : 0;
+}
+
 export function abortActiveRuns(reason: string): void {
   for (const controller of activeRuns.values()) controller.abort(new Error(reason));
 }
@@ -141,18 +154,25 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
   const controller = new AbortController();
   activeRuns.set(task.id, controller);
   const log = new RunLog(run.id, task.id);
+  const timeoutMs = resolveRunTimeoutMs();
   const timer =
-    config.runTimeoutMs > 0
+    timeoutMs > 0
       ? setTimeout(
-          () => controller.abort(new Error(`timed out after ${Math.round(config.runTimeoutMs / 60_000)} min`)),
-          config.runTimeoutMs,
+          () => controller.abort(new Error(`timed out after ${Math.round(timeoutMs / 60_000)} min`)),
+          timeoutMs,
         )
+      : null;
+  const warningTimer =
+    timeoutMs > TIMEOUT_WARNING_MS
+      ? setTimeout(() => log.push({ kind: "status", text: TIMEOUT_WARNING_TEXT }), timeoutMs - TIMEOUT_WARNING_MS)
       : null;
   broadcast("delegation", { taskId: task.id });
   void runTask({
     runner: task.runner,
     cwd: task.cwd,
     addDirs: task.addDirs,
+    taskId: task.id,
+    runId: run.id,
     prompt,
     systemContext: taskContext(task),
     model,
@@ -212,6 +232,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
     })
     .finally(() => {
       if (timer) clearTimeout(timer);
+      if (warningTimer) clearTimeout(warningTimer);
       activeRuns.delete(task.id);
       broadcast("delegation", { taskId: task.id });
     });
@@ -227,6 +248,8 @@ export interface DelegateInput {
   sandbox: CodexSandbox | null;
   title: string | null;
   source: string | null;
+  originSessionId?: string | null;
+  originClient?: OriginClient | null;
 }
 
 export interface WorkspaceTarget {
@@ -255,6 +278,12 @@ export function resolveWorkspaceTarget(workspaceName: string, repoName: string |
   return { workspace: workspace.name, repo: repo?.name ?? null, cwd, addDirs };
 }
 
+function broadcastOrigin(task: TaskRecord): void {
+  if (!task.originSessionId) return;
+  const origin = getSession(task.originSessionId);
+  if (origin) broadcast("session", origin);
+}
+
 export function delegateTask(input: DelegateInput): TaskDetail {
   if (!input.prompt || !input.workspace) throw new BadRequestError("prompt and workspace required");
   const target = resolveWorkspaceTarget(input.workspace, input.repo);
@@ -271,8 +300,11 @@ export function delegateTask(input: DelegateInput): TaskDetail {
     permissionMode: input.permissionMode,
     sandbox: input.sandbox,
     createdBy: input.source,
+    originSessionId: input.originSessionId ?? null,
+    originClient: input.originClient ?? null,
   });
   startRun(task, "launch", input.prompt, input.model, input.permissionMode);
+  broadcastOrigin(task);
   brainNote(
     `task delegated · ${task.workspace}${task.repo ? `/${task.repo}` : ""} · ${task.title} (${task.runner}${task.createdBy ? `, via ${task.createdBy}` : ""}) · id ${task.id}`,
   );

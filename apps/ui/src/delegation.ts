@@ -17,6 +17,8 @@ export type PermissionMode = "acceptEdits" | "plan" | "dontAsk" | "manual" | "by
 
 export type ReportKind = "progress" | "result" | "blocked" | "note";
 
+export type OriginClient = "claude-code" | "codex" | "share";
+
 export interface WorkspaceRepo {
   name: string;
   path: string;
@@ -36,6 +38,7 @@ export interface DelegationSettings {
   secondBrainRoot: string | null;
   autonomy: Autonomy;
   ownerName: string;
+  runTimeoutMinutes: number;
 }
 
 export interface TaskRecord {
@@ -53,8 +56,11 @@ export interface TaskRecord {
   status: TaskStatus;
   sessionId: string | null;
   createdBy: string | null;
+  originSessionId: string | null;
+  originClient: OriginClient | null;
   lastError: string | null;
   runsCount: number;
+  archivedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -180,7 +186,11 @@ export const configureShell = (shell: ShellKind, action: "install" | "uninstall"
 export const configureMcp = (client: McpClient, action: "install" | "uninstall"): Promise<McpStatus> =>
   call("POST", "/connect/mcp", { client, action });
 
-export const listTasks = (limit = 100): Promise<TaskRecord[]> => call("GET", `/tasks?limit=${limit}`);
+export const listTasks = (limit = 100, includeArchived = false): Promise<TaskRecord[]> =>
+  call("GET", `/tasks?limit=${limit}${includeArchived ? "&archived=1" : ""}`);
+
+export const listTasksByOrigin = (sessionId: string, limit = 100): Promise<TaskRecord[]> =>
+  call("GET", `/tasks?origin=${encodeURIComponent(sessionId)}&limit=${limit}`);
 
 export const getTask = (id: string): Promise<TaskDetail> => call("GET", `/tasks/${encodeURIComponent(id)}`);
 
@@ -192,6 +202,12 @@ export const continueTask = (id: string, input: { prompt: string; model?: string
 
 export const cancelTask = (id: string): Promise<{ ok: boolean }> =>
   call("POST", `/tasks/${encodeURIComponent(id)}/cancel`);
+
+export const archiveTask = (id: string): Promise<TaskRecord> =>
+  call("POST", `/tasks/${encodeURIComponent(id)}/archive`);
+
+export const unarchiveTask = (id: string): Promise<TaskRecord> =>
+  call("POST", `/tasks/${encodeURIComponent(id)}/unarchive`);
 
 export const listReports = (limit = 50): Promise<ReportRecord[]> => call("GET", `/reports?limit=${limit}`);
 

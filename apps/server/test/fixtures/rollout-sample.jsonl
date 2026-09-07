@@ -1,6 +1,9 @@
 {"timestamp":"2026-09-05T18:59:04.114Z","ordinal":0,"type":"session_meta","payload":{"session_id":"01a0aaaa-0000-7000-8000-000000000001","id":"01a0aaaa-0000-7000-8000-000000000001","timestamp":"2026-09-05T18:59:03.929Z","cwd":"C:\\work\\sample","originator":"Codex Desktop","cli_version":"0.153.4","source":"vscode","thread_source":"voice_chat","model_provider":"openai"}}
 {"timestamp":"2026-09-05T18:59:05.000Z","ordinal":1,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\nHere is a list of plugins that are available but not installed\n</recommended_plugins>"}]}}
 {"timestamp":"2026-09-05T18:59:06.000Z","ordinal":2,"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Fix the flaky test in repo-a\nand report back"}]}}
-{"timestamp":"2026-09-05T18:59:07.000Z","ordinal":3,"type":"event_msg","payload":{"type":"task_started"}}
-{"timestamp":"2026-09-05T18:59:20.000Z","ordinal":4,"type":"event_msg","payload":{"type":"task_complete"}}
-{"timestamp":"2026-09-05T19:01:00.000Z","ordinal":5,"type":"event_msg","payload":{"type":"task_started"}}
+{"timestamp":"2026-09-05T18:59:06.500Z","ordinal":3,"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looking into the flaky test."}]}}
+{"timestamp":"2026-09-05T18:59:06.700Z","ordinal":4,"type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"npm test\"}","call_id":"call_1"}}
+{"timestamp":"2026-09-05T18:59:06.900Z","ordinal":5,"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":[{"type":"input_text","text":"3 tests passed"}]}}
+{"timestamp":"2026-09-05T18:59:07.000Z","ordinal":6,"type":"event_msg","payload":{"type":"task_started"}}
+{"timestamp":"2026-09-05T18:59:20.000Z","ordinal":7,"type":"event_msg","payload":{"type":"task_complete"}}
+{"timestamp":"2026-09-05T19:01:00.000Z","ordinal":8,"type":"event_msg","payload":{"type":"task_started"}}

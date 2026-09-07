@@ -22,6 +22,8 @@ export interface RunRequest {
   cwd: string;
   addDirs: string[];
   prompt: string;
+  taskId?: string;
+  runId?: string;
   systemContext: string | null;
   model: string | null;
   permissionMode: PermissionMode | null;
@@ -114,6 +116,12 @@ function hubEnv(): NodeJS.ProcessEnv {
     HUB_HOST_TARGET: "127.0.0.1",
   };
   delete env.HUB_SKIP;
+  return env;
+}
+
+function withRunIds(env: NodeJS.ProcessEnv, req: RunRequest): NodeJS.ProcessEnv {
+  if (req.taskId) env.HUB_TASK_ID = req.taskId;
+  if (req.runId) env.HUB_RUN_ID = req.runId;
   return env;
 }
 
@@ -244,7 +252,7 @@ function claudeSpec(req: RunRequest): ProcessSpec {
     bin: config.claudeBin,
     args: [...config.claudeArgsPrefix, ...args],
     cwd: req.cwd,
-    env: req.guard ? shareEnv(req.guard === "shell", req.shareLabel ?? "share") : hubEnv(),
+    env: withRunIds(req.guard ? shareEnv(req.guard === "shell", req.shareLabel ?? "share") : hubEnv(), req),
     stdin: req.prompt,
     ingest: ingestClaude,
   };
@@ -268,7 +276,7 @@ function codexSpec(req: RunRequest): ProcessSpec {
     bin: config.codexBin,
     args: [...config.codexArgsPrefix, ...args],
     cwd: req.cwd,
-    env: { ...process.env },
+    env: withRunIds({ ...process.env }, req),
     stdin,
     ingest: ingestCodex,
   };

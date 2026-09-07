@@ -3,6 +3,7 @@ import { ClientBadge, claudeClient, sessionClient } from "../clients";
 import { IconFocus } from "../icons";
 import { relativeTime } from "../time";
 import type { SessionRecord, SessionStatus } from "../types";
+import { shortFolder } from "../wsmatch";
 
 const statusLabel: Record<SessionStatus, string> = {
   active: "Active",
@@ -48,6 +49,7 @@ interface Props {
   workspace: string | null;
   showSource: boolean;
   stale?: boolean;
+  forkParentName?: string | null;
   onOpen: (sessionId: string) => void;
   onArchive: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
@@ -60,6 +62,7 @@ export function SessionCard({
   workspace,
   showSource,
   stale = false,
+  forkParentName = null,
   onOpen,
   onArchive,
   onDelete,
@@ -117,9 +120,14 @@ export function SessionCard({
         <ClientBadge info={sessionClient(session)} />
         {workspace && <span className="chip chip--ws">{workspace}</span>}
         {showSource && session.source && <span className="src">{session.source}</span>}
-        {agentsTotal > 0 && (
-          <span className={`chip chip--agents ${agentsRunning > 0 ? "chip--agents-on" : ""}`}>
-            {agentsRunning}/{agentsTotal} subagents
+        {agentsRunning > 0 && (
+          <span className="chip chip--agents chip--agents-on" title={`${agentsRunning} subagent${agentsRunning === 1 ? "" : "s"} running now · ${agentsTotal} spawned this session`}>
+            {agentsRunning} running
+          </span>
+        )}
+        {session.forkOf && (
+          <span className="chip chip--fork" title={`forks ${session.forkOf}`}>
+            fork · {forkParentName ?? session.forkOf.slice(0, 8)}
           </span>
         )}
         {(session.forks ?? 0) > 0 && (
@@ -127,35 +135,42 @@ export function SessionCard({
             {session.forks} fork{session.forks === 1 ? "" : "s"} · {session.remoteAsks ?? 0} ask{(session.remoteAsks ?? 0) === 1 ? "" : "s"}
           </span>
         )}
+        {(session.delegatedTasks ?? 0) > 0 && (
+          <span className="chip chip--delegated" title="Tasks this session delegated to the hub">
+            {session.delegatedTasks} delegated
+          </span>
+        )}
+        {(session.helpersTotal ?? 0) > 0 && (
+          <span
+            className="chip chip--helpers"
+            title="Claude Desktop runs a short helper session per chat step; folded into this card"
+          >
+            {session.helpers ?? 0} helper{(session.helpers ?? 0) === 1 ? "" : "s"}
+          </span>
+        )}
+        {session.helperOf && (
+          <span className="chip chip--helper" title={`helper of ${session.helperOf}`}>
+            helper of {session.helperOf.slice(0, 8)}
+          </span>
+        )}
       </div>
 
-      <p className="card__msg">{session.lastMessage ?? "—"}</p>
-
-      <div className="card__metrics">
-        <div className="card__meta">
-          <span className="chip">{model ?? "—"}</span>
-          <span title="tokens in / out">
-            ↓{formatTokens(session.tokensIn)} ↑{formatTokens(session.tokensOut)}
-          </span>
-        </div>
-        <div
-          className="ctxbar"
+      <div className="card__line">
+        <span className="card__model">{model ?? "—"}</span>
+        <span
+          className="card__ctx"
+          data-level={level}
           title={
             context !== null
-              ? `context: ${context.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")} tokens`
+              ? `context ${context.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")} tokens · ↓${formatTokens(session.tokensIn)} ↑${formatTokens(session.tokensOut)}`
               : "context unavailable"
           }
         >
-          <span className="ctxbar__label">ctx</span>
-          <div className="ctxbar__track">
-            <div className="ctxbar__fill" data-level={level} style={{ width: `${pct}%` }} />
-          </div>
-          <span className="ctxbar__pct">{context !== null ? `${Math.round(pct)}%` : "—"}</span>
-        </div>
-      </div>
-
-      <div className="card__foot">
-        <span title={session.cwd ?? ""}>{session.cwd ?? "—"}</span>
+          ctx {context !== null ? `${Math.round(pct)}%` : "—"}
+        </span>
+        <span className="card__folder" title={session.cwd ?? ""}>
+          {shortFolder(session.cwd)}
+        </span>
         <time>{relativeTime(session.updatedAt)}</time>
       </div>
 

@@ -29,7 +29,7 @@ interface Capture {
   argv: string[];
   cwd: string;
   prompt: string;
-  env?: { HUB_TRACK_SDK: string | null; HUB_SKIP: string | null; HUB_PORT: string | null };
+  env?: { HUB_TRACK_SDK: string | null; HUB_SKIP: string | null; HUB_PORT: string | null; HUB_TASK_ID: string | null; HUB_RUN_ID: string | null };
 }
 
 const readCapture = (path: string): Capture => JSON.parse(readFileSync(path, "utf8")) as Capture;
@@ -79,6 +79,13 @@ describe("claude runner", () => {
     assert.equal(capture.env?.HUB_TRACK_SDK, "1");
     assert.equal(capture.env?.HUB_SKIP, null);
     assert.equal(capture.env?.HUB_PORT, "4399");
+  });
+
+  it("injects HUB_TASK_ID and HUB_RUN_ID into the run env", async () => {
+    await runTask(request({ prompt: "who am i", taskId: "task-42", runId: "run-7" }));
+    const capture = readCapture(claudeCapture);
+    assert.equal(capture.env?.HUB_TASK_ID, "task-42");
+    assert.equal(capture.env?.HUB_RUN_ID, "run-7");
   });
 
   it("passes model and permission mode as separate argv entries", async () => {
@@ -177,6 +184,13 @@ describe("codex runner", () => {
     assert.equal(pair(capture.argv, "-m"), "gpt-x");
     assert.equal(capture.argv[capture.argv.length - 1], "-");
     assert.ok(capture.prompt.startsWith("Workspace map\n\n---\n\ndo the thing"));
+  });
+
+  it("injects HUB_TASK_ID and HUB_RUN_ID into the codex run env", async () => {
+    await runTask(request({ runner: "codex", prompt: "id check", taskId: "task-99", runId: "run-9" }));
+    const capture = readCapture(codexCapture);
+    assert.equal(capture.env?.HUB_TASK_ID, "task-99");
+    assert.equal(capture.env?.HUB_RUN_ID, "run-9");
   });
 
   it("resumes a thread without re-sending the workspace flags", async () => {

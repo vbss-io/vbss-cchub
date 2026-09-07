@@ -34,6 +34,10 @@ export const REPORT_KINDS = ["progress", "result", "blocked", "note"] as const;
 
 export type ReportKind = (typeof REPORT_KINDS)[number];
 
+export const ORIGIN_CLIENTS = ["claude-code", "codex", "share"] as const;
+
+export type OriginClient = (typeof ORIGIN_CLIENTS)[number];
+
 export interface WorkspaceRepo {
   name: string;
   path: string;
@@ -53,7 +57,12 @@ export interface DelegationSettings {
   secondBrainRoot: string | null;
   autonomy: Autonomy;
   ownerName: string;
+  runTimeoutMinutes: number;
 }
+
+export const RUN_TIMEOUT_MIN = 5;
+export const RUN_TIMEOUT_MAX = 720;
+export const RUN_TIMEOUT_DEFAULT = 60;
 
 export interface TaskRecord {
   id: string;
@@ -70,8 +79,11 @@ export interface TaskRecord {
   status: TaskStatus;
   sessionId: string | null;
   createdBy: string | null;
+  originSessionId: string | null;
+  originClient: OriginClient | null;
   lastError: string | null;
   runsCount: number;
+  archivedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }

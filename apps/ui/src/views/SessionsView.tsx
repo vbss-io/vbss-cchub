@@ -11,9 +11,10 @@ import { workspaceOf } from "../wsmatch";
 
 type SortKey = "status" | "recent" | "name";
 type FilterKey = SessionStatus | "all" | "archived" | "stale" | "empty";
-type ClientFilter = "all" | "terminal" | "vscode" | "claude-desktop" | "wsl" | "hub" | "share";
+type ClientFilter = "all" | "terminal" | "vscode" | "claude-desktop" | "wsl" | "hub" | "share" | "codex";
 
 const UNGROUPED = "Ungrouped";
+const HOME_PREFIX = /^(?:[a-z]:[\\/]users[\\/][^\\/]+|\/home\/[^/]+|\/users\/[^/]+)/i;
 
 const sortRank: Record<SessionStatus, number> = { waiting: 0, idle: 1, active: 2, ended: 3 };
 const STATUS_ORDER: SessionStatus[] = ["waiting", "idle", "active", "ended"];
@@ -26,6 +27,7 @@ const CLIENT_FILTERS: { key: ClientFilter; label: string }[] = [
   { key: "wsl", label: "WSL" },
   { key: "hub", label: "Hub runs (headless)" },
   { key: "share", label: "Share forks" },
+  { key: "codex", label: "Codex threads" },
 ];
 
 const projectOf = (session: SessionRecord): string => {
@@ -34,8 +36,41 @@ const projectOf = (session: SessionRecord): string => {
   return parts[parts.length - 1] ?? session.cwd;
 };
 
-const byRecent = (a: SessionRecord, b: SessionRecord): number => b.updatedAt - a.updatedAt;
 const nameOf = (session: SessionRecord): string => session.customTitle ?? session.title ?? projectOf(session);
+
+type Bucket = "archived" | "empty" | "ended" | "stale" | "waiting" | "idle" | "active" | "hidden";
+const LIVE_BUCKETS: Bucket[] = ["waiting", "idle", "active"];
+
+const matchesClient = (session: SessionRecord, clientFilter: ClientFilter): boolean => {
+  if (clientFilter === "all") return true;
+  if (clientFilter === "hub") return isHubRun(session.client);
+  if (clientFilter === "share") return session.client === "share";
+  return claudeClient(session.client).label === claudeClient(clientFilter).label;
+};
+
+function bucketOf(session: SessionRecord, clientFilter: ClientFilter): Bucket {
+  if (session.archivedAt != null) return "archived";
+  if (session.helperOf && clientFilter !== "hub") return "hidden";
+  const hub = isHubRun(session.client);
+  if (hub && clientFilter === "all") return "hidden";
+  if (!hub && isEmpty(session)) return "empty";
+  if (session.status === "ended") return "ended";
+  if (isStale(session)) return "stale";
+  return session.status;
+}
+
+function codexBucketOf(thread: CodexSessionRecord): Bucket {
+  if (thread.hidden) return "hidden";
+  if (thread.archivedAt != null) return "archived";
+  if (thread.status === "ended") return "ended";
+  return thread.status;
+}
+
+const codexNameOf = (thread: CodexSessionRecord): string => thread.customTitle ?? thread.title;
+
+type Item =
+  | { kind: "claude"; id: string; session: SessionRecord; status: SessionStatus; updatedAt: number; name: string; cwd: string | null }
+  | { kind: "codex"; id: string; thread: CodexSessionRecord; status: SessionStatus; updatedAt: number; name: string; cwd: string | null };
 
 function loadCollapsedGroups(): string[] {
   try {
@@ -51,15 +86,38 @@ interface Props {
   groups: GroupRecord[];
   workspaces: WorkspaceRecord[];
   codexSessions: CodexSessionRecord[];
+  codexAppRunning: boolean;
   tick: number;
   onOpen: (sessionId: string) => void;
   onFocus: (sessionId: string) => void;
   onArchive: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onRename: (sessionId: string, title: string) => void;
+  onOpenCodex: (id: string) => void;
+  onRenameCodex: (id: string, title: string) => void;
+  onArchiveCodex: (id: string) => void;
+  onUnarchiveCodex: (id: string) => void;
+  onDeleteCodex: (id: string) => void;
 }
 
-export function SessionsView({ sessions, groups, workspaces, codexSessions, tick, onOpen, onFocus, onArchive, onDelete, onRename }: Props) {
+export function SessionsView({
+  sessions,
+  groups,
+  workspaces,
+  codexSessions,
+  codexAppRunning,
+  tick,
+  onOpen,
+  onFocus,
+  onArchive,
+  onDelete,
+  onRename,
+  onOpenCodex,
+  onRenameCodex,
+  onArchiveCodex,
+  onUnarchiveCodex,
+  onDeleteCodex,
+}: Props) {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [clientFilter, setClientFilter] = useState<ClientFilter>("all");
   const [sort, setSort] = useState<SortKey>("status");
@@ -78,88 +136,85 @@ export function SessionsView({ sessions, groups, workspaces, codexSessions, tick
     });
   };
 
-  const counts = useMemo(() => {
-    const result = { waiting: 0, idle: 0, active: 0, ended: 0, stale: 0, archived: 0, empty: 0, hub: 0, share: 0 };
-    const scopedToHub = clientFilter === "hub" || clientFilter === "share";
-    for (const session of Object.values(sessions)) {
-      const hub = isHubRun(session.client);
-      if (hub) result.hub += 1;
-      if (session.client === "share") result.share += 1;
-      if (clientFilter === "hub" && !hub) continue;
-      if (clientFilter === "share" && session.client !== "share") continue;
-      if (session.archivedAt != null) result.archived += 1;
-      if (hub && !scopedToHub) continue;
-      if (!hub && isEmpty(session)) result.empty += 1;
-      else if (session.status === "ended") result.ended += 1;
-      else if (isStale(session)) result.stale += 1;
-      else result[session.status] += 1;
-    }
-    return result;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, clientFilter, tick]);
-
-  const list = useMemo(() => {
+  const { counts, list, hubLive, shareLive, codexLive } = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const all = Object.values(sessions);
-    const filtered = all.filter((session) => {
-      const archived = session.archivedAt != null;
-      const hub = isHubRun(session.client);
-      const empty = !archived && !hub && isEmpty(session);
-      const stale = !archived && !empty && session.status !== "ended" && isStale(session);
-      if (clientFilter === "hub" && !hub) return false;
-      else if (clientFilter === "share" && session.client !== "share") return false;
-      else if (clientFilter !== "all" && claudeClient(session.client).label !== claudeClient(clientFilter).label) return false;
-      if (needle.length > 0) {
-        const haystack = `${nameOf(session)} ${session.cwd ?? ""} ${session.lastMessage ?? ""}`.toLowerCase();
-        if (!haystack.includes(needle)) return false;
+    const tally: Record<Exclude<Bucket, "hidden">, number> = {
+      waiting: 0,
+      idle: 0,
+      active: 0,
+      ended: 0,
+      stale: 0,
+      archived: 0,
+      empty: 0,
+    };
+    const matched: Item[] = [];
+    let hub = 0;
+    let share = 0;
+    let codex = 0;
+    const matchesQuery = (name: string, cwd: string | null, message: string | null): boolean => {
+      if (needle.length === 0) return true;
+      return `${name} ${cwd ?? ""} ${message ?? ""}`.toLowerCase().includes(needle);
+    };
+    for (const session of Object.values(sessions)) {
+      if (isHubRun(session.client) && LIVE_BUCKETS.includes(bucketOf(session, "hub"))) hub += 1;
+      if (session.client === "share" && LIVE_BUCKETS.includes(bucketOf(session, "share"))) share += 1;
+      if (!matchesClient(session, clientFilter) || !matchesQuery(nameOf(session), session.cwd, session.lastMessage)) continue;
+      const bucket = bucketOf(session, clientFilter);
+      if (bucket === "hidden") continue;
+      tally[bucket] += 1;
+      if (filter === "all" ? LIVE_BUCKETS.includes(bucket) : bucket === filter) {
+        matched.push({ kind: "claude", id: session.sessionId, session, status: session.status, updatedAt: session.updatedAt, name: nameOf(session), cwd: session.cwd });
       }
-      if (filter === "archived") return archived;
-      if (archived) return false;
-      if (hub && clientFilter === "all") return false;
-      if (filter === "empty") return empty;
-      if (empty) return false;
-      if (filter === "stale") return stale;
-      if (stale) return false;
-      if (filter === "all") return session.status !== "ended";
-      return session.status === filter;
+    }
+    for (const thread of codexSessions) {
+      const bucket = codexBucketOf(thread);
+      if (bucket === "hidden") continue;
+      if (LIVE_BUCKETS.includes(bucket)) codex += 1;
+      const visibleClient = clientFilter === "all" || clientFilter === "codex";
+      if (!visibleClient || !matchesQuery(codexNameOf(thread), thread.cwd, thread.lastMessage)) continue;
+      tally[bucket] += 1;
+      if (filter === "all" ? LIVE_BUCKETS.includes(bucket) : bucket === filter) {
+        matched.push({ kind: "codex", id: thread.id, thread, status: thread.status, updatedAt: thread.updatedAt, name: codexNameOf(thread), cwd: thread.cwd });
+      }
+    }
+    const sorted = matched.sort((a, b) => {
+      if (sort === "recent") return b.updatedAt - a.updatedAt;
+      if (sort === "name") return a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || b.updatedAt - a.updatedAt;
+      return sortRank[a.status] - sortRank[b.status] || b.updatedAt - a.updatedAt;
     });
-    return filtered.sort((a, b) => {
-      if (sort === "recent") return byRecent(a, b);
-      if (sort === "name") return nameOf(a).toLowerCase().localeCompare(nameOf(b).toLowerCase()) || byRecent(a, b);
-      return sortRank[a.status] - sortRank[b.status] || byRecent(a, b);
-    });
+    return { counts: tally, list: sorted, hubLive: hub, shareLive: share, codexLive: codex };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, filter, clientFilter, sort, query, tick]);
+  }, [sessions, codexSessions, filter, clientFilter, sort, query, tick]);
 
   const grouped = useMemo(() => {
-    const groupNameFor = (session: SessionRecord): string | null => {
-      const cwd = (session.cwd ?? "").toLowerCase();
+    const groupNameFor = (cwd: string | null): string | null => {
+      const lower = (cwd ?? "").toLowerCase().replace(HOME_PREFIX, "");
       for (const group of groups) {
         const pattern = group.match.trim().toLowerCase();
-        if (pattern && cwd.includes(pattern)) return group.name;
+        if (pattern && lower.includes(pattern)) return group.name;
       }
-      return workspaceOf(workspaces, session.cwd);
+      return workspaceOf(workspaces, cwd);
     };
     const names: string[] = [];
-    const byName = new Map<string, SessionRecord[]>();
+    const byName = new Map<string, Item[]>();
     for (const group of groups) {
       if (!byName.has(group.name)) {
         byName.set(group.name, []);
         names.push(group.name);
       }
     }
-    const ungrouped: SessionRecord[] = [];
-    for (const session of list) {
-      const name = groupNameFor(session);
+    const ungrouped: Item[] = [];
+    for (const item of list) {
+      const name = groupNameFor(item.cwd);
       if (!name) {
-        ungrouped.push(session);
+        ungrouped.push(item);
         continue;
       }
       if (!byName.has(name)) {
         byName.set(name, []);
         names.push(name);
       }
-      byName.get(name)?.push(session);
+      byName.get(name)?.push(item);
     }
     return { names, byName, ungrouped };
   }, [list, groups, workspaces]);
@@ -167,27 +222,48 @@ export function SessionsView({ sessions, groups, workspaces, codexSessions, tick
   const isRemoteSource = (source: string | null): boolean =>
     !!source && (!localSource || source.toLowerCase() !== localSource.toLowerCase());
 
-  const liveCodex = codexSessions.filter((session) => session.status !== "ended");
   const total = counts.waiting + counts.idle + counts.active;
 
-  const renderCard = (session: SessionRecord) => (
-    <SessionCard
-      key={session.sessionId}
-      session={session}
-      workspace={workspaceOf(workspaces, session.cwd)}
-      showSource={isRemoteSource(session.source)}
-      stale={isStale(session)}
-      onOpen={onOpen}
-      onArchive={onArchive}
-      onDelete={onDelete}
-      onFocus={onFocus}
-      onRename={onRename}
-    />
-  );
+  const renderCard = (item: Item) => {
+    if (item.kind === "codex") {
+      const thread = item.thread;
+      return (
+        <CodexCard
+          key={`codex-${thread.id}`}
+          session={thread}
+          workspace={workspaceOf(workspaces, thread.cwd)}
+          codexAppRunning={codexAppRunning}
+          onOpen={onOpenCodex}
+          onRename={onRenameCodex}
+          onArchive={onArchiveCodex}
+          onUnarchive={onUnarchiveCodex}
+          onDelete={onDeleteCodex}
+        />
+      );
+    }
+    const session = item.session;
+    const parent = session.forkOf ? sessions[session.forkOf] : undefined;
+    const forkParentName = session.forkOf ? (parent ? nameOf(parent) : session.forkOf.slice(0, 8)) : null;
+    return (
+      <SessionCard
+        key={session.sessionId}
+        session={session}
+        workspace={workspaceOf(workspaces, session.cwd)}
+        showSource={isRemoteSource(session.source)}
+        stale={isStale(session)}
+        forkParentName={forkParentName}
+        onOpen={onOpen}
+        onArchive={onArchive}
+        onDelete={onDelete}
+        onFocus={onFocus}
+        onRename={onRename}
+      />
+    );
+  };
 
-  const renderGroup = (name: string, items: SessionRecord[]) => {
+  const renderGroup = (name: string, items: Item[]) => {
     const collapsed = collapsedGroups.includes(name);
-    const needAttention = items.filter((session) => session.status === "waiting" || session.status === "idle").length;
+    const needAttention = items.filter((item) => item.status === "waiting" || item.status === "idle").length;
     return (
       <section key={name} className={`group ${collapsed ? "group--collapsed" : ""}`}>
         <h2>
@@ -238,8 +314,9 @@ export function SessionsView({ sessions, groups, workspaces, codexSessions, tick
             {CLIENT_FILTERS.map((item) => (
               <option key={item.key} value={item.key}>
                 {item.label}
-                {item.key === "hub" && counts.hub > 0 ? ` (${counts.hub})` : ""}
-                {item.key === "share" && counts.share > 0 ? ` (${counts.share})` : ""}
+                {item.key === "hub" && hubLive > 0 ? ` (${hubLive})` : ""}
+                {item.key === "share" && shareLive > 0 ? ` (${shareLive})` : ""}
+                {item.key === "codex" && codexLive > 0 ? ` (${codexLive})` : ""}
               </option>
             ))}
           </select>
@@ -262,6 +339,11 @@ export function SessionsView({ sessions, groups, workspaces, codexSessions, tick
           Hub runs are headless Claude Code sessions launched by delegated tasks. They never notify, live in the Delegated view and are hidden from the all-clients list.
         </p>
       )}
+      {clientFilter === "codex" && (
+        <p className="callout">
+          Codex threads read from ~/.codex/sessions — app, CLI and exec runs. They join their workspace group and are read-only from here.
+        </p>
+      )}
 
       {grouped.names.map((name) => {
         const items = grouped.byName.get(name) ?? [];
@@ -272,24 +354,20 @@ export function SessionsView({ sessions, groups, workspaces, codexSessions, tick
       {list.length === 0 && filter === "all" && clientFilter === "all" && query.trim().length === 0 && (
         <p className="empty">No live Claude Code sessions. Start one in a terminal, VS Code or Claude Desktop and it appears here.</p>
       )}
-      {list.length === 0 && (filter !== "all" || clientFilter !== "all" || query.trim().length > 0) && <p className="empty">Nothing matches this filter.</p>}
-
-      {filter === "all" && liveCodex.length > 0 && (
-        <section className="group group--codex">
-          <h2>
-            <span className="group__title group__title--static">
-              <span className="group__name">Codex threads</span>
-              <span className="group__count">{liveCodex.length}</span>
-              <span className="group__note">read from ~/.codex/sessions · app, CLI and exec runs · not started by the hub</span>
-            </span>
-          </h2>
-          <div className="grid">
-            {liveCodex.map((session) => (
-              <CodexCard key={session.id} session={session} workspace={workspaceOf(workspaces, session.cwd)} />
-            ))}
-          </div>
-        </section>
+      {list.length === 0 && filter === "all" && clientFilter !== "all" && query.trim().length === 0 && counts.ended > 0 && (
+        <p className="empty">
+          No live {CLIENT_FILTERS.find((item) => item.key === clientFilter)?.label ?? "sessions"}. {counts.ended} ended —{" "}
+          <button className="linklike" onClick={() => setFilter("ended")}>
+            open the Ended pill
+          </button>
+          .
+        </p>
       )}
+      {list.length === 0 &&
+        !(filter === "all" && clientFilter === "all" && query.trim().length === 0) &&
+        !(filter === "all" && clientFilter !== "all" && query.trim().length === 0 && counts.ended > 0) && (
+          <p className="empty">Nothing matches this filter.</p>
+        )}
     </div>
   );
 }

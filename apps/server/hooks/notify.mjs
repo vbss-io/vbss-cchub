@@ -25,10 +25,10 @@ function readSessionMeta(dir, sessionId) {
   return { name: best?.name ?? null, nameSource: best?.nameSource ?? null };
 }
 
-function sessionTitle(sessionId, aiTitle) {
+function sessionTitle(sessionId, transcriptTitle, customTitle) {
   const meta = readSessionMeta(join(homedir(), ".claude", "sessions"), sessionId);
   const userName = meta.nameSource !== "derived" ? meta.name : null;
-  return userName ?? aiTitle ?? meta.name ?? null;
+  return customTitle ?? userName ?? transcriptTitle ?? meta.name ?? null;
 }
 
 if (process.env.HUB_SKIP === "1") process.exit(0);
@@ -102,7 +102,7 @@ function resolveHostInfo(sessionId) {
 }
 
 function readTranscript(path) {
-  const out = { title: null, model: null, tokensIn: null, tokensOut: null, contextTokens: null };
+  const out = { title: null, customTitle: null, model: null, tokensIn: null, tokensOut: null, contextTokens: null };
   if (!path) return out;
   let lines;
   try {
@@ -113,6 +113,8 @@ function readTranscript(path) {
   let tokensIn = 0;
   let tokensOut = 0;
   let lastUsage = null;
+  let aiTitle = null;
+  let customTitle = null;
   for (const line of lines) {
     let entry;
     try {
@@ -120,7 +122,8 @@ function readTranscript(path) {
     } catch {
       continue;
     }
-    if (entry.type === "ai-title" && typeof entry.aiTitle === "string") out.title = entry.aiTitle;
+    if (entry.type === "ai-title" && typeof entry.aiTitle === "string") aiTitle = entry.aiTitle;
+    if (entry.type === "custom-title" && typeof entry.customTitle === "string") customTitle = entry.customTitle;
     if (entry.type === "assistant" && entry.message) {
       if (typeof entry.message.model === "string") out.model = entry.message.model;
       const usage = entry.message.usage;
@@ -131,6 +134,8 @@ function readTranscript(path) {
       }
     }
   }
+  out.title = customTitle ?? aiTitle;
+  out.customTitle = customTitle;
   if (lastUsage) {
     out.contextTokens =
       (lastUsage.input_tokens ?? 0) +
@@ -183,7 +188,7 @@ const body = {
   hostPid,
   shellPid,
   message: input.message ?? (input.agent_id ? null : lastAssistant),
-  title: sessionTitle(sessionId, transcript.title),
+  title: sessionTitle(sessionId, transcript.title, transcript.customTitle),
   model: transcript.model,
   tokensIn: transcript.tokensIn,
   tokensOut: transcript.tokensOut,

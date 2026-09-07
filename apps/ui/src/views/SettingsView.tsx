@@ -178,6 +178,22 @@ export function SettingsView(props: Props) {
             </select>
             <small>Applies to what you and your own agents delegate. Shares follow their own trust level.</small>
           </label>
+          <label className="field">
+            <span>Run timeout (minutes)</span>
+            <input
+              className="in"
+              type="number"
+              min={5}
+              max={720}
+              value={settings?.runTimeoutMinutes ?? 60}
+              disabled={!enabled}
+              onChange={(event) => {
+                const minutes = Number(event.target.value);
+                if (Number.isFinite(minutes) && minutes >= 5 && minutes <= 720) void props.onSaveSettings({ runTimeoutMinutes: minutes });
+              }}
+            />
+            <small>A delegated run is cancelled after this long; a warning lands in the log 5 minutes before. 5–720, default 60.</small>
+          </label>
         </div>
       </section>
 
@@ -369,8 +385,9 @@ export function SettingsView(props: Props) {
           <dd className="path">{tunnel?.installed ? tunnel.binary : "not installed yet; Start tunnel downloads it into the hub data folder"}</dd>
           <dt>Tunnel</dt>
           <dd>
-            <span className={`tag ${tunnel?.state === "running" ? "tag--go" : "tag--muted"}`}>{tunnel?.state ?? "unknown"}</span>{" "}
+            <span className={`tag ${tunnel?.state === "running" ? "tag--go" : tunnel?.state === "error" ? "tag--hold" : "tag--muted"}`}>{tunnel?.state ?? "unknown"}</span>{" "}
             {tunnel?.publicUrl && <span className="path">{tunnel.publicUrl}</span>}
+            {tunnel?.error && <span className="error small">{tunnel.error.includes("ERR_NGROK_314") ? "ngrok refused the custom hostname: free accounts can only use their .ngrok-free.app domain. Clear the domain or upgrade the plan." : tunnel.error}</span>}
           </dd>
         </dl>
         <h3>Identity</h3>
@@ -384,8 +401,9 @@ export function SettingsView(props: Props) {
         <h3>ngrok account</h3>
         <p className="hint">
           Leave the authtoken empty to use the token already saved in your ngrok config. A free ngrok account includes one static domain
-          (dashboard.ngrok.com › Domains): set it here so the public link stops looking random, which makes other assistants less suspicious of it.
-          Changes apply the next time you start the tunnel.
+          ending in <code>.ngrok-free.app</code> (dashboard.ngrok.com › Domains): set it here so the public link stops looking random, which
+          makes other assistants less suspicious of it. Custom hostnames (your own domain or a bare name) only work on paid ngrok plans; the
+          tunnel fails with ERR_NGROK_314 otherwise. Changes apply the next time you start the tunnel.
         </p>
         <div className="form">
           <div className="frow frow--fields">
@@ -394,7 +412,7 @@ export function SettingsView(props: Props) {
               <input className="in" type="password" autoComplete="off" placeholder="paste to replace" value={ngrokToken} onChange={(event) => setNgrokToken(event.target.value)} />
             </label>
             <label className="field">
-              <span>Static domain (optional)</span>
+              <span>Static domain (optional · custom hostnames need a paid plan)</span>
               <input className="in" placeholder="your-name.ngrok-free.app" value={ngrokDomain} onChange={(event) => setNgrokDomain(event.target.value)} />
             </label>
           </div>
@@ -489,10 +507,6 @@ export function SettingsView(props: Props) {
           <dt>Hub</dt>
           <dd>
             <code>{hubUrl}</code>
-          </dd>
-          <dt>Docs</dt>
-          <dd>
-            <code>apps/server/DELEGATION.md</code> in the repo
           </dd>
           <dt>Support</dt>
           <dd>

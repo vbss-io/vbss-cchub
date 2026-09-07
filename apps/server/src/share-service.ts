@@ -362,6 +362,8 @@ export function implementShare(share: ShareRecord, prompt: string, title: string
     sandbox: null,
     title: title ? title.trim().slice(0, SHARE_MAX_TITLE_CHARS) : null,
     source: `${SHARE_CREATED_BY_PREFIX}${share.id}:${share.label} · ${asker}`,
+    originClient: "share",
+    originSessionId: share.sessionId,
   });
   const request = createShareRequest({
     shareId: share.id,

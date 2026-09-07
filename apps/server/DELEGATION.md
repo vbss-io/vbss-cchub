@@ -47,7 +47,8 @@ HUB_DELEGATION=1 npm run dev -w @cch/server
 | `HUB_SECOND_BRAIN` | unset | Vault root for `fontes/hub/<date>.md`; the saved setting wins |
 | `HUB_CLAUDE_BIN` | `claude` | Claude Code executable |
 | `HUB_CODEX_BIN` | newest `codex.exe` under `%LOCALAPPDATA%\OpenAI\Codex\bin` | Codex CLI executable |
-| `HUB_DELEGATION_TIMEOUT_MIN` | `30` | A run longer than this is cancelled (`0` disables) |
+| `HUB_DELEGATION_TIMEOUT_MIN` | unset | Overrides the run timeout; when unset the `runTimeoutMinutes` setting wins (default 60, min 5, max 720). `0` disables |
+| `HUB_DEV_SEED` | unset | `1` lets `POST /hook` accept an `updatedAt` override so `dev-preview.mjs --seed` can backdate sessions |
 | `HUB_STALE_HOURS` | `4` | Sessions silent for longer are flagged stale (inactive) |
 | `HUB_TRUSTED_ORIGINS` | unset | Extra browser origins, comma-separated (a Vite dev server) |
 | `HUB_SHARE_PORT` | `4318` | Port of the share endpoint (LAN + ngrok target); only `/share/*` lives there |
@@ -296,6 +297,25 @@ silent by default. The always-on-top widget is unchanged.
 
 `tauri build` produces both an MSI (per-machine, needs UAC) and an NSIS setup (per-user, installs
 under `%LOCALAPPDATA%\VBSS CCHUB` without elevation; `/S` for silent).
+
+## Dev preview
+
+`scripts/dev-preview.mjs` (repo root) brings up an isolated hub + UI that never touches the installed
+hub on `4317/4318` or your real `~/.codex`:
+
+```bash
+node scripts/dev-preview.mjs --seed
+```
+
+- Server on `14317` (+ share `14318`), Vite UI on `15173` with `VITE_HUB_URL` pointed at the preview hub.
+- `HUB_DATA_DIR` defaults to `.tmp/dev-preview` (override with `--data <dir>`), so the preview keeps its
+  own `hub.db`.
+- `HUB_TRUSTED_ORIGINS` already allows the Vite origin, `HUB_EMPTY_TTL_HOURS=0` keeps seeded empty
+  sessions, `HUB_SKIP=1` keeps the preview out of the real hub, and `CODEX_HOME` points at a throwaway
+  temp folder unless you pass `--real-codex`.
+- `--seed` POSTs a few sessions and reports through the real endpoints; historical timestamps ride the
+  `updatedAt` override enabled by `HUB_DEV_SEED=1`.
+- `Ctrl+C` stops the server and Vite and removes the temp Codex home.
 
 ## Tests
 

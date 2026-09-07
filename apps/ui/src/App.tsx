@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { archiveSession, createGroup, deleteGroup, deleteSession, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, renameSession, reorderGroups, setHooks, subscribe, updateGroup, type HooksStatus, type ShareStreamEvent } from "./api";
+import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, renameCodexThread, renameSession, reorderGroups, setHooks, subscribe, unarchiveCodexThread, updateGroup, type HooksStatus, type ShareStreamEvent } from "./api";
 import { isHubRun } from "./clients";
 import { BrandMark, Wordmark } from "./components/BrandMark";
+import { CodexDrawer } from "./components/CodexDrawer";
 import { RuntimeBar } from "./components/RuntimeBar";
 import { SessionDrawer } from "./components/SessionDrawer";
 import { WhatsNew } from "./components/WhatsNew";
-import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, listReports, listTasks, listWorkspaces, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type ShellKind, type TaskRecord, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
+import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type ShellKind, type TaskRecord, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
 import { IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconWorkspaces } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { notify, playSound, unlockAudio } from "./notify";
@@ -87,6 +88,7 @@ export function App() {
   const [showWhatsNew, setShowWhatsNew] = useState(false);
   const [seenVersion, setSeenVersion] = useState(() => localStorage.getItem("hub.seenVersion"));
   const [drawer, setDrawer] = useState<string | null>(null);
+  const [codexDrawer, setCodexDrawer] = useState<string | null>(null);
   const [shareTick, setShareTick] = useState(0);
   const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
   const [autostart, setAutostartState] = useState<AutostartStatus | null>(null);
@@ -103,6 +105,16 @@ export function App() {
 
   const navigate = useCallback((view: View, param?: string | null) => {
     location.hash = param ? `#/${view}/${param}` : `#/${view}`;
+  }, []);
+
+  const openSession = useCallback((id: string) => {
+    setCodexDrawer(null);
+    setDrawer(id);
+  }, []);
+
+  const openCodex = useCallback((id: string) => {
+    setDrawer(null);
+    setCodexDrawer(id);
   }, []);
 
   useEffect(() => {
@@ -237,6 +249,9 @@ export function App() {
           }
           return { ...prev, [session.sessionId]: session };
         });
+      },
+      onCodex: (list) => {
+        if (mounted) setCodexSessions(list);
       },
       onRemoved: (sessionId) =>
         setSessions((prev) => {
@@ -378,9 +393,20 @@ export function App() {
 
   const current = VIEWS.find((item) => item.key === route.view) ?? VIEWS[0]!;
   const drawerSession = drawer ? (sessions[drawer] ?? null) : null;
+  const codexDrawerThread = codexDrawer ? (codexSessions.find((thread) => thread.id === codexDrawer) ?? null) : null;
+  const headRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const head = headRef.current;
+    if (!head) return;
+    const apply = () => document.documentElement.style.setProperty("--head-h", `${head.offsetHeight}px`);
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(head);
+    return () => observer.disconnect();
+  }, []);
 
   return (
-    <div className="shell">
+    <div className={`shell ${drawerSession || codexDrawerThread ? "shell--panel" : ""}`}>
       <nav className="nav" aria-label="Main">
         <div className="nav__brand">
           <BrandMark size={30} />
@@ -420,7 +446,7 @@ export function App() {
       </nav>
 
       <div className="main">
-        <header className="head">
+        <header className="head" ref={headRef}>
           <div className="head__title">
             <h1>{current.label}</h1>
             <p className="head__sub">{current.subtitle}</p>
@@ -446,12 +472,18 @@ export function App() {
               groups={groups}
               workspaces={workspaces}
               codexSessions={codexSessions}
+              codexAppRunning={runtimes?.codexApp.running ?? false}
               tick={tick}
-              onOpen={setDrawer}
+              onOpen={openSession}
               onFocus={(id) => void focusSession(id)}
               onArchive={(id) => void archiveSession(id)}
               onDelete={(id) => void deleteSession(id)}
               onRename={(id, title) => void renameSession(id, title)}
+              onOpenCodex={openCodex}
+              onRenameCodex={(id, title) => void renameCodexThread(id, title)}
+              onArchiveCodex={(id) => void archiveCodexThread(id)}
+              onUnarchiveCodex={(id) => void unarchiveCodexThread(id)}
+              onDeleteCodex={(id) => void deleteCodexThread(id)}
             />
           )}
           {route.view === "flow" && (
@@ -460,17 +492,23 @@ export function App() {
               codexSessions={codexSessions}
               tasks={tasks}
               workspaces={workspaces}
-              onOpenSession={setDrawer}
+              groups={groups}
+              onOpenSession={openSession}
               onOpenTask={(id) => navigate("tasks", id)}
+              onOpenCodex={openCodex}
+              onFocus={(id) => void focusSession(id)}
+              onOpenWorkspace={(name) => void openWorkspace(name)}
             />
           )}
           {route.view === "tasks" && (
             <TasksView
               tasks={tasks}
+              sessions={sessions}
               enabled={hubEnabled}
               selectedId={route.param}
               tick={hubTick}
               onSelect={(id) => navigate("tasks", id)}
+              onOpenSession={openSession}
               subscribeRunEvents={subscribeRunEvents}
               onRefresh={loadHub}
               onOpenSettings={() => navigate("settings", "connect")}
@@ -563,6 +601,21 @@ export function App() {
           onShare={(id) => {
             setDrawer(null);
             navigate("share", `new:${id}`);
+          }}
+          onOpenTask={(id) => {
+            setDrawer(null);
+            navigate("tasks", id);
+          }}
+        />
+      )}
+      {codexDrawerThread && (
+        <CodexDrawer
+          thread={codexDrawerThread}
+          workspace={workspaceOf(workspaces, codexDrawerThread.cwd)}
+          onClose={() => setCodexDrawer(null)}
+          onOpenTask={(id) => {
+            setCodexDrawer(null);
+            navigate("tasks", id);
           }}
         />
       )}

@@ -30,8 +30,13 @@ export interface SessionRecord {
   agentsRunning?: number;
   agentsTotal?: number;
   shareLabel?: string | null;
+  forkOf?: string | null;
   forks?: number;
   remoteAsks?: number;
+  delegatedTasks?: number;
+  helperOf?: string | null;
+  helpers?: number;
+  helpersTotal?: number;
   startedAt: number;
   updatedAt: number;
 }
@@ -70,6 +75,8 @@ export type CodexSessionStatus = "active" | "idle" | "ended";
 
 export type CodexClient = "codex-app" | "codex-cli" | "codex-exec" | "codex-vscode";
 
+export type CodexOrigin = "hub" | null;
+
 export interface CodexSessionRecord {
   id: string;
   title: string;
@@ -81,8 +88,14 @@ export interface CodexSessionRecord {
   status: CodexSessionStatus;
   turns: number;
   lastMessage: string | null;
+  file: string;
   startedAt: number;
   updatedAt: number;
+  origin: CodexOrigin;
+  hubTaskId: string | null;
+  customTitle: string | null;
+  archivedAt: number | null;
+  hidden: boolean;
 }
 
 export interface RuntimeGroup {
