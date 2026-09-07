@@ -3395,3 +3395,68 @@ h6.md__h {
 .agent--archived {
   opacity: 0.6;
 }
+
+.view--tasks {
+  grid-template-columns: minmax(300px, max-content) minmax(0, 1fr);
+}
+
+.view--tasks .pane--list {
+  max-width: 560px;
+}
+
+.view--tasks .filters--tight {
+  flex-wrap: nowrap;
+}
+
+.chip--peers {
+  color: var(--pend);
+  border-color: color-mix(in srgb, var(--pend) 50%, transparent);
+}
+
+.chip--worktree {
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand) 45%, transparent);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
+.chip--worktree-merged {
+  color: var(--go);
+  border-color: color-mix(in srgb, var(--go) 45%, transparent);
+}
+
+.worktree__state {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.worktree__state--ok {
+  background: color-mix(in srgb, var(--go) 12%, transparent);
+  color: var(--go);
+}
+
+.worktree__state--warn {
+  background: color-mix(in srgb, var(--pend) 14%, transparent);
+  color: var(--pend);
+}
+
+.worktree__commits {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.worktree__diff {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  overflow-x: auto;
+}

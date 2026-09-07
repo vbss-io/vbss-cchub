@@ -38,6 +38,26 @@ export const ORIGIN_CLIENTS = ["claude-code", "codex", "share"] as const;
 
 export type OriginClient = (typeof ORIGIN_CLIENTS)[number];
 
+export const ISOLATION_MODES = ["shared", "worktree"] as const;
+
+export type Isolation = (typeof ISOLATION_MODES)[number];
+
+export interface WorktreeCommit {
+  sha: string;
+  subject: string;
+}
+
+export interface WorktreeInfo {
+  path: string | null;
+  branch: string | null;
+  baseBranch: string | null;
+  exists: boolean;
+  dirty: boolean;
+  commits: WorktreeCommit[];
+  diffStat: string;
+  mergedAt: number | null;
+}
+
 export interface WorkspaceRepo {
   name: string;
   path: string;
@@ -84,6 +104,11 @@ export interface TaskRecord {
   lastError: string | null;
   runsCount: number;
   archivedAt: number | null;
+  isolation: Isolation;
+  worktreePath: string | null;
+  branch: string | null;
+  baseBranch: string | null;
+  mergedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }

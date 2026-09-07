@@ -19,6 +19,24 @@ export type ReportKind = "progress" | "result" | "blocked" | "note";
 
 export type OriginClient = "claude-code" | "codex" | "share";
 
+export type Isolation = "shared" | "worktree";
+
+export interface WorktreeCommit {
+  sha: string;
+  subject: string;
+}
+
+export interface WorktreeInfo {
+  path: string | null;
+  branch: string | null;
+  baseBranch: string | null;
+  exists: boolean;
+  dirty: boolean;
+  commits: WorktreeCommit[];
+  diffStat: string;
+  mergedAt: number | null;
+}
+
 export interface WorkspaceRepo {
   name: string;
   path: string;
@@ -61,6 +79,11 @@ export interface TaskRecord {
   lastError: string | null;
   runsCount: number;
   archivedAt: number | null;
+  isolation: Isolation;
+  worktreePath: string | null;
+  branch: string | null;
+  baseBranch: string | null;
+  mergedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -108,6 +131,7 @@ export interface TaskDetail {
   task: TaskRecord;
   runs: RunRecord[];
   reports: ReportRecord[];
+  worktree?: WorktreeInfo | null;
 }
 
 export type ShellKind = "bash" | "powershell";
@@ -202,6 +226,15 @@ export const continueTask = (id: string, input: { prompt: string; model?: string
 
 export const cancelTask = (id: string): Promise<{ ok: boolean }> =>
   call("POST", `/tasks/${encodeURIComponent(id)}/cancel`);
+
+export const getWorktree = (id: string): Promise<WorktreeInfo> =>
+  call("GET", `/tasks/${encodeURIComponent(id)}/worktree`);
+
+export const mergeWorktree = (id: string): Promise<TaskRecord> =>
+  call("POST", `/tasks/${encodeURIComponent(id)}/merge`);
+
+export const discardWorktree = (id: string): Promise<TaskRecord> =>
+  call("POST", `/tasks/${encodeURIComponent(id)}/worktree/discard`);
 
 export const archiveTask = (id: string): Promise<TaskRecord> =>
   call("POST", `/tasks/${encodeURIComponent(id)}/archive`);

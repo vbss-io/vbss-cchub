@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { resolve } from "node:path";
 import { listCodexSessions } from "./codex-store.js";
 import { config } from "./config.js";
 import { getSession, listSessions, sessionByPid } from "./db.js";
@@ -7,6 +8,7 @@ import { brainToday } from "./second-brain.js";
 import { runtimeSnapshot } from "./runtimes.js";
 import {
   archiveTask,
+  clearTaskWorktreePath,
   createReport,
   getSettings,
   getTask,
@@ -14,6 +16,7 @@ import {
   listReports,
   listTaskEvents,
   listTasks,
+  markTaskMerged,
   TaskBusyError,
   unarchiveTask,
   updateSettings,
@@ -22,13 +25,15 @@ import {
   resolveTaskId,
 } from "./delegation-store.js";
 import { delegationGuard } from "./delegation-security.js";
-import { abortRun, BadRequestError, NotFoundError, brainNote, delegateTask, startRun } from "./delegation-launch.js";
+import { abortRun, BadRequestError, NotFoundError, brainNote, delegateTask, startRun, repoPathOf } from "./delegation-launch.js";
+import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus, WorktreeError } from "./worktrees.js";
 import { shareRouter } from "./share-routes.js";
 import { systemRouter } from "./system-routes.js";
 export { abortActiveRuns } from "./delegation-launch.js";
 import {
   AUTONOMY_LEVELS,
   CODEX_SANDBOXES,
+  ISOLATION_MODES,
   ORIGIN_CLIENTS,
   PERMISSION_MODES,
   REPORT_KINDS,
@@ -38,6 +43,7 @@ import {
   TASK_STATUSES,
   type Autonomy,
   type CodexSandbox,
+  type Isolation,
   type OriginClient,
   type PermissionMode,
   type ReportKind,
@@ -83,6 +89,10 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[], label: s
 }
 
 const sendError = (res: { status: (code: number) => { json: (body: unknown) => void } }, err: unknown): void => {
+  if (err instanceof WorktreeError) {
+    res.status(err.status).json(err.files ? { error: err.message, files: err.files } : { error: err.message });
+    return;
+  }
   const message = err instanceof Error ? err.message : "request failed";
   res.status(err instanceof BadRequestError ? 400 : err instanceof NotFoundError ? 404 : 500).json({ error: message });
 };
@@ -305,12 +315,27 @@ export function delegationRouter(): Router {
           createdBy: task.createdBy,
           originSessionId: task.originSessionId,
           originClient: task.originClient,
+          isolation: task.isolation,
+          branch: task.branch,
           lastError: task.lastError ? clipText(task.lastError, 300) : null,
           runsCount: task.runsCount,
           reposAttached: task.addDirs.length,
           createdAt: task.createdAt,
           updatedAt: task.updatedAt,
         });
+        const crowd = new Map<string, { path: string; agents: number }>();
+        const bump = (cwd: string | null): void => {
+          if (!cwd) return;
+          const key = process.platform === "win32" ? resolve(cwd).toLowerCase() : resolve(cwd);
+          const entry = crowd.get(key);
+          if (entry) entry.agents += 1;
+          else crowd.set(key, { path: cwd, agents: 1 });
+        };
+        for (const session of live) if (session.helperOf == null) bump(session.cwd);
+        for (const task of tasks) {
+          if ((task.status === "running" || task.status === "pending") && task.isolation === "shared") bump(task.cwd);
+        }
+        const crowdedFolders = [...crowd.values()].filter((folder) => folder.agents >= 2);
         res.json({
           runtimes,
           sessions: {
@@ -330,6 +355,7 @@ export function delegationRouter(): Router {
             recent: tasks.slice(0, 10).map(taskBrief),
             note: "task entries are brief; use hub_task for the full prompt, run log and attached repos",
           },
+          crowdedFolders,
           reports: listReports({ limit: 10 }),
           workspaces: workspaces.map((w) => ({ name: w.name, repos: w.repos.length })),
         });
@@ -370,12 +396,78 @@ export function delegationRouter(): Router {
   });
 
   router.get("/tasks/:id", (req, res) => {
-    const detail = getTaskDetail(req.params.id);
-    if (!detail) {
-      res.status(404).json({ error: "task not found" });
-      return;
-    }
-    res.json(detail);
+    void (async () => {
+      const detail = getTaskDetail(req.params.id);
+      if (!detail) {
+        res.status(404).json({ error: "task not found" });
+        return;
+      }
+      try {
+        const worktree = detail.task.isolation === "worktree" ? await worktreeStatus(detail.task) : null;
+        res.json({ ...detail, worktree });
+      } catch (err) {
+        sendError(res, err);
+      }
+    })();
+  });
+
+  router.get("/tasks/:id/worktree", (req, res) => {
+    void (async () => {
+      const task = getTask(req.params.id);
+      if (!task || task.isolation !== "worktree") {
+        res.status(404).json({ error: "task has no worktree" });
+        return;
+      }
+      try {
+        res.json(await worktreeStatus(task));
+      } catch (err) {
+        sendError(res, err);
+      }
+    })();
+  });
+
+  router.post("/tasks/:id/merge", (req, res) => {
+    void (async () => {
+      const task = getTask(req.params.id);
+      if (!task) {
+        res.status(404).json({ error: "task not found" });
+        return;
+      }
+      if (task.status === "running" || task.status === "pending") {
+        res.status(409).json({ error: "cannot merge a running or pending task" });
+        return;
+      }
+      try {
+        await mergeTaskWorktree(task);
+        const updated = markTaskMerged(task.id);
+        broadcast("delegation", { taskId: task.id });
+        res.json(updated);
+      } catch (err) {
+        sendError(res, err);
+      }
+    })();
+  });
+
+  router.post("/tasks/:id/worktree/discard", (req, res) => {
+    void (async () => {
+      const task = getTask(req.params.id);
+      if (!task) {
+        res.status(404).json({ error: "task not found" });
+        return;
+      }
+      if (task.status === "running" || task.status === "pending") {
+        res.status(409).json({ error: "cannot discard a running or pending task" });
+        return;
+      }
+      try {
+        await discardTaskWorktree(task, repoPathOf(task));
+        const updated = clearTaskWorktreePath(task.id);
+        broadcast("delegation", { taskId: task.id });
+        res.json(updated);
+      } catch (err) {
+        sendError(res, err);
+      }
+    })();
   });
 
   router.get("/tasks/:id/events", (req, res) => {
@@ -406,6 +498,7 @@ export function delegationRouter(): Router {
           sandbox: oneOf<CodexSandbox>(body.sandbox, CODEX_SANDBOXES, "sandbox"),
           title: asString(body.title),
           source: asString(body.source),
+          isolation: oneOf<Isolation>(body.isolation, ISOLATION_MODES, "isolation"),
           originSessionId: origin.originSessionId,
           originClient: origin.originClient,
         });

@@ -195,8 +195,10 @@ const SESSION_SELECT = `
     (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.session_id AND a.status = 'running') AS agents_running,
     (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.session_id) AS agents_total,
     (SELECT COUNT(*) FROM hub_share_forks f WHERE f.parent_session_id = s.session_id) AS forks,
+    (SELECT COUNT(*) FROM hub_share_forks f JOIN sessions fs ON fs.session_id = f.session_id WHERE f.parent_session_id = s.session_id AND fs.status != 'ended') AS forks_live,
     (SELECT COUNT(*) FROM hub_share_requests r WHERE r.parent_session_id = s.session_id) AS remote_asks,
     (SELECT COUNT(*) FROM hub_tasks dt WHERE dt.origin_session_id = s.session_id) AS delegated,
+    (SELECT COUNT(*) FROM hub_tasks dt WHERE dt.origin_session_id = s.session_id AND dt.status IN ('running', 'pending')) AS delegated_running,
     (SELECT parent_session_id FROM hub_share_forks f WHERE f.session_id = s.session_id LIMIT 1) AS fork_of,
     (CASE WHEN ${isHelper("s")} THEN ${parentOf("s")} ELSE NULL END) AS helper_of,
     (SELECT COUNT(*) FROM sessions h WHERE ${isHelper("h")} AND h.status != 'ended' AND ${parentOf("h")} = s.session_id) AS helpers,
@@ -223,8 +225,10 @@ interface SessionRow {
   transcript_path: string | null;
   share_label: string | null;
   forks: number;
+  forks_live: number;
   remote_asks: number;
   delegated: number;
+  delegated_running: number;
   fork_of: string | null;
   helper_of: string | null;
   helpers: number;
@@ -249,8 +253,10 @@ const toRecord = (row: SessionRow): SessionRecord => ({
   shareLabel: row.share_label,
   forkOf: row.fork_of ?? null,
   forks: row.forks ?? 0,
+  forksLive: row.forks_live ?? 0,
   remoteAsks: row.remote_asks ?? 0,
   delegatedTasks: row.delegated ?? 0,
+  delegatedRunning: row.delegated_running ?? 0,
   helperOf: row.helper_of ?? null,
   helpers: row.helpers ?? 0,
   helpersTotal: row.helpers_total ?? 0,

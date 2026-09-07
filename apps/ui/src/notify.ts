@@ -11,6 +11,7 @@ export async function openExternal(url: string): Promise<void> {
 }
 
 export const COFFEE_URL = "https://www.buymeacoffee.com/vbss.io";
+export const GITHUB_URL = "https://github.com/vbss-io/vbss-cchub";
 
 export async function notify(title: string, body: string): Promise<void> {
   if (!inTauri()) return;

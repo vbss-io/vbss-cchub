@@ -6,6 +6,7 @@ import { SessionCard } from "../components/SessionCard";
 import type { WorkspaceRecord } from "../delegation";
 import { IconSearch } from "../icons";
 import { isEmpty, isStale } from "../stale";
+import { folderPeers } from "../peers";
 import type { CodexSessionRecord, GroupRecord, SessionRecord, SessionStatus } from "../types";
 import { workspaceOf } from "../wsmatch";
 
@@ -186,6 +187,7 @@ export function SessionsView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, codexSessions, filter, clientFilter, sort, query, tick]);
 
+  const sessionValues = useMemo(() => Object.values(sessions), [sessions]);
   const grouped = useMemo(() => {
     const groupNameFor = (cwd: string | null): string | null => {
       const lower = (cwd ?? "").toLowerCase().replace(HOME_PREFIX, "");
@@ -251,6 +253,7 @@ export function SessionsView({
         workspace={workspaceOf(workspaces, session.cwd)}
         showSource={isRemoteSource(session.source)}
         stale={isStale(session)}
+        peers={folderPeers(session.cwd, sessionValues, [], { sessionId: session.sessionId })}
         forkParentName={forkParentName}
         onOpen={onOpen}
         onArchive={onArchive}

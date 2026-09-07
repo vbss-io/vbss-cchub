@@ -1,7 +1,7 @@
 import { userInfo } from "node:os";
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fixtures, makeSandbox, sandboxEnv, serverDir, startServer, waitFor, type RunningServer } from "./helpers.js";
@@ -261,6 +261,59 @@ describe("hub surface", () => {
     assert.equal((await http("GET", `/delegation/tasks/${id.slice(0, 8)}/events`)).status, 200);
     assert.equal((await http("GET", `/delegation/tasks/${id.slice(0, 3)}`)).status, 404);
     assert.equal((await http("GET", "/delegation/tasks/zzzzzzzz")).status, 404);
+  });
+
+  it("runs a task in an isolated worktree, exposes it, merges and discards", async () => {
+    const git = (cwd: string, ...args: string[]): string => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+    git(box.repoA, "init", "-b", "main");
+    git(box.repoA, "config", "user.name", "Test");
+    git(box.repoA, "config", "user.email", "test@example.com");
+    writeFileSync(join(box.repoA, "seed.txt"), "seed\n");
+    git(box.repoA, "add", "-A");
+    git(box.repoA, "commit", "-m", "seed");
+
+    const noRepo = await http("POST", "/delegation/tasks", { body: { prompt: "x", workspace: "pilot", isolation: "worktree" } });
+    assert.equal(noRepo.status, 400);
+
+    const created = await http("POST", "/delegation/tasks", {
+      body: { prompt: "isolated please", workspace: "pilot", repo: "repo-a", isolation: "worktree", source: "test" },
+    });
+    assert.equal(created.status, 201);
+    const detail = created.json as Detail & { task: { isolation: string; worktreePath: string | null; branch: string | null; baseBranch: string | null } };
+    const id = detail.task.id;
+    const worktreePath = detail.task.worktreePath ?? "";
+    assert.equal(detail.task.isolation, "worktree");
+    assert.equal(detail.task.branch, `hub/${id.slice(0, 8)}`);
+    assert.equal(detail.task.baseBranch, "main");
+    assert.ok(worktreePath.length > 0 && existsSync(worktreePath));
+    await waitSettled(id);
+
+    const wtRes = await http("GET", `/delegation/tasks/${id}/worktree`);
+    assert.equal(wtRes.status, 200);
+    assert.equal((wtRes.json as { exists: boolean }).exists, true);
+
+    const embedded = (await http("GET", `/delegation/tasks/${id}`)).json as { worktree: { exists: boolean } | null };
+    assert.equal(embedded.worktree?.exists, true);
+
+    const nothing = await http("POST", `/delegation/tasks/${id}/merge`);
+    assert.equal(nothing.status, 409);
+    assert.match((nothing.json as { error: string }).error, /nothing to merge/);
+
+    git(worktreePath, "config", "user.name", "Agent");
+    git(worktreePath, "config", "user.email", "agent@example.com");
+    writeFileSync(join(worktreePath, "from-agent.txt"), "done\n");
+    git(worktreePath, "add", "-A");
+    git(worktreePath, "commit", "-m", "agent work");
+
+    const merged = await http("POST", `/delegation/tasks/${id}/merge`);
+    assert.equal(merged.status, 200);
+    assert.equal(typeof (merged.json as { mergedAt: number }).mergedAt, "number");
+    assert.ok(existsSync(join(box.repoA, "from-agent.txt")));
+
+    const discarded = await http("POST", `/delegation/tasks/${id}/worktree/discard`);
+    assert.equal(discarded.status, 200);
+    assert.equal((discarded.json as { worktreePath: string | null }).worktreePath, null);
+    assert.equal(existsSync(worktreePath), false);
   });
 
   it("archives a settled task, hides it from the default list and validates the run timeout", async () => {

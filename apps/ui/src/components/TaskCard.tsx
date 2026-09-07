@@ -1,6 +1,6 @@
 import { type MouseEvent } from "react";
 import type { TaskRecord, TaskStatus } from "../delegation";
-import { taskArchivedAt } from "../delegation-actions";
+import { taskArchivedAt, taskBranch, taskIsolation, taskMergedAt } from "../delegation-actions";
 import { IconCode, IconCodex } from "../icons";
 import { relativeTime } from "../time";
 import type { SessionRecord } from "../types";
@@ -77,9 +77,13 @@ interface Props {
   onCancel: (id: string) => void;
   onArchive: (id: string) => void;
   onRetry: (task: TaskRecord, mode: RetryMode) => void;
+  peers?: number;
 }
 
-export function TaskCard({ task, origin, selected, archiveSupported, busy, onSelect, onOpenSession, onCancel, onArchive, onRetry }: Props) {
+export function TaskCard({ task, origin, selected, archiveSupported, busy, peers = 0, onSelect, onOpenSession, onCancel, onArchive, onRetry }: Props) {
+  const branch = taskBranch(task);
+  const isolated = taskIsolation(task) === "worktree";
+  const merged = taskMergedAt(task) != null;
   const stop = (event: MouseEvent) => event.stopPropagation();
   const running = inFlight(task.status);
   const archived = taskArchivedAt(task) != null;
@@ -108,6 +112,16 @@ export function TaskCard({ task, origin, selected, archiveSupported, busy, onSel
         <span className="chip chip--ws" title={task.cwd}>
           {chip}
         </span>
+        {isolated && (
+          <span className={`chip chip--worktree ${merged ? "chip--worktree-merged" : ""}`} title={merged ? "Worked in its own git worktree; branch already merged" : "Works in its own git worktree and branch; merge it from the detail pane"}>
+            {merged ? "merged" : "worktree"}{branch ? ` · ${branch}` : ""}
+          </span>
+        )}
+        {!isolated && peers > 0 && (
+          <span className="chip chip--peers" title="Other live agents are working in the same folder right now; edits can collide. Delegate with isolation: worktree to avoid it.">
+            {peers} more here
+          </span>
+        )}
         {origin.sessionId ? (
           <button
             className="chip chip--origin chip--link"
