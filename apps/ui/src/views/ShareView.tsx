@@ -355,6 +355,10 @@ export function ShareView(props: Props) {
 
   const selected = selectedId ? (shares.find((item) => item.id === selectedId) ?? null) : null;
   useEffect(() => {
+    if (!param || formOpen) return;
+    if (shares.some((item) => item.id === param)) setSelectedId(param);
+  }, [param, formOpen, shares]);
+  useEffect(() => {
     if (!selected) {
       setDetailRequests([]);
       return;
