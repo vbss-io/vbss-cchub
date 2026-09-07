@@ -583,97 +583,99 @@ function FlowCanvasView({ sessions, codexSessions, tasks, workspaces, groups, on
       </div>
 
       <div className={`flow__canvas ${selectedNode ? "flow__canvas--panel" : ""}`}>
-        <svg
-          ref={svgRef}
-          className="flow"
-          onWheel={onWheel}
-          onMouseDown={onMouseDown}
-          onMouseMove={onMouseMove}
-          onMouseUp={endDrag}
-          onMouseLeave={() => {
-            endDrag();
-            setHovered(null);
-          }}
-          onClick={() => {
-            if (!drag.current?.moved) setSelected(null);
-          }}
-        >
-          <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
-            {graph.edges.map((edge) => {
-              const from = byId.get(edge.from);
-              const to = byId.get(edge.to);
-              if (!from || !to) return null;
-              const active = highlight != null && highlight.has(edge.from) && highlight.has(edge.to);
-              const dim = highlight != null && !active;
-              return (
-                <path
-                  key={edge.id}
-                  className={`flow__edge ${edge.origin ? "flow__edge--origin" : ""} ${active ? "flow__edge--on" : ""} ${dim ? "flow__edge--dim" : ""}`}
-                  d={edgePath(from, to, orientation)}
-                />
-              );
-            })}
-            {graph.nodes.map((node) => {
-              const isSelected = node.id === selected;
-              const dim = (highlight != null && !highlight.has(node.id)) || (node.dim && node.kind !== "hub" && highlight == null);
-              return (
-                <g
-                  key={node.id}
-                  className={`flow__node flow__node--${node.kind} flow__node--${node.tone} ${isSelected ? "flow__node--sel" : ""} ${dim ? "flow__node--dim" : ""}`}
-                  transform={`translate(${node.x} ${node.y})`}
-                  onClick={(event) => onNodeClick(event, node)}
-                  onDoubleClick={(event) => {
-                    event.stopPropagation();
-                    mainAction(node);
-                  }}
-                  onMouseEnter={() => setHovered(node.id)}
-                >
-                  <rect width={node.w} height={node.h} rx={10} />
-                  <rect className="flow__stripe" width={4} height={node.h} rx={2} />
-                  <g className="flow__icon" transform={`translate(12 ${node.kind === "hub" ? 14 : 13})`}>
-                    {kindIcon(node)}
-                  </g>
-                  <text className="flow__title" x={32} y={node.kind === "hub" ? 24 : 23}>
-                    {node.title}
-                  </text>
-                  <text className="flow__sub" x={32} y={node.kind === "hub" ? 42 : 41}>
-                    {node.subtitle}
-                  </text>
-                  {node.badge && (
-                    <text className="flow__badge" x={node.w - 12} y={23} textAnchor="end">
-                      {node.badge}
-                    </text>
-                  )}
-                  {(() => {
-                    const label = clientBadge(node);
-                    return label ? (
-                      <text className="flow__client" x={node.w - 12} y={41} textAnchor="end">
-                        {label}
-                      </text>
-                    ) : null;
-                  })()}
-                  {(node.kind === "subagents" || node.kind === "taskgroup") && (
-                    <g
-                      className="flow__expander"
-                      transform={`translate(${node.w - 30} ${node.h / 2 - 10})`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        mainAction(node);
-                      }}
-                      onDoubleClick={(event) => event.stopPropagation()}
-                    >
-                      <title>{isExpanded(node) ? "Collapse" : "Expand"}</title>
-                      <rect width={20} height={20} rx={6} />
-                      <text x={10} y={14.5} textAnchor="middle">
-                        {isExpanded(node) ? "−" : "+"}
-                      </text>
+        {graph.nodes.length > 1 && (
+          <svg
+            ref={svgRef}
+            className="flow"
+            onWheel={onWheel}
+            onMouseDown={onMouseDown}
+            onMouseMove={onMouseMove}
+            onMouseUp={endDrag}
+            onMouseLeave={() => {
+              endDrag();
+              setHovered(null);
+            }}
+            onClick={() => {
+              if (!drag.current?.moved) setSelected(null);
+            }}
+          >
+            <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
+              {graph.edges.map((edge) => {
+                const from = byId.get(edge.from);
+                const to = byId.get(edge.to);
+                if (!from || !to) return null;
+                const active = highlight != null && highlight.has(edge.from) && highlight.has(edge.to);
+                const dim = highlight != null && !active;
+                return (
+                  <path
+                    key={edge.id}
+                    className={`flow__edge ${edge.origin ? "flow__edge--origin" : ""} ${active ? "flow__edge--on" : ""} ${dim ? "flow__edge--dim" : ""}`}
+                    d={edgePath(from, to, orientation)}
+                  />
+                );
+              })}
+              {graph.nodes.map((node) => {
+                const isSelected = node.id === selected;
+                const dim = (highlight != null && !highlight.has(node.id)) || (node.dim && node.kind !== "hub" && highlight == null);
+                return (
+                  <g
+                    key={node.id}
+                    className={`flow__node flow__node--${node.kind} flow__node--${node.tone} ${isSelected ? "flow__node--sel" : ""} ${dim ? "flow__node--dim" : ""}`}
+                    transform={`translate(${node.x} ${node.y})`}
+                    onClick={(event) => onNodeClick(event, node)}
+                    onDoubleClick={(event) => {
+                      event.stopPropagation();
+                      mainAction(node);
+                    }}
+                    onMouseEnter={() => setHovered(node.id)}
+                  >
+                    <rect width={node.w} height={node.h} rx={10} />
+                    <rect className="flow__stripe" width={4} height={node.h} rx={2} />
+                    <g className="flow__icon" transform={`translate(12 ${node.kind === "hub" ? 14 : 13})`}>
+                      {kindIcon(node)}
                     </g>
-                  )}
-                </g>
-              );
-            })}
-          </g>
-        </svg>
+                    <text className="flow__title" x={32} y={node.kind === "hub" ? 24 : 23}>
+                      {node.title}
+                    </text>
+                    <text className="flow__sub" x={32} y={node.kind === "hub" ? 42 : 41}>
+                      {node.subtitle}
+                    </text>
+                    {node.badge && (
+                      <text className="flow__badge" x={node.w - 12} y={23} textAnchor="end">
+                        {node.badge}
+                      </text>
+                    )}
+                    {(() => {
+                      const label = clientBadge(node);
+                      return label ? (
+                        <text className="flow__client" x={node.w - 12} y={41} textAnchor="end">
+                          {label}
+                        </text>
+                      ) : null;
+                    })()}
+                    {(node.kind === "subagents" || node.kind === "taskgroup") && (
+                      <g
+                        className="flow__expander"
+                        transform={`translate(${node.w - 30} ${node.h / 2 - 10})`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          mainAction(node);
+                        }}
+                        onDoubleClick={(event) => event.stopPropagation()}
+                      >
+                        <title>{isExpanded(node) ? "Collapse" : "Expand"}</title>
+                        <rect width={20} height={20} rx={6} />
+                        <text x={10} y={14.5} textAnchor="middle">
+                          {isExpanded(node) ? "−" : "+"}
+                        </text>
+                      </g>
+                    )}
+                  </g>
+                );
+              })}
+            </g>
+          </svg>
+        )}
         {graph.nodes.length <= 1 && <p className="empty">Nothing matches this filter. Start a session or clear the filters.</p>}
         {selectedNode && (
           <FlowInspectorPanel
