@@ -316,6 +316,7 @@ const listTasksByStatusStmt = db.prepare(
 const listTasksByStatusActiveStmt = db.prepare(
   `${TASK_SELECT} WHERE t.status = ? AND t.archived_at IS NULL ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`,
 );
+const taskIdsByPrefixStmt = db.prepare(`SELECT id FROM hub_tasks WHERE id LIKE ? ESCAPE '\\' LIMIT 2`);
 const listTasksByOriginStmt = db.prepare(
   `${TASK_SELECT} WHERE t.origin_session_id = ? ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`,
 );
@@ -442,6 +443,16 @@ export function listTasks(
     ? ((includeArchived ? listTasksByStatusStmt : listTasksByStatusActiveStmt).all(options.status, limit) as TaskRow[])
     : ((includeArchived ? listTasksStmt : listTasksActiveStmt).all(limit) as TaskRow[]);
   return rows.map(toTask);
+}
+
+const MIN_PREFIX = 6;
+
+export function resolveTaskId(idOrPrefix: string): string | null {
+  if (getTaskStmt.get(idOrPrefix)) return idOrPrefix;
+  if (idOrPrefix.length < MIN_PREFIX || !/^[0-9a-f-]+$/i.test(idOrPrefix)) return null;
+  const rows = taskIdsByPrefixStmt.all(`${idOrPrefix.replace(/[%_\\]/g, (char) => `\\${char}`)}%`) as { id: string }[];
+  const only = rows.length === 1 ? rows[0] : undefined;
+  return only ? only.id : null;
 }
 
 export function listTasksByOrigin(originSessionId: string, limit = 100): TaskRecord[] {

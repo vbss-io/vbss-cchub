@@ -122,7 +122,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "hub_task",
     description: "Get a delegated task with all its runs (results, errors, session id) and reports.",
-    inputSchema: objectSchema({ taskId: { type: "string" } }, ["taskId"]),
+    inputSchema: objectSchema({ taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" } }, ["taskId"]),
     call: (args) => http("GET", taskPath(args)),
   },
   {
@@ -135,7 +135,7 @@ const TOOLS: ToolDefinition[] = [
     name: "hub_continue",
     description: "Send a follow-up prompt to a delegated task; it resumes the same Claude/Codex session.",
     inputSchema: objectSchema(
-      { taskId: { type: "string" }, prompt: { type: "string" }, model: { type: "string" } },
+      { taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" }, prompt: { type: "string" }, model: { type: "string" } },
       ["taskId", "prompt"],
     ),
     call: (args) => http("POST", taskPath(args, "/continue"), { prompt: args.prompt, model: args.model, ...originFields() }),
@@ -143,13 +143,13 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "hub_cancel",
     description: "Cancel the in-flight run of a delegated task.",
-    inputSchema: objectSchema({ taskId: { type: "string" } }, ["taskId"]),
+    inputSchema: objectSchema({ taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" } }, ["taskId"]),
     call: (args) => http("POST", taskPath(args, "/cancel")),
   },
   {
     name: "hub_task_archive",
     description: "Archive a settled delegated task so it drops out of the default task lists and overview; pass unarchive to bring it back. Running or pending tasks cannot be archived.",
-    inputSchema: objectSchema({ taskId: { type: "string" }, unarchive: { type: "boolean" } }, ["taskId"]),
+    inputSchema: objectSchema({ taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" }, unarchive: { type: "boolean" } }, ["taskId"]),
     call: (args) => http("POST", taskPath(args, args.unarchive === true ? "/unarchive" : "/archive")),
   },
   {
@@ -231,7 +231,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "hub_task_events",
     description: "Streamed log of a delegated task: assistant text, tool calls and status changes for every run, in order.",
-    inputSchema: objectSchema({ taskId: { type: "string" } }, ["taskId"]),
+    inputSchema: objectSchema({ taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" } }, ["taskId"]),
     call: (args) => http("GET", taskPath(args, "/events")),
   },
   {
