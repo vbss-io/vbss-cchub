@@ -11,7 +11,7 @@ import type { CodexSessionRecord, GroupRecord, SessionRecord, SessionStatus } fr
 import { workspaceOf } from "../wsmatch";
 
 type SortKey = "status" | "recent" | "name";
-type FilterKey = SessionStatus | "all" | "archived" | "stale" | "empty";
+type FilterKey = SessionStatus | "all" | "archived" | "stale" | "empty" | "favorites";
 type ClientFilter = "all" | "terminal" | "vscode" | "claude-desktop" | "wsl" | "hub" | "share" | "codex";
 
 const UNGROUPED = "Ungrouped";
@@ -94,6 +94,7 @@ interface Props {
   onArchive: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onRename: (sessionId: string, title: string) => void;
+  onFavorite: (sessionId: string, favorite: boolean) => void;
   onOpenCodex: (id: string) => void;
   onRenameCodex: (id: string, title: string) => void;
   onArchiveCodex: (id: string) => void;
@@ -113,6 +114,7 @@ export function SessionsView({
   onArchive,
   onDelete,
   onRename,
+  onFavorite,
   onOpenCodex,
   onRenameCodex,
   onArchiveCodex,
@@ -137,7 +139,7 @@ export function SessionsView({
     });
   };
 
-  const { counts, list, hubLive, shareLive, codexLive } = useMemo(() => {
+  const { counts, favorites, list, hubLive, shareLive, codexLive } = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const tally: Record<Exclude<Bucket, "hidden">, number> = {
       waiting: 0,
@@ -152,6 +154,7 @@ export function SessionsView({
     let hub = 0;
     let share = 0;
     let codex = 0;
+    let favorited = 0;
     const matchesQuery = (name: string, cwd: string | null, message: string | null): boolean => {
       if (needle.length === 0) return true;
       return `${name} ${cwd ?? ""} ${message ?? ""}`.toLowerCase().includes(needle);
@@ -159,10 +162,17 @@ export function SessionsView({
     for (const session of Object.values(sessions)) {
       if (isHubRun(session.client) && LIVE_BUCKETS.includes(bucketOf(session, "hub"))) hub += 1;
       if (session.client === "share" && LIVE_BUCKETS.includes(bucketOf(session, "share"))) share += 1;
+      if (session.favoriteAt != null && matchesQuery(nameOf(session), session.cwd, session.lastMessage)) {
+        favorited += 1;
+        if (filter === "favorites") {
+          matched.push({ kind: "claude", id: session.sessionId, session, status: session.status, updatedAt: session.updatedAt, name: nameOf(session), cwd: session.cwd });
+        }
+      }
       if (!matchesClient(session, clientFilter) || !matchesQuery(nameOf(session), session.cwd, session.lastMessage)) continue;
       const bucket = bucketOf(session, clientFilter);
       if (bucket === "hidden") continue;
       tally[bucket] += 1;
+      if (filter === "favorites") continue;
       if (filter === "all" ? LIVE_BUCKETS.includes(bucket) : bucket === filter) {
         matched.push({ kind: "claude", id: session.sessionId, session, status: session.status, updatedAt: session.updatedAt, name: nameOf(session), cwd: session.cwd });
       }
@@ -183,7 +193,7 @@ export function SessionsView({
       if (sort === "name") return a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || b.updatedAt - a.updatedAt;
       return sortRank[a.status] - sortRank[b.status] || b.updatedAt - a.updatedAt;
     });
-    return { counts: tally, list: sorted, hubLive: hub, shareLive: share, codexLive: codex };
+    return { counts: tally, favorites: favorited, list: sorted, hubLive: hub, shareLive: share, codexLive: codex };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, codexSessions, filter, clientFilter, sort, query, tick]);
 
@@ -260,6 +270,7 @@ export function SessionsView({
         onDelete={onDelete}
         onFocus={onFocus}
         onRename={onRename}
+        onFavorite={onFavorite}
       />
     );
   };
@@ -306,6 +317,9 @@ export function SessionsView({
           )}
           <button className={`pill pill--archived ${filter === "archived" ? "pill--on" : ""}`} onClick={() => setFilter("archived")}>
             Archived <span className="pill__count">{counts.archived}</span>
+          </button>
+          <button className={`pill pill--favorites ${filter === "favorites" ? "pill--on" : ""}`} onClick={() => setFilter("favorites")} title="Sessions you starred, regardless of status or archive state">
+            Favorites <span className="pill__count">{favorites}</span>
           </button>
         </div>
         <div className="toolbar__right">

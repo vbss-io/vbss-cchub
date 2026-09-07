@@ -18,6 +18,7 @@ import {
   purgeEmptySessions,
   renameSession,
   reorderGroups,
+  setSessionFavorite,
   updateGroup,
 } from "./db.js";
 import { focusWindow } from "./focus.js";
@@ -281,6 +282,18 @@ app.post("/api/sessions/:id/focus", async (req, res) => {
 
 app.post("/api/sessions/:id/archive", (req, res) => {
   const session = archiveSession(req.params.id);
+  if (!session) {
+    res.status(404).json({ error: "not found" });
+    return;
+  }
+  broadcast("session", session);
+  res.json(session);
+});
+
+app.post("/api/sessions/:id/favorite", (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const favorite = body.favorite === true;
+  const session = setSessionFavorite(req.params.id, favorite);
   if (!session) {
     res.status(404).json({ error: "not found" });
     return;

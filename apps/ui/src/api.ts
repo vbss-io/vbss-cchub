@@ -87,6 +87,9 @@ export const focusCodexApp = (): Promise<FocusResult> => send("POST", "/api/code
 export const archiveSession = (sessionId: string): Promise<void> =>
   send("POST", `/api/sessions/${encodeURIComponent(sessionId)}/archive`);
 
+export const setSessionFavorite = (sessionId: string, favorite: boolean): Promise<void> =>
+  send("POST", `/api/sessions/${encodeURIComponent(sessionId)}/favorite`, { favorite });
+
 export const deleteSession = (sessionId: string): Promise<void> =>
   send("DELETE", `/api/sessions/${encodeURIComponent(sessionId)}`);
 

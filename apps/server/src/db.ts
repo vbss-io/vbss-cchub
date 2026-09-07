@@ -57,6 +57,7 @@ for (const [name, type] of [
   ["host_pid", "INTEGER"],
   ["shell_pid", "INTEGER"],
   ["archived_at", "INTEGER"],
+  ["favorite_at", "INTEGER"],
 ] as const) {
   if (!existingColumns.has(name)) db.exec(`ALTER TABLE sessions ADD COLUMN ${name} ${type}`);
 }
@@ -234,6 +235,7 @@ interface SessionRow {
   helpers: number;
   helpers_total: number;
   archived_at: number | null;
+  favorite_at: number | null;
   agents_running: number;
   agents_total: number;
   started_at: number;
@@ -269,6 +271,7 @@ const toRecord = (row: SessionRow): SessionRecord => ({
   tokensOut: row.tokens_out,
   contextTokens: row.context_tokens,
   archivedAt: row.archived_at,
+  favoriteAt: row.favorite_at,
   agentsRunning: row.agents_running ?? 0,
   agentsTotal: row.agents_total ?? 0,
   startedAt: row.started_at,
@@ -450,6 +453,14 @@ const archiveStmt = db.prepare(`UPDATE sessions SET archived_at = ? WHERE sessio
 
 export function archiveSession(sessionId: string): SessionRecord | null {
   archiveStmt.run(Date.now(), sessionId);
+  const row = getStmt.get(sessionId) as SessionRow | undefined;
+  return row ? toRecord(row) : null;
+}
+
+const favoriteStmt = db.prepare(`UPDATE sessions SET favorite_at = ? WHERE session_id = ?`);
+
+export function setSessionFavorite(sessionId: string, favorite: boolean): SessionRecord | null {
+  favoriteStmt.run(favorite ? Date.now() : null, sessionId);
   const row = getStmt.get(sessionId) as SessionRow | undefined;
   return row ? toRecord(row) : null;
 }
