@@ -387,6 +387,10 @@ h3 {
   border-color: var(--pend);
 }
 
+.pill--favorites.pill--on {
+  border-color: var(--pend);
+}
+
 .pill--idle.pill--on {
   border-color: var(--hold);
 }
@@ -971,10 +975,36 @@ h3 {
 .card__name {
   font-weight: 600;
   font-size: 14px;
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.card__star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 2px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.card__star:hover {
+  color: var(--pend);
+}
+
+.card__star--on {
+  color: var(--pend);
+}
+
+.card--favorite {
+  border-left-color: var(--pend);
 }
 
 .card__rename {
