@@ -104,5 +104,5 @@ if (!viteBin) {
   console.error("[ui] vite not found; run npm install first");
   shutdown();
 }
-spawnChild("ui", nodeBin, [viteBin, "--port", String(UI_PORT), "--strictPort"], join(repoRoot, "apps", "ui"), { ...process.env, VITE_HUB_URL: base });
+spawnChild("ui", nodeBin, [viteBin, "--host", "127.0.0.1", "--port", String(UI_PORT), "--strictPort"], join(repoRoot, "apps", "ui"), { ...process.env, VITE_HUB_URL: base });
 console.log(`[ui] starting on ${uiOrigin} (VITE_HUB_URL=${base}); Ctrl+C to stop both`);
