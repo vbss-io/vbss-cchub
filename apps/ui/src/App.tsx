@@ -7,7 +7,7 @@ import { RuntimeBar } from "./components/RuntimeBar";
 import { SessionDrawer } from "./components/SessionDrawer";
 import { WhatsNew } from "./components/WhatsNew";
 import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type ShellKind, type TaskRecord, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
-import { IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconWorkspaces } from "./icons";
+import { IconClose, IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconWorkspaces } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { notify, playSound, unlockAudio } from "./notify";
 import { isEmpty, isStale } from "./stale";
@@ -98,7 +98,9 @@ export function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("hub.theme", theme);
   }, [theme]);
-  const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [toasts, setToasts] = useState<{ id: number; kind: "ok" | "error"; text: string }[]>([]);
+  const toastSeq = useRef(0);
+  const [slotEl, setSlotEl] = useState<HTMLDivElement | null>(null);
   const notifRef = useRef(notifSettings);
   const runListeners = useRef(new Set<(event: RunEventMessage) => void>());
   const shareListeners = useRef(new Set<(event: ShareStreamEvent) => void>());
@@ -138,12 +140,6 @@ export function App() {
     const id = setInterval(() => setTick((value) => value + 1), 60_000);
     return () => clearInterval(id);
   }, []);
-
-  useEffect(() => {
-    if (!notice) return;
-    const id = setTimeout(() => setNotice(null), 6_000);
-    return () => clearTimeout(id);
-  }, [notice]);
 
   const loadHub = useCallback(async () => {
     try {
@@ -343,8 +339,14 @@ export function App() {
     }
   };
 
-  const ok = useCallback((text: string) => setNotice({ kind: "ok", text }), []);
-  const fail = useCallback((text: string) => setNotice({ kind: "error", text }), []);
+  const pushToast = useCallback((kind: "ok" | "error", text: string) => {
+    const id = (toastSeq.current += 1);
+    setToasts((current) => [...current, { id, kind, text }]);
+    window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), kind === "error" ? 8_000 : 4_000);
+  }, []);
+  const dismissToast = useCallback((id: number) => setToasts((current) => current.filter((toast) => toast.id !== id)), []);
+  const ok = useCallback((text: string) => pushToast("ok", text), [pushToast]);
+  const fail = useCallback((text: string) => pushToast("error", text), [pushToast]);
 
   const saveSettings = async (patch: Partial<DelegationSettings>) => {
     try {
@@ -405,8 +407,10 @@ export function App() {
     return () => observer.disconnect();
   }, []);
 
+  const sharePanel = route.view === "share" && route.param != null;
+
   return (
-    <div className={`shell ${drawerSession || codexDrawerThread ? "shell--panel" : ""}`}>
+    <div className={`shell ${drawerSession || codexDrawerThread || sharePanel ? "shell--panel" : ""}`}>
       <nav className="nav" aria-label="Main">
         <div className="nav__brand">
           <BrandMark size={30} />
@@ -462,8 +466,6 @@ export function App() {
             />
           )}
         </header>
-
-        {notice && <p className={`toast toast--${notice.kind}`}>{notice.text}</p>}
 
         <div className="content">
           {route.view === "sessions" && (
@@ -549,6 +551,7 @@ export function App() {
               onOpenTask={(id) => navigate("tasks", id)}
               onNotice={ok}
               onError={fail}
+              panelHost={slotEl}
             />
           )}
           {route.view === "settings" && (
@@ -600,6 +603,8 @@ export function App() {
         </div>
       </div>
 
+      <div className="shell__slot" ref={setSlotEl} />
+
       {drawerSession && (
         <SessionDrawer
           session={drawerSession}
@@ -627,6 +632,19 @@ export function App() {
         />
       )}
       {showWhatsNew && <WhatsNew onClose={() => setShowWhatsNew(false)} />}
+
+      {toasts.length > 0 && (
+        <div className="toasts" aria-live="polite">
+          {toasts.map((toast) => (
+            <div key={toast.id} className={`toast toast--${toast.kind}`} role="status">
+              <span className="toast__text">{toast.text}</span>
+              <button className="toast__close" onClick={() => dismissToast(toast.id)} aria-label="Dismiss">
+                <IconClose />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
