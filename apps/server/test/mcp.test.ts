@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { rmSync } from "node:fs";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { existsSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { makeSandbox, sandboxEnv, serverDir, startServer, waitFor, type RunningServer } from "./helpers.js";
@@ -70,7 +70,7 @@ describe("mcp server", () => {
     mcp.stdin?.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
     const list = await send("tools/list");
     const names = (list.result as { tools: { name: string }[] }).tools.map((tool) => tool.name);
-    for (const name of ["hub_overview", "hub_workspaces", "hub_delegate", "hub_task", "hub_task_events", "hub_continue", "hub_report", "hub_sessions", "hub_session_live", "hub_delete_workspace", "hub_brain_today"]) {
+    for (const name of ["hub_overview", "hub_workspaces", "hub_delegate", "hub_task", "hub_task_merge", "hub_task_events", "hub_continue", "hub_report", "hub_sessions", "hub_session_live", "hub_delete_workspace", "hub_brain_today"]) {
       assert.ok(names.includes(name), `missing ${name}`);
     }
   });
@@ -187,6 +187,41 @@ describe("mcp server", () => {
     assert.equal(restored.isError, false);
     const after = parseText<{ id: string }[]>(await callTool("hub_tasks", { limit: 200 }));
     assert.ok(after.some((task) => task.id === taskId));
+  });
+
+  it("forwards isolation on hub_delegate and merges then discards through hub_task_merge", async () => {
+    const git = (cwd: string, ...args: string[]): string => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+    git(box.repoA, "init", "-b", "main");
+    git(box.repoA, "config", "user.name", "Test");
+    git(box.repoA, "config", "user.email", "test@example.com");
+    writeFileSync(join(box.repoA, "seed.txt"), "seed\n");
+    git(box.repoA, "add", "-A");
+    git(box.repoA, "commit", "-m", "seed");
+
+    const created = parseText<{ task: { id: string; isolation: string; worktreePath: string | null; branch: string } }>(
+      await callTool("hub_delegate", { workspace: "pilot", repo: "repo-a", prompt: "worktree via mcp", isolation: "worktree" }),
+    );
+    assert.equal(created.task.isolation, "worktree");
+    const worktreePath = created.task.worktreePath ?? "";
+    assert.ok(worktreePath.length > 0);
+    await waitFor(async () => {
+      const detail = parseText<{ task: { status: string } }>(await callTool("hub_task", { taskId: created.task.id }));
+      return ["pending", "running"].includes(detail.task.status) ? null : detail;
+    }, 15000);
+
+    git(worktreePath, "config", "user.name", "Agent");
+    git(worktreePath, "config", "user.email", "agent@example.com");
+    writeFileSync(join(worktreePath, "mcp.txt"), "x\n");
+    git(worktreePath, "add", "-A");
+    git(worktreePath, "commit", "-m", "mcp work");
+
+    const merged = await callTool("hub_task_merge", { taskId: created.task.id });
+    assert.equal(merged.isError, false);
+    assert.ok(existsSync(join(box.repoA, "mcp.txt")));
+
+    const discarded = await callTool("hub_task_merge", { taskId: created.task.id, discard: true });
+    assert.equal(discarded.isError, false);
+    assert.equal(existsSync(worktreePath), false);
   });
 
   it("surfaces tool errors without breaking the stream", async () => {

@@ -160,14 +160,16 @@ describe("sessions", () => {
     assert.equal(db.sessionByPid(424243)?.sessionId, "s-origin");
     assert.equal(db.sessionByPid(999999), null);
     assert.equal(db.getSession("s-origin")?.delegatedTasks, 0);
+    assert.equal(db.getSession("s-origin")?.delegatedRunning, 0);
     const now = Date.now();
-    db.db
-      .prepare(
-        `INSERT INTO hub_tasks (id, title, prompt, workspace, repo, cwd, add_dirs, runner, status, origin_session_id, origin_client, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run("task-origin", "t", "p", "pilot", null, "C:\\work\\repo", "[]", "claude", "pending", "s-origin", "claude-code", now, now);
-    assert.equal(db.getSession("s-origin")?.delegatedTasks, 1);
+    const insertTask = db.db.prepare(
+      `INSERT INTO hub_tasks (id, title, prompt, workspace, repo, cwd, add_dirs, runner, status, origin_session_id, origin_client, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertTask.run("task-origin", "t", "p", "pilot", null, "C:\\work\\repo", "[]", "claude", "running", "s-origin", "claude-code", now, now);
+    insertTask.run("task-done", "t", "p", "pilot", null, "C:\\work\\repo", "[]", "claude", "completed", "s-origin", "claude-code", now, now);
+    assert.equal(db.getSession("s-origin")?.delegatedTasks, 2);
+    assert.equal(db.getSession("s-origin")?.delegatedRunning, 1);
   });
 
   it("records the last assistant message of a subagent", () => {

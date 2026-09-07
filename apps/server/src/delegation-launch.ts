@@ -4,7 +4,8 @@ import { runTask, type RunEvent } from "./executor.js";
 import { broadcast } from "./sse.js";
 import { appendHubSource } from "./second-brain.js";
 import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail } from "./delegation-store.js";
-import type { CodexSandbox, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
+import type { CodexSandbox, Isolation, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
+import { createTaskWorktree, worktreeMainRepo } from "./worktrees.js";
 import { finishShareRequestByTask, getShare } from "./share-store.js";
 import { getSession } from "./db.js";
 import { SHARE_CREATED_BY_PREFIX, implementGuardrail, implementProfile, type RunProfile, type TrustLevel } from "./share-types.js";
@@ -44,14 +45,25 @@ export function shareTrustFromCreatedBy(createdBy: string | null): TrustLevel | 
 }
 
 function taskContext(task: TaskRecord): string {
+  const worktreeActive = task.isolation === "worktree" && task.worktreePath != null;
   const lines = [
     `You are running inside the "${task.workspace}" workspace, launched by the CC Hub (task ${task.id}).`,
     `Working directory: ${task.cwd}`,
     "Repositories of this workspace (all accessible; never ask which folder a project lives in, use this map):",
-    ...task.addDirs.map((dir) => `- ${basename(dir)}: ${dir}`),
+    ...task.addDirs.map((dir) => {
+      const label = worktreeActive && samePath(dir, task.worktreePath as string) ? (task.repo ?? basename(dir)) : basename(dir);
+      return `- ${label}: ${dir}`;
+    }),
   ];
   if (task.repo) lines.push(`This task targets the "${task.repo}" repository.`);
   lines.push("When you finish, state clearly what was done, what was verified and what is still open.");
+  if (worktreeActive) {
+    const original = worktreeMainRepo(task.worktreePath as string) ?? "the main checkout";
+    lines.push(
+      "",
+      `This task runs in an isolated git worktree of "${task.repo}" at ${task.worktreePath}, branch ${task.branch} (base ${task.baseBranch}). Make every change there and never in ${original}. When you finish, commit your work on that branch inside the worktree (git add -A && git commit); do not push, do not switch branches, do not touch other worktrees.`,
+    );
+  }
   const shareLabel = shareLabelFromCreatedBy(task.createdBy);
   if (shareLabel) {
     const trust = shareTrustFromCreatedBy(task.createdBy) ?? "medium";
@@ -248,6 +260,7 @@ export interface DelegateInput {
   sandbox: CodexSandbox | null;
   title: string | null;
   source: string | null;
+  isolation?: Isolation | null;
   originSessionId?: string | null;
   originClient?: OriginClient | null;
 }
@@ -255,6 +268,7 @@ export interface DelegateInput {
 export interface WorkspaceTarget {
   workspace: string;
   repo: string | null;
+  repoPath: string | null;
   cwd: string;
   addDirs: string[];
 }
@@ -275,7 +289,16 @@ export function resolveWorkspaceTarget(workspaceName: string, repoName: string |
   const cwd = workspace.contextPath ?? repo?.path ?? workspace.repos[0]?.path ?? null;
   if (!cwd || !isDirectory(cwd)) throw new BadRequestError(`workspace "${workspace.name}" has no usable folder to run in`);
   const addDirs = workspace.repos.map((item) => item.path).filter((path) => !samePath(path, cwd) && isDirectory(path));
-  return { workspace: workspace.name, repo: repo?.name ?? null, cwd, addDirs };
+  return { workspace: workspace.name, repo: repo?.name ?? null, repoPath: repo?.path ?? null, cwd, addDirs };
+}
+
+export function repoPathOf(task: TaskRecord): string | null {
+  if (!task.repo) return null;
+  try {
+    return resolveWorkspaceTarget(task.workspace, task.repo).repoPath;
+  } catch {
+    return null;
+  }
 }
 
 function broadcastOrigin(task: TaskRecord): void {
@@ -288,13 +311,31 @@ export function delegateTask(input: DelegateInput): TaskDetail {
   if (!input.prompt || !input.workspace) throw new BadRequestError("prompt and workspace required");
   const target = resolveWorkspaceTarget(input.workspace, input.repo);
   const runner = input.runner ?? "claude";
+  const isolation: Isolation = input.isolation === "worktree" ? "worktree" : "shared";
+  const id = randomUUID();
+  let addDirs = target.addDirs;
+  let worktreePath: string | null = null;
+  let branch: string | null = null;
+  let baseBranch: string | null = null;
+  if (isolation === "worktree") {
+    if (!target.repo || !target.repoPath) {
+      throw new BadRequestError("worktree isolation requires a repo of the workspace to run in");
+    }
+    const created = createTaskWorktree({ repoPath: target.repoPath, repoName: target.repo, taskId: id, root: target.cwd });
+    worktreePath = created.path;
+    branch = created.branch;
+    baseBranch = created.baseBranch;
+    addDirs = target.addDirs.map((dir) => (samePath(dir, target.repoPath as string) ? created.path : dir));
+    if (!addDirs.some((dir) => samePath(dir, created.path))) addDirs = [...addDirs, created.path];
+  }
   const task = createTask({
+    id,
     title: input.title?.trim() || titleFrom(input.prompt),
     prompt: input.prompt,
     workspace: target.workspace,
     repo: target.repo,
     cwd: target.cwd,
-    addDirs: target.addDirs,
+    addDirs,
     runner,
     model: input.model,
     permissionMode: input.permissionMode,
@@ -302,6 +343,10 @@ export function delegateTask(input: DelegateInput): TaskDetail {
     createdBy: input.source,
     originSessionId: input.originSessionId ?? null,
     originClient: input.originClient ?? null,
+    isolation,
+    worktreePath,
+    branch,
+    baseBranch,
   });
   startRun(task, "launch", input.prompt, input.model, input.permissionMode);
   broadcastOrigin(task);

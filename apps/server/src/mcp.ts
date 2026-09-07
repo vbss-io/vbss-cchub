@@ -113,6 +113,12 @@ const TOOLS: ToolDefinition[] = [
           enum: ["read-only", "workspace-write", "danger-full-access"],
           description: "Codex sandbox, default workspace-write",
         },
+        isolation: {
+          type: "string",
+          enum: ["shared", "worktree"],
+          description:
+            "use worktree when other agents may be editing the same repo; the task commits on its own branch and you merge with hub_task_merge",
+        },
         title: { type: "string", description: "Optional short title; defaults to the first prompt line" },
       },
       ["workspace", "prompt"],
@@ -151,6 +157,19 @@ const TOOLS: ToolDefinition[] = [
     description: "Archive a settled delegated task so it drops out of the default task lists and overview; pass unarchive to bring it back. Running or pending tasks cannot be archived.",
     inputSchema: objectSchema({ taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" }, unarchive: { type: "boolean" } }, ["taskId"]),
     call: (args) => http("POST", taskPath(args, args.unarchive === true ? "/unarchive" : "/archive")),
+  },
+  {
+    name: "hub_task_merge",
+    description:
+      "Merge a worktree task's branch into its base branch inside the original checkout (git merge --no-ff). Answers a conflict without touching the checkout. Pass discard: true to remove the worktree and its branch instead (do this after a successful merge, or to throw the work away).",
+    inputSchema: objectSchema(
+      {
+        taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" },
+        discard: { type: "boolean", description: "Remove the worktree and its branch instead of merging" },
+      },
+      ["taskId"],
+    ),
+    call: (args) => http("POST", taskPath(args, args.discard === true ? "/worktree/discard" : "/merge")),
   },
   {
     name: "hub_report",

@@ -67,8 +67,10 @@ export interface SessionRecord {
   shareLabel: string | null;
   forkOf: string | null;
   forks: number;
+  forksLive: number;
   remoteAsks: number;
   delegatedTasks: number;
+  delegatedRunning: number;
   helperOf: string | null;
   helpers: number;
   helpersTotal: number;

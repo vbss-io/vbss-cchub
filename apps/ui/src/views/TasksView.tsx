@@ -12,12 +12,18 @@ import {
 } from "../delegation";
 import {
   archiveTask,
+  discardTaskWorktree,
+  getTaskWorktree,
   listArchivedTasks,
+  mergeTaskWorktree,
   probeArchiveSupport,
   retryTask,
   taskArchivedAt,
+  taskIsolation,
   unarchiveTask,
+  type WorktreeStatus,
 } from "../delegation-actions";
+import { folderPeers } from "../peers";
 import { inFlight, needsYou, TASK_STATUS_LABEL, TaskCard, taskOrigin, whyOf, type RetryMode } from "../components/TaskCard";
 import { relativeTime } from "../time";
 import type { RunEventMessage, SessionRecord } from "../types";
@@ -124,11 +130,19 @@ export function TasksView({ tasks, sessions, enabled, selectedId, tick, onSelect
   const [busy, setBusy] = useState(false);
   const [archived, setArchived] = useState<TaskRecord[]>([]);
   const [archiveSupported, setArchiveSupported] = useState(true);
+  const [worktree, setWorktree] = useState<WorktreeStatus | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const loadDetail = useCallback(async (id: string) => {
     const [nextDetail, nextEvents] = await Promise.all([getTask(id), getTaskEvents(id)]);
     setDetail(nextDetail);
     setEvents(nextEvents);
+    setConfirmDiscard(false);
+    if (taskIsolation(nextDetail.task) === "worktree") {
+      setWorktree(await getTaskWorktree(id).catch(() => null));
+    } else {
+      setWorktree(null);
+    }
     setLiveText(null);
     setShowContinue(false);
     setFollowUp("");
@@ -232,6 +246,8 @@ export function TasksView({ tasks, sessions, enabled, selectedId, tick, onSelect
   const doArchive = useCallback((id: string) => void act(async () => await archiveTask(id)), [act]);
   const doUnarchive = useCallback((id: string) => void act(async () => await unarchiveTask(id)), [act]);
   const doCancel = useCallback((id: string) => void act(async () => void (await cancelTask(id))), [act]);
+  const doMerge = useCallback((id: string) => void act(async () => await mergeTaskWorktree(id)), [act]);
+  const doDiscard = useCallback((id: string) => void act(async () => await discardTaskWorktree(id)), [act]);
   const doRetry = useCallback(
     (task: TaskRecord, mode: RetryMode) => void act(async () => await retryTask(task.id, mode === "autonomous" ? "bypassPermissions" : null)),
     [act],
@@ -247,9 +263,12 @@ export function TasksView({ tasks, sessions, enabled, selectedId, tick, onSelect
   ];
 
   const detailOrigin = detail ? taskOrigin(detail.task, sessions) : null;
+  const sessionList = useMemo(() => Object.values(sessions), [sessions]);
+  const peersOf = useCallback((task: TaskRecord) => folderPeers(task.cwd, sessionList, live, { taskId: task.id }), [sessionList, live]);
+  const canMerge = worktree !== null && worktree.exists && !worktree.dirty && worktree.commits.length > 0 && worktree.mergedAt === null && !running;
 
   return (
-    <div className="view view--split">
+    <div className="view view--split view--tasks">
       <section className="pane pane--list">
         <p className="tasks__summary">
           <strong>{counts.running}</strong> running · <strong>{counts.needYou}</strong> need you · <strong>{counts.doneToday}</strong> done today ·{" "}
@@ -285,6 +304,7 @@ export function TasksView({ tasks, sessions, enabled, selectedId, tick, onSelect
               selected={selectedId === task.id}
               archiveSupported={archiveSupported}
               busy={busy}
+              peers={peersOf(task)}
               onSelect={onSelect}
               onOpenSession={onOpenSession}
               onCancel={doCancel}
@@ -404,6 +424,72 @@ export function TasksView({ tasks, sessions, enabled, selectedId, tick, onSelect
                     Send
                   </button>
                 </div>
+              </section>
+            )}
+
+            {taskIsolation(detail.task) === "worktree" && (
+              <section className="panel worktree">
+                <h3>Worktree</h3>
+                {worktree === null && <p className="muted">Worktree status unavailable.</p>}
+                {worktree && (
+                  <>
+                    <p className="muted small">
+                      branch <code>{worktree.branch}</code> from <code>{worktree.baseBranch}</code> · <span className="path">{worktree.path}</span>
+                      {!worktree.exists && " · folder removed"}
+                    </p>
+                    {worktree.mergedAt !== null && (
+                      <p className="worktree__state worktree__state--ok">Merged into {worktree.baseBranch} {relativeTime(worktree.mergedAt)}. Discard the worktree when you no longer need the folder.</p>
+                    )}
+                    {worktree.dirty && <p className="worktree__state worktree__state--warn">Uncommitted changes in the worktree: the agent did not commit everything. Open the folder and commit, or continue the task asking it to commit.</p>}
+                    {worktree.exists && worktree.commits.length === 0 && worktree.mergedAt === null && <p className="muted">No commits on the branch yet.</p>}
+                    {worktree.commits.length > 0 && (
+                      <ul className="worktree__commits">
+                        {worktree.commits.map((commit) => (
+                          <li key={commit.sha}>
+                            <code>{commit.sha.slice(0, 7)}</code> {commit.subject}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {worktree.diffStat && <pre className="worktree__diff">{worktree.diffStat}</pre>}
+                    <div className="actions">
+                      {worktree.exists && !confirmDiscard && (
+                        <button className="act act--danger" disabled={busy || running} onClick={() => setConfirmDiscard(true)}>
+                          Discard worktree
+                        </button>
+                      )}
+                      {worktree.exists && confirmDiscard && (
+                        <>
+                          <span className="muted small">Removes the folder and the branch{worktree.mergedAt === null ? ", losing unmerged work" : ""}.</span>
+                          <button className="act act--ghost" disabled={busy} onClick={() => setConfirmDiscard(false)}>
+                            Keep
+                          </button>
+                          <button className="act act--danger" disabled={busy} onClick={() => doDiscard(detail.task.id)}>
+                            Discard
+                          </button>
+                        </>
+                      )}
+                      <button
+                        className="act act--focus"
+                        disabled={busy || !canMerge}
+                        title={
+                          running
+                            ? "Wait for the run to finish"
+                            : worktree.mergedAt !== null
+                              ? "Already merged"
+                              : worktree.dirty
+                                ? "Commit the pending changes first"
+                                : worktree.commits.length === 0
+                                  ? "Nothing to merge"
+                                  : `git merge --no-ff ${worktree.branch} into ${worktree.baseBranch}`
+                        }
+                        onClick={() => doMerge(detail.task.id)}
+                      >
+                        Merge into {worktree.baseBranch}
+                      </button>
+                    </div>
+                  </>
+                )}
               </section>
             )}
 

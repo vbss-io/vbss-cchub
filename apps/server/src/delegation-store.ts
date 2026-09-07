@@ -6,6 +6,7 @@ import { db } from "./db.js";
 import type {
   CodexSandbox,
   DelegationSettings,
+  Isolation,
   OriginClient,
   PermissionMode,
   ReportKind,
@@ -93,6 +94,11 @@ for (const [name, type] of [
   ["origin_session_id", "TEXT"],
   ["origin_client", "TEXT"],
   ["archived_at", "INTEGER"],
+  ["isolation", "TEXT DEFAULT 'shared'"],
+  ["worktree_path", "TEXT"],
+  ["branch", "TEXT"],
+  ["base_branch", "TEXT"],
+  ["merged_at", "INTEGER"],
 ] as const) {
   if (!hubTaskColumns.has(name)) db.exec(`ALTER TABLE hub_tasks ADD COLUMN ${name} ${type}`);
 }
@@ -118,6 +124,11 @@ interface TaskRow {
   origin_session_id: string | null;
   origin_client: string | null;
   archived_at: number | null;
+  isolation: string | null;
+  worktree_path: string | null;
+  branch: string | null;
+  base_branch: string | null;
+  merged_at: number | null;
   created_at: number;
   updated_at: number;
   last_error: string | null;
@@ -192,6 +203,11 @@ const toTask = (row: TaskRow): TaskRecord => ({
   lastError: row.last_error,
   runsCount: row.runs_count ?? 0,
   archivedAt: row.archived_at,
+  isolation: (row.isolation as Isolation | null) ?? "shared",
+  worktreePath: row.worktree_path,
+  branch: row.branch,
+  baseBranch: row.base_branch,
+  mergedAt: row.merged_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -301,9 +317,9 @@ const TASK_SELECT = `
 
 const insertTaskStmt = db.prepare(`
   INSERT INTO hub_tasks
-    (id, title, prompt, workspace, repo, cwd, add_dirs, runner, requested_model, permission_mode, sandbox, status, created_by, origin_session_id, origin_client, created_at, updated_at)
+    (id, title, prompt, workspace, repo, cwd, add_dirs, runner, requested_model, permission_mode, sandbox, status, created_by, origin_session_id, origin_client, isolation, worktree_path, branch, base_branch, created_at, updated_at)
   VALUES
-    (@id, @title, @prompt, @workspace, @repo, @cwd, @addDirs, @runner, @requestedModel, @permissionMode, @sandbox, @status, @createdBy, @originSessionId, @originClient, @now, @now)
+    (@id, @title, @prompt, @workspace, @repo, @cwd, @addDirs, @runner, @requestedModel, @permissionMode, @sandbox, @status, @createdBy, @originSessionId, @originClient, @isolation, @worktreePath, @branch, @baseBranch, @now, @now)
 `);
 const getTaskStmt = db.prepare(`${TASK_SELECT} WHERE t.id = ?`);
 const listTasksStmt = db.prepare(`${TASK_SELECT} ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`);
@@ -374,6 +390,7 @@ export class TaskBusyError extends Error {
 }
 
 export function createTask(input: {
+  id?: string;
   title: string;
   prompt: string;
   workspace: string;
@@ -387,8 +404,12 @@ export function createTask(input: {
   createdBy: string | null;
   originSessionId: string | null;
   originClient: OriginClient | null;
+  isolation?: Isolation;
+  worktreePath?: string | null;
+  branch?: string | null;
+  baseBranch?: string | null;
 }): TaskRecord {
-  const id = randomUUID();
+  const id = input.id ?? randomUUID();
   insertTaskStmt.run({
     id,
     title: input.title,
@@ -405,9 +426,27 @@ export function createTask(input: {
     createdBy: input.createdBy,
     originSessionId: input.originSessionId,
     originClient: input.originClient,
+    isolation: input.isolation ?? "shared",
+    worktreePath: input.worktreePath ?? null,
+    branch: input.branch ?? null,
+    baseBranch: input.baseBranch ?? null,
     now: Date.now(),
   });
   return toTask(getTaskStmt.get(id) as TaskRow);
+}
+
+const setMergedStmt = db.prepare(`UPDATE hub_tasks SET merged_at = @mergedAt, updated_at = @now WHERE id = @id`);
+
+export function markTaskMerged(id: string, mergedAt: number = Date.now()): TaskRecord | null {
+  setMergedStmt.run({ id, mergedAt, now: Date.now() });
+  return getTask(id);
+}
+
+const clearWorktreePathStmt = db.prepare(`UPDATE hub_tasks SET worktree_path = NULL, updated_at = @now WHERE id = @id`);
+
+export function clearTaskWorktreePath(id: string): TaskRecord | null {
+  clearWorktreePathStmt.run({ id, now: Date.now() });
+  return getTask(id);
 }
 
 const setOriginStmt = db.prepare(`UPDATE hub_tasks SET origin_session_id = @originSessionId, origin_client = @originClient, updated_at = @now WHERE id = @id`);

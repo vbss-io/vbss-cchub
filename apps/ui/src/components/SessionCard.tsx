@@ -50,6 +50,7 @@ interface Props {
   showSource: boolean;
   stale?: boolean;
   forkParentName?: string | null;
+  peers?: number;
   onOpen: (sessionId: string) => void;
   onArchive: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
@@ -63,6 +64,7 @@ export function SessionCard({
   showSource,
   stale = false,
   forkParentName = null,
+  peers = 0,
   onOpen,
   onArchive,
   onDelete,
@@ -125,19 +127,24 @@ export function SessionCard({
             {agentsRunning} running
           </span>
         )}
+        {peers > 0 && !archived && session.status !== "ended" && !stale && (
+          <span className="chip chip--peers" title="Other live agents share this folder right now; edits can collide. Delegate with isolation: worktree, or use the Agent tool worktree isolation.">
+            {peers} more here
+          </span>
+        )}
         {session.forkOf && (
           <span className="chip chip--fork" title={`forks ${session.forkOf}`}>
             fork · {forkParentName ?? session.forkOf.slice(0, 8)}
           </span>
         )}
-        {(session.forks ?? 0) > 0 && (
-          <span className="chip chip--forks" title="People asking this session through a share">
-            {session.forks} fork{session.forks === 1 ? "" : "s"} · {session.remoteAsks ?? 0} ask{(session.remoteAsks ?? 0) === 1 ? "" : "s"}
+        {(session.forksLive ?? 0) > 0 && (
+          <span className="chip chip--forks" title={`People asking this session through a share · ${session.remoteAsks ?? 0} ask${(session.remoteAsks ?? 0) === 1 ? "" : "s"} total`}>
+            {session.forksLive} live fork{session.forksLive === 1 ? "" : "s"}
           </span>
         )}
-        {(session.delegatedTasks ?? 0) > 0 && (
-          <span className="chip chip--delegated" title="Tasks this session delegated to the hub">
-            {session.delegatedTasks} delegated
+        {(session.delegatedRunning ?? 0) > 0 && (
+          <span className="chip chip--delegated" title="Tasks this session delegated that are running now">
+            {session.delegatedRunning} delegated running
           </span>
         )}
         {(session.helpersTotal ?? 0) > 0 && (

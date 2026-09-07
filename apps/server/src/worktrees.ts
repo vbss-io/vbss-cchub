@@ -1,0 +1,213 @@
+import { execFile, execFileSync } from "node:child_process";
+import { existsSync, lstatSync, rmdirSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { promisify } from "node:util";
+import type { TaskRecord, WorktreeInfo } from "./delegation-types.js";
+
+const execFileAsync = promisify(execFile);
+
+export class WorktreeError extends Error {
+  readonly status: number;
+  readonly files?: string[];
+
+  constructor(message: string, status: number, files?: string[]) {
+    super(message);
+    this.name = "WorktreeError";
+    this.status = status;
+    this.files = files;
+  }
+}
+
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+}
+
+async function gitAsync(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args]);
+  return stdout.trim();
+}
+
+function task8Of(taskId: string): string {
+  return taskId.slice(0, 8);
+}
+
+const normalizePath = (path: string): string => resolve(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+
+export function worktreeMainRepo(worktreePath: string): string | null {
+  try {
+    const out = git(worktreePath, ["worktree", "list", "--porcelain"]);
+    const entries = out
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => line.slice("worktree ".length).trim());
+    const wanted = normalizePath(worktreePath);
+    if (!entries.some((entry) => normalizePath(entry) === wanted)) return null;
+    return entries[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function linkNodeModules(repoPath: string, worktreePath: string): void {
+  const target = join(repoPath, "node_modules");
+  const link = join(worktreePath, "node_modules");
+  if (!existsSync(target) || existsSync(link)) return;
+  try {
+    symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+  } catch {
+    return;
+  }
+}
+
+function unlinkNodeModules(worktreePath: string): boolean {
+  const link = join(worktreePath, "node_modules");
+  let stat;
+  try {
+    stat = lstatSync(link);
+  } catch {
+    return true;
+  }
+  if (!stat.isSymbolicLink()) return false;
+  try {
+    rmdirSync(link);
+    return true;
+  } catch {
+    try {
+      unlinkSync(link);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+export function createTaskWorktree(input: {
+  repoPath: string;
+  repoName: string;
+  taskId: string;
+  root: string;
+}): { path: string; branch: string; baseBranch: string } {
+  const task8 = task8Of(input.taskId);
+  const branch = `hub/${task8}`;
+  let baseBranch: string;
+  try {
+    baseBranch = git(input.repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  } catch {
+    throw new WorktreeError(`"${input.repoName}" is not a git checkout; a worktree needs a git repository`, 400);
+  }
+  if (!baseBranch || baseBranch === "HEAD") {
+    throw new WorktreeError(`"${input.repoName}" is in detached HEAD; check out a branch before delegating in a worktree`, 400);
+  }
+  const path = join(input.root, ".worktrees", input.repoName, task8);
+  try {
+    git(input.repoPath, ["worktree", "add", "-b", branch, path, "HEAD"]);
+  } catch (err) {
+    throw new WorktreeError(`could not create a worktree for "${input.repoName}": ${err instanceof Error ? err.message : String(err)}`, 400);
+  }
+  linkNodeModules(input.repoPath, path);
+  return { path, branch, baseBranch };
+}
+
+export async function worktreeStatus(task: TaskRecord): Promise<WorktreeInfo> {
+  const path = task.worktreePath;
+  const info: WorktreeInfo = {
+    path,
+    branch: task.branch,
+    baseBranch: task.baseBranch,
+    exists: false,
+    dirty: false,
+    commits: [],
+    diffStat: "",
+    mergedAt: task.mergedAt,
+  };
+  if (!path || !isCheckedOut(path)) return info;
+  info.exists = true;
+  try {
+    info.dirty = (await gitAsync(path, ["status", "--porcelain"])).length > 0;
+    if (task.baseBranch) {
+      const log = await gitAsync(path, ["log", `${task.baseBranch}..HEAD`, "--format=%H%x1f%s"]);
+      info.commits = log.length === 0 ? [] : log.split(/\r?\n/).map((line) => {
+        const [sha, subject] = line.split("\x1f");
+        return { sha: sha ?? "", subject: subject ?? "" };
+      });
+      info.diffStat = await gitAsync(path, ["diff", "--stat", `${task.baseBranch}...HEAD`]);
+    }
+  } catch {
+    return info;
+  }
+  return info;
+}
+
+export async function mergeTaskWorktree(task: TaskRecord): Promise<void> {
+  if (task.isolation !== "worktree" || !task.worktreePath) throw new WorktreeError("task has no worktree", 404);
+  if (!task.branch || !task.baseBranch) throw new WorktreeError("task has no worktree branch", 409);
+  if (!existsSync(task.worktreePath)) throw new WorktreeError("the worktree folder is gone; discard it first", 409);
+  const main = worktreeMainRepo(task.worktreePath);
+  if (!main) throw new WorktreeError("could not resolve the original checkout of the worktree", 409);
+  const currentBranch = await gitAsync(main, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (currentBranch !== task.baseBranch) {
+    throw new WorktreeError(`the checkout is on "${currentBranch}", not the base branch "${task.baseBranch}"; check it out before merging`, 409);
+  }
+  if ((await gitAsync(task.worktreePath, ["status", "--porcelain"])).length > 0) {
+    throw new WorktreeError("the worktree has uncommitted changes; commit or discard them before merging", 409);
+  }
+  const pending = await gitAsync(task.worktreePath, ["log", `${task.baseBranch}..${task.branch}`, "--format=%H"]);
+  if (pending.length === 0) throw new WorktreeError("nothing to merge", 409);
+  try {
+    await gitAsync(main, ["merge", "--no-ff", "--no-edit", task.branch]);
+  } catch (err) {
+    let files: string[] = [];
+    try {
+      const conflicts = await gitAsync(main, ["diff", "--name-only", "--diff-filter=U"]);
+      files = conflicts.length === 0 ? [] : conflicts.split(/\r?\n/);
+    } catch {
+      files = [];
+    }
+    try {
+      await gitAsync(main, ["merge", "--abort"]);
+    } catch {
+      void err;
+    }
+    throw new WorktreeError("merge conflict", 409, files);
+  }
+}
+
+const REMOVAL_RETRY_MS = 5_000;
+const REMOVAL_ATTEMPTS = 24;
+
+function removeFolder(path: string, attempt = 0): void {
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch {
+    if (attempt >= REMOVAL_ATTEMPTS) return;
+    setTimeout(() => removeFolder(path, attempt + 1), REMOVAL_RETRY_MS).unref();
+  }
+}
+
+const isCheckedOut = (path: string): boolean => existsSync(join(path, ".git"));
+
+export async function discardTaskWorktree(task: TaskRecord, mainRepo: string | null = null): Promise<void> {
+  if (task.isolation !== "worktree") throw new WorktreeError("task has no worktree", 404);
+  const path = task.worktreePath;
+  if (!path) return;
+  const main = (existsSync(path) ? worktreeMainRepo(path) : null) ?? mainRepo;
+  if (!main) return;
+  const linkGone = existsSync(path) ? unlinkNodeModules(path) : true;
+  try {
+    await gitAsync(main, ["worktree", "remove", "--force", path]);
+  } catch {
+    try {
+      await gitAsync(main, ["worktree", "prune"]);
+    } catch {
+      return;
+    }
+  }
+  if (linkGone && existsSync(path)) removeFolder(path);
+  if (task.branch) {
+    try {
+      await gitAsync(main, ["branch", "-D", task.branch]);
+    } catch {
+      return;
+    }
+  }
+}

@@ -220,6 +220,31 @@ MCP tools for your own agents: `hub_shares`, `hub_share_create`, `hub_share_upda
   previous look; stored per browser in `localStorage`, applied as `data-theme` on the root element. The
   logo never changes.
 
+## Worktree isolation
+
+When several agents may edit the same repo at once, delegate with `isolation: "worktree"` (default is
+`shared`). The hub then runs `git -C <repo> worktree add -b hub/<task8> <ws>/.worktrees/<repo>/<task8> HEAD`
+before creating the task, points the repo's `--add-dir` and the system-prompt map at the worktree, and
+links `node_modules` with a junction (Windows) or symlink so installs are reused. Worktree isolation
+needs a `repo` of the workspace and that repo must be a git checkout on a branch (400 otherwise).
+
+- **What the agent sees**: the repo is mapped to the worktree, with a note to make every change there,
+  never in the original checkout, and to `git add -A && git commit` on `hub/<task8>` — never push, switch
+  branch or touch other worktrees. The base branch stays untouched until you merge.
+- **Follow it**: `GET /delegation/tasks/:id/worktree` (also embedded under `worktree` in the task detail)
+  returns `{ path, branch, baseBranch, exists, dirty, commits, diffStat, mergedAt }`.
+- **Merge**: `POST /delegation/tasks/:id/merge` runs `git merge --no-ff --no-edit hub/<task8>` in the
+  original checkout and sets `mergedAt`. It answers `409` when the task is still running/pending, when the
+  checkout is not on the base branch, when the worktree has uncommitted changes, or when there is nothing
+  to merge; on a conflict it runs `git merge --abort` and answers `409 { error: "merge conflict", files }`,
+  leaving the checkout clean. The worktree is kept (discard is a separate step).
+- **Discard**: `POST /delegation/tasks/:id/worktree/discard` runs `git worktree remove --force` and
+  `git branch -D hub/<task8>`, then clears `worktreePath` (branch/base/mergedAt stay for history).
+- **MCP**: `hub_delegate` takes `isolation`; `hub_task_merge` (taskId, `discard?`) merges or, with
+  `discard: true`, discards. `hub_overview` lists `isolation`/`branch` per task and `crowdedFolders`
+  (folders with 2+ live agents) to hint when a worktree is worth it.
+- Add `.worktrees/` to the workspace repo's `.gitignore` so the worktrees never get committed back.
+
 ## Security model
 
 - **Off by default.** No `HUB_DELEGATION=1`, no routes.

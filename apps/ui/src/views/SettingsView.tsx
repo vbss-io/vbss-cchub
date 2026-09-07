@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { HooksStatus } from "../api";
 import { GroupManager } from "../components/GroupManager";
 import type { ConnectStatus, DelegationSettings, McpClient, ShellKind } from "../delegation";
-import { COFFEE_URL, openExternal, playSound } from "../notify";
+import { COFFEE_URL, GITHUB_URL, openExternal, playSound } from "../notify";
 import type { SessionClient } from "../types";
 import type { Autonomy, AutostartStatus, TunnelStatus } from "../delegation";
 import { claudeClient } from "../clients";
@@ -19,11 +19,12 @@ export interface NotifSettings {
 
 export const NOTIF_CLIENTS: SessionClient[] = ["terminal", "vscode", "wsl", "claude-desktop", "headless", "hub", "share"];
 
-export type SettingsSection = "general" | "appearance" | "paths" | "hooks" | "connect" | "sharing" | "notifications" | "groups" | "about";
+export type SettingsSection = "support" | "general" | "appearance" | "paths" | "hooks" | "connect" | "sharing" | "notifications" | "groups" | "about";
 
 export type ThemeName = "dracula" | "midnight";
 
 const SECTIONS: { key: SettingsSection; label: string }[] = [
+  { key: "support", label: "Support" },
   { key: "general", label: "General" },
   { key: "appearance", label: "Appearance" },
   { key: "paths", label: "Paths" },
@@ -148,6 +149,22 @@ export function SettingsView(props: Props) {
           </a>
         ))}
       </nav>
+
+      <section className="settings__section" id="settings-support">
+        <h2>Support</h2>
+        <p className="hint">CC Hub is free and open source. Star the repo, open an issue, or buy a coffee to keep it going.</p>
+        <div className="frow">
+          <button className="act" onClick={() => void openExternal(GITHUB_URL)}>
+            GitHub
+          </button>
+          <button className="act" onClick={() => void openExternal(COFFEE_URL)}>
+            Buy me a coffee
+          </button>
+          <button className="act act--ghost" onClick={props.onWhatsNew}>
+            What's new
+          </button>
+        </div>
+      </section>
 
       <section className="settings__section" id="settings-general">
         <h2>General</h2>
@@ -507,12 +524,6 @@ export function SettingsView(props: Props) {
           <dt>Hub</dt>
           <dd>
             <code>{hubUrl}</code>
-          </dd>
-          <dt>Support</dt>
-          <dd>
-            <button className="act act--ghost" onClick={() => void openExternal(COFFEE_URL)}>
-              Buy me a coffee
-            </button>
           </dd>
         </dl>
       </section>

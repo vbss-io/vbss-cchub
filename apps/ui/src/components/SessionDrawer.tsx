@@ -369,6 +369,18 @@ export function SessionDrawer({ session, workspace, onClose, onShare, onOpenTask
             <dd>
               claude {current.claudePid ?? "—"} · window {current.hostPid ?? "—"}
             </dd>
+            <dt>Delegated</dt>
+            <dd>
+              {current.delegatedTasks ?? 0} total · {current.delegatedRunning ?? 0} running
+            </dd>
+            <dt>Forks</dt>
+            <dd>
+              {current.forks ?? 0} total · {current.forksLive ?? 0} live · {current.remoteAsks ?? 0} asks
+            </dd>
+            <dt>Subagents</dt>
+            <dd>
+              {current.agentsRunning ?? 0} running · {current.agentsTotal ?? 0} spawned
+            </dd>
             <dt>Transcript</dt>
             <dd className="path">{current.transcriptPath ?? "—"}</dd>
             <dt>Started</dt>
