@@ -172,6 +172,18 @@ describe("sessions", () => {
     assert.equal(db.getSession("s-origin")?.delegatedRunning, 1);
   });
 
+  it("sets and clears the favorite flag of a session", () => {
+    db.applyHook(payload({ sessionId: "s-fav", client: "terminal" }));
+    const before = db.getSession("s-fav");
+    assert.equal(before?.favoriteAt, null);
+    const favorited = db.setSessionFavorite("s-fav", true);
+    assert.equal(typeof favorited?.favoriteAt, "number");
+    assert.equal(db.getSession("s-fav")?.favoriteAt, favorited?.favoriteAt);
+    const cleared = db.setSessionFavorite("s-fav", false);
+    assert.equal(cleared?.favoriteAt, null);
+    assert.equal(db.setSessionFavorite("ghost", true), null);
+  });
+
   it("records the last assistant message of a subagent", () => {
     db.applyHook(payload({ sessionId: "s-alive", kind: "subagent_start", agentId: "ag-2", agentType: "Plan" }));
     db.applyHook(payload({ sessionId: "s-alive", kind: "subagent_stop", agentId: "ag-2", agentType: "Plan", agentMessage: "plan ready" }));

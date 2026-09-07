@@ -468,6 +468,16 @@ describe("hub surface", () => {
     assert.equal(list.some((session) => session.id === id), false);
   });
 
+  it("favorites and unfavorites a session over the route", async () => {
+    await http("POST", "/hook", { body: { kind: "session_start", sessionId: "fav-1", cwd: box.repoA, client: "terminal" } });
+    const on = await http("POST", "/api/sessions/fav-1/favorite", { body: { favorite: true } });
+    assert.equal(on.status, 200);
+    assert.equal(typeof (on.json as { favoriteAt: number }).favoriteAt, "number");
+    const off = await http("POST", "/api/sessions/fav-1/favorite", { body: { favorite: false } });
+    assert.equal((off.json as { favoriteAt: number | null }).favoriteAt, null);
+    assert.equal((await http("POST", "/api/sessions/ghost/favorite", { body: { favorite: true } })).status, 404);
+  });
+
   it("reports connect status inside the sandbox home and installs the Codex MCP entry", async () => {
     const status = (await http("GET", "/delegation/connect")).json as {
       shell: { bash: { path: string; installed: boolean } };

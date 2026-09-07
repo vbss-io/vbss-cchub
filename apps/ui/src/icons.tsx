@@ -79,6 +79,14 @@ export function IconClose({ size = 18 }: IconProps) {
   );
 }
 
+export function IconStar({ size = 16, filled = false }: IconProps & { filled?: boolean }) {
+  return (
+    <svg {...svgProps(size)} fill={filled ? "currentColor" : "none"}>
+      <path d="M12 3.5l2.5 5.2 5.7.8-4.1 4 1 5.7-5.1-2.7-5.1 2.7 1-5.7-4.1-4 5.7-.8Z" />
+    </svg>
+  );
+}
+
 export function IconFocus({ size = 16 }: IconProps) {
   return (
     <svg {...svgProps(size)}>
