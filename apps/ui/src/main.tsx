@@ -12,3 +12,11 @@ if (root) {
     <StrictMode>{isWidget ? <Widget /> : <App />}</StrictMode>,
   );
 }
+
+if (!isWidget && "__TAURI_INTERNALS__" in window) {
+  void import("@tauri-apps/api/event").then(({ listen }) => {
+    void listen<string>("hub:navigate", (event) => {
+      location.hash = event.payload;
+    });
+  });
+}

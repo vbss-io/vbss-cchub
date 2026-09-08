@@ -12,9 +12,9 @@ const argValue = (flag) => {
   return index >= 0 ? (args[index + 1] ?? null) : null;
 };
 
-const HUB_PORT = 14317;
-const SHARE_PORT = 14318;
-const UI_PORT = 15173;
+const HUB_PORT = Number(process.env.PREVIEW_HUB_PORT) || 14317;
+const SHARE_PORT = Number(process.env.PREVIEW_SHARE_PORT) || 14318;
+const UI_PORT = Number(process.env.PREVIEW_UI_PORT) || 15173;
 const uiOrigin = `http://localhost:${UI_PORT}`;
 const base = `http://127.0.0.1:${HUB_PORT}`;
 const dataDir = argValue("--data") ?? join(repoRoot, ".tmp", "dev-preview");
