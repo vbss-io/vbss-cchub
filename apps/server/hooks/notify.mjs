@@ -190,7 +190,8 @@ try {
 
 const explicitKind = process.argv.slice(2).find((arg) => arg !== WORKER_FLAG);
 const kind = explicitKind ?? kindByEvent[input.hook_event_name] ?? "notification";
-const sessionId = input.session_id ?? "unknown";
+const sessionId = input.session_id ?? process.env.CLAUDE_CODE_SESSION_ID ?? null;
+if (!sessionId) process.exit(0);
 const transcript = readTranscript(input.transcript_path);
 const resolved = resolveHostInfo(sessionId);
 const { hostPid, shellPid, host } = resolved;
