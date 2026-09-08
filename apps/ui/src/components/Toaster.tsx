@@ -9,12 +9,14 @@ const inTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNA
 
 const MAX_VISIBLE = 4;
 const AUTO_MS = 6_000;
+const ATTENTION_MS = 10_000;
 const TICK_MS = 250;
 const WIDTH = 380;
 const MARGIN = 16;
 const TASKBAR_GUESS = 48;
 
-const STICKY: ReadonlySet<NotifEventKind> = new Set(["sessionNeedsYou", "taskNeedsYou", "taskFailed"]);
+const ATTENTION: ReadonlySet<NotifEventKind> = new Set(["sessionNeedsYou", "taskNeedsYou", "taskFailed"]);
+const lifetimeOf = (kind: NotifEventKind): number => (ATTENTION.has(kind) ? ATTENTION_MS : AUTO_MS);
 
 const TONE: Record<NotifEventKind, string> = {
   sessionNeedsYou: "pend",
@@ -62,7 +64,7 @@ interface Card {
   title: string;
   body: string;
   at: number;
-  sticky: boolean;
+  lifetime: number;
   elapsed: number;
 }
 
@@ -163,7 +165,7 @@ export function Toaster(): ReactElement {
         title: record.title,
         body: record.body,
         at: record.at,
-        sticky: STICKY.has(record.kind),
+        lifetime: lifetimeOf(record.kind),
         elapsed: 0,
       },
     ]);
@@ -210,19 +212,12 @@ export function Toaster(): ReactElement {
     let lastTick = Date.now();
     const tick = () => {
       const current = Date.now();
-      const delta = Math.min(current - lastTick, AUTO_MS);
+      const delta = Math.min(current - lastTick, ATTENTION_MS);
       lastTick = current;
       setNow(current);
       setCards((prev) => {
         if (hoveringRef.current || prev.length === 0) return prev;
-        let changed = false;
-        const next = prev.map((card) => {
-          if (card.sticky) return card;
-          changed = true;
-          return { ...card, elapsed: card.elapsed + delta };
-        });
-        if (!changed) return prev;
-        return next.filter((card) => card.sticky || card.elapsed < AUTO_MS);
+        return prev.map((card) => ({ ...card, elapsed: card.elapsed + delta })).filter((card) => card.elapsed < card.lifetime);
       });
     };
     const id = setInterval(tick, TICK_MS);
@@ -340,7 +335,7 @@ export function Toaster(): ReactElement {
         {visible.map((card) => (
           <div
             key={card.key}
-            className={`tcard tcard--${TONE[card.kind]}${card.sticky ? " tcard--sticky" : ""}`}
+            className={`tcard tcard--${TONE[card.kind]}`}
             role="button"
             tabIndex={0}
             onClick={() => onCardClick(card)}
