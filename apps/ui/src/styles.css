@@ -3692,3 +3692,7 @@ h6.md__h {
   font-size: 12px;
   color: var(--muted);
 }
+
+.callout--warn {
+  border-left-color: var(--pend);
+}

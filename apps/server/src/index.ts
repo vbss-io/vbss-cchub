@@ -22,6 +22,7 @@ import {
   updateGroup,
 } from "./db.js";
 import { focusWindow } from "./focus.js";
+import { desktopNotifier } from "./desktop-notify.js";
 import { codexLiveEntries, findCodexRollout } from "./codex-sessions.js";
 import {
   archiveCodexThread,
@@ -177,6 +178,17 @@ app.get("/api/sessions/:id/live", (req, res) => {
 
 app.get("/api/runtimes", (_req, res) => {
   void runtimeSnapshot().then((snapshot) => res.json(snapshot));
+});
+
+app.get("/api/notify/status", (req, res) => {
+  void desktopNotifier.status(req.query.force === "1").then((status) => res.json(status));
+});
+
+app.post("/api/notify", (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "VBSS CCHUB";
+  const text = typeof body.body === "string" ? body.body : "";
+  void desktopNotifier.show(title, text).then((result) => res.status(result.ok ? 200 : 501).json(result));
 });
 
 const uiErrorLog = join(config.dataDir, "ui-errors.log");

@@ -152,7 +152,7 @@ export function resetFired(): void {
 
 const defaultNotifier = createNotifier({
   getConfig: () => sharedConfig,
-  send: notify,
+  send: (title, body) => void notify(title, body),
   sound: playSound,
   now: () => Date.now(),
   onFired: (record) => {

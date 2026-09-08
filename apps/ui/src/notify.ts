@@ -13,14 +13,27 @@ export async function openExternal(url: string): Promise<void> {
 export const COFFEE_URL = "https://www.buymeacoffee.com/vbss.io";
 export const GITHUB_URL = "https://github.com/vbss-io/vbss-cchub";
 
-export async function notify(title: string, body: string): Promise<void> {
-  if (!inTauri()) return;
-  const { isPermissionGranted, requestPermission, sendNotification } = await import(
-    "@tauri-apps/plugin-notification"
-  );
-  let granted = await isPermissionGranted();
-  if (!granted) granted = (await requestPermission()) === "granted";
-  if (granted) sendNotification({ title, body });
+export type NotifyOutcome = "hub" | "plugin" | "none";
+
+export async function notify(title: string, body: string): Promise<NotifyOutcome> {
+  try {
+    const { sendDesktopNotification } = await import("./api");
+    const result = await sendDesktopNotification(title, body);
+    if (result.ok) return "hub";
+  } catch {
+    /* hub unreachable: fall back to the Tauri plugin below */
+  }
+  if (!inTauri()) return "none";
+  try {
+    const { isPermissionGranted, requestPermission, sendNotification } = await import("@tauri-apps/plugin-notification");
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === "granted";
+    if (!granted) return "none";
+    sendNotification({ title, body });
+    return "plugin";
+  } catch {
+    return "none";
+  }
 }
 
 export type SoundKind = "attention" | "idle" | "finished";

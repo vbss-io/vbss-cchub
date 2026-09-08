@@ -42,7 +42,9 @@ for (const dep of ["better-sqlite3", "bindings", "file-uri-to-path"]) {
 
 copyFileSync(execPath, join(sidecar, "node.exe"));
 
-copyFileSync(join(root, "apps/server/scripts/focus.ps1"), join(sidecar, "scripts", "focus.ps1"));
+for (const f of ["focus.ps1", "toast.ps1", "toast-status.ps1"]) {
+  copyFileSync(join(root, "apps/server/scripts", f), join(sidecar, "scripts", f));
+}
 for (const f of ["configure.mjs", "notify.mjs", "guard.mjs", "notify.sh", "find-host-window.ps1"]) {
   copyFileSync(join(root, "apps/server/hooks", f), join(sidecar, "hooks", f));
 }

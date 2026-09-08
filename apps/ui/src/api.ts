@@ -84,6 +84,28 @@ export const focusSession = (sessionId: string): Promise<FocusResult> =>
 
 export const focusCodexApp = (): Promise<FocusResult> => send("POST", "/api/codex/focus");
 
+export interface DesktopNotifyStatus {
+  supported: boolean;
+  appId: string;
+  toastsEnabled: boolean | null;
+  appEnabled: boolean | null;
+  registered: boolean | null;
+  error: string | null;
+}
+
+export interface DesktopNotifyResult {
+  ok: boolean;
+  via: "windows-toast" | null;
+  reason: string | null;
+}
+
+export const getDesktopNotifyStatus = (force = false): Promise<DesktopNotifyStatus> => send("GET", `/api/notify/status${force ? "?force=1" : ""}`);
+
+export const sendDesktopNotification = async (title: string, body: string): Promise<DesktopNotifyResult> => {
+  const res = await fetch(`${base}/api/notify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title, body }) });
+  return (await res.json()) as DesktopNotifyResult;
+};
+
 export const archiveSession = (sessionId: string): Promise<void> =>
   send("POST", `/api/sessions/${encodeURIComponent(sessionId)}/archive`);
 
