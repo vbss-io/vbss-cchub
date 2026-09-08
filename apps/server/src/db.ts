@@ -407,6 +407,20 @@ const endSessionStmt = db.prepare(
   `UPDATE sessions SET status = 'ended', last_message = COALESCE(last_message, 'process exited'), updated_at = ? WHERE session_id = ?`,
 );
 
+const endWithMessageStmt = db.prepare(
+  `UPDATE sessions SET status = 'ended', last_message = ?, updated_at = ? WHERE session_id = ? AND status != 'ended'`,
+);
+
+export function endSession(sessionId: string, message: string): SessionRecord | null {
+  const now = Date.now();
+  const changed = endWithMessageStmt.run(message, now, sessionId).changes;
+  if (changed === 0) return null;
+  endAgentsStmt.run(now, sessionId);
+  insertEventStmt.run({ sessionId, kind: "session_end", message, now });
+  const row = getStmt.get(sessionId) as SessionRow | undefined;
+  return row ? toRecord(row) : null;
+}
+
 export function endDeadSessions(): SessionRecord[] {
   const now = Date.now();
   const ended: SessionRecord[] = [];
