@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,6 +68,50 @@ describe("tunnel lifecycle with a fake ngrok", () => {
     assert.equal(tunnel.tunnelStatus().endpointError, "listen EADDRINUSE");
     tunnel.markShareEndpoint(null);
     assert.equal(tunnel.tunnelStatus().endpointError, null);
+  });
+});
+
+const pidFilePath = join(tmp, "data", "pids", "ngrok.pid");
+const alive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+async function startLeftover(): Promise<number> {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+  await once(child, "spawn");
+  if (typeof child.pid !== "number") throw new Error("leftover process has no pid");
+  return child.pid;
+}
+
+describe("reaping a leftover ngrok from a previous run", () => {
+  it("kills the stale ngrok named in the pid file at startup and removes the file", async () => {
+    const pid = await startLeftover();
+    mkdirSync(dirname(pidFilePath), { recursive: true });
+    writeFileSync(pidFilePath, String(pid), "utf8");
+    const closed = await tunnel.reapLeftoverNgrok();
+    assert.equal(closed, pid);
+    assert.equal(existsSync(pidFilePath), false);
+    assert.equal(alive(pid), false);
+  });
+
+  it("closes a pre-existing ngrok on start, sets a notice and reaches running", async () => {
+    const pid = await startLeftover();
+    mkdirSync(dirname(pidFilePath), { recursive: true });
+    writeFileSync(pidFilePath, String(pid), "utf8");
+    tunnel.updateTunnelSettings({ authtoken: "tok-321", domain: null });
+    const status = await tunnel.startTunnel();
+    assert.equal(status.state, "running");
+    assert.match(status.notice ?? "", /closed an ngrok that was already running/);
+    assert.match(status.notice ?? "", new RegExp(`\\(pid ${pid}\\)`));
+    assert.equal(alive(pid), false);
+    const stopped = tunnel.stopTunnel();
+    assert.equal(stopped.notice, null);
+    tunnel.updateTunnelSettings({ authtoken: null, domain: null });
   });
 });
 

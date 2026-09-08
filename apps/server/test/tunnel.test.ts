@@ -52,6 +52,22 @@ describe("ngrok output", () => {
     assert.match(tunnel.parseNgrokLine("ERROR: authentication failed").error ?? "", /needs an authtoken/);
     assert.match(tunnel.parseNgrokLine(JSON.stringify({ lvl: "eror", err: "ERR_NGROK_108 limited to 1 simultaneous ngrok agent session" })).error ?? "", /another agent is already running/);
   });
+
+  it("maps a paid-plan custom hostname error (314) with its code", () => {
+    const line = JSON.stringify({ lvl: "eror", msg: "failed to start tunnel", err: "ERR_NGROK_314 Custom hostnames are a paid feature; upgrade your account" });
+    const mapped = tunnel.parseNgrokLine(line).error ?? "";
+    assert.match(mapped, /paid ngrok plan/);
+    assert.match(mapped, /ERR_NGROK_314/);
+  });
+
+  it("maps a domain-already-online error (334) as a foreign agent, not as unreserved", () => {
+    const line = JSON.stringify({ lvl: "eror", msg: "failed to start tunnel", err: "ERR_NGROK_334 the endpoint 'https://me.ngrok-free.app' is already online" });
+    const mapped = tunnel.parseNgrokLine(line).error ?? "";
+    assert.match(mapped, /already serving this domain/);
+    assert.match(mapped, /not started by this hub/);
+    assert.match(mapped, /ERR_NGROK_334/);
+    assert.doesNotMatch(mapped, /not reserved/);
+  });
 });
 
 describe("binary discovery and status", () => {
