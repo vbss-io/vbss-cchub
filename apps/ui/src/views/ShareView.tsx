@@ -23,6 +23,7 @@ import {
 } from "../delegation";
 import { IconClose, IconCopy } from "../icons";
 import { Markdown } from "../markdown";
+import { sharePrompt } from "../share-prompt";
 import { isStale } from "../stale";
 import { relativeTime } from "../time";
 import type { SessionRecord } from "../types";
@@ -593,6 +594,15 @@ export function ShareView(props: Props) {
                 </button>
               </div>
             </dd>
+            <dt>Prompt</dt>
+            <dd>
+              <div className="frow frow--stack">
+                <textarea className="in area" readOnly value={sharePrompt(selected, selectedLink.url)} onFocus={(event) => event.currentTarget.select()} />
+                <button className="act" onClick={() => void copy(sharePrompt(selected, selectedLink.url), "prompt")}>
+                  <IconCopy /> Copy prompt
+                </button>
+              </div>
+            </dd>
             <dt>Trust</dt>
             <dd>{TRUST_LABEL[selected.trust]}</dd>
             <dt>Workspace</dt>
@@ -808,13 +818,7 @@ export function ShareView(props: Props) {
             files={files[share.id]}
             onSelect={openShare}
             onCopy={(url, what) => void copy(url, what)}
-            onHandoff={(item) => void showHandoff(item)}
-            onToggleFiles={(item) => void toggleFiles(item)}
-            onPause={(item) => void patch(item, { paused: true }, "share paused")}
-            onResume={(item) => void patch(item, { paused: false }, "share resumed")}
-            onNewKey={(item) => void patch(item, { rotate: true }, "new key generated; the old link no longer works")}
             onRevoke={(item) => void patch(item, { revoke: true }, "share revoked")}
-            onDelete={(item) => void remove(item)}
           />
         ))}
         {shares.length > 0 && filtered.length === 0 && <p className="empty">Nothing in this filter.</p>}
