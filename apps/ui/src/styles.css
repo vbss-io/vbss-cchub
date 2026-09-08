@@ -2616,13 +2616,19 @@ h3 {
 .sharetoolbar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 12px;
 }
 
+.sharetoolbar .filters {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+}
+
 .sharetoolbar__search {
-  flex: 1 1 200px;
-  min-width: 160px;
+  flex: 1 1 120px;
+  min-width: 0;
 }
 
 .sharetoolbar__new {
