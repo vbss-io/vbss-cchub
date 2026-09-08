@@ -284,7 +284,7 @@ const upsertStmt = db.prepare(`
   VALUES
     (@sessionId, @status, @cwd, @source, @hostPid, @shellPid, @claudePid, @client, @transcriptPath, @shareLabel, @title, @message, @model, @tokensIn, @tokensOut, @contextTokens, @now, @now)
   ON CONFLICT(session_id) DO UPDATE SET
-    status = @status,
+    status = CASE WHEN @keepStatus = 1 THEN status ELSE @status END,
     cwd = CASE WHEN @pinCwd = 1 THEN COALESCE(@cwd, cwd) ELSE COALESCE(cwd, @cwd) END,
     source = COALESCE(@source, source),
     host_pid = COALESCE(@hostPid, host_pid),
@@ -388,9 +388,11 @@ const apply = db.transaction((payload: HookPayload, now: number): SessionRecord 
     if (record) return record;
   }
   const status = payload.kind === "meta" ? "active" : statusByKind[payload.kind];
+  const keepStatus = payload.kind === "subagent_start" || payload.kind === "subagent_stop" ? 1 : 0;
   upsertStmt.run({
     sessionId: payload.sessionId,
     status,
+    keepStatus,
     cwd: payload.cwd,
     pinCwd: payload.kind === "session_start" ? 1 : 0,
     source: payload.source,

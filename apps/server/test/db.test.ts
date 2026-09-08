@@ -217,3 +217,14 @@ it("meta hooks update title, model and pids without touching status or updated_a
   assert.equal(after?.client, "vscode");
   assert.equal(db.applyMeta(payload({ sessionId: "nope", kind: "meta" })), null);
 });
+
+it("subagent events never change the session status", () => {
+  db.applyHook(payload({ sessionId: "sub-sess", kind: "stop" }));
+  const afterStop = db.applyHook(payload({ sessionId: "sub-sess", kind: "subagent_stop", agentId: "a1", agentType: "Explore" }));
+  assert.equal(afterStop.status, "idle");
+  db.applyHook(payload({ sessionId: "sub-sess", kind: "notification" }));
+  const afterStart = db.applyHook(payload({ sessionId: "sub-sess", kind: "subagent_start", agentId: "a2", agentType: "Explore" }));
+  assert.equal(afterStart.status, "waiting");
+  const fresh = db.applyHook(payload({ sessionId: "sub-fresh", kind: "subagent_start", agentId: "a3", agentType: "Explore" }));
+  assert.equal(fresh.status, "active");
+});
