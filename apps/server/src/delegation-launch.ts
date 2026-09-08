@@ -7,7 +7,7 @@ import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDe
 import type { CodexSandbox, Isolation, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
 import { createTaskWorktree, worktreeMainRepo } from "./worktrees.js";
 import { finishShareRequestByTask, getShare } from "./share-store.js";
-import { getSession } from "./db.js";
+import { endSession, getSession } from "./db.js";
 import { SHARE_CREATED_BY_PREFIX, implementGuardrail, implementProfile, type RunProfile, type TrustLevel } from "./share-types.js";
 import { discoverWorkspaces, findRepo, findWorkspace, isDirectory, samePath } from "./workspaces.js";
 
@@ -217,6 +217,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
       });
       const summary = outcome.status === "completed" ? (outcome.result ?? "").slice(0, 160) : (outcome.error ?? "");
       brainNote(`task ${outcome.status} · ${task.workspace} · ${task.title} (${task.runner}) — ${summary}`);
+      endRunSession(outcome.sessionId ?? run.sessionId, `run ${outcome.status}`);
       if (fromShare) {
         const ok = outcome.status === "completed" || outcome.status === "attention";
         finishShareRequestByTask({ taskId: task.id, status: ok ? "completed" : "failed", error: ok ? null : outcome.error, sessionId: outcome.sessionId });
@@ -240,6 +241,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
       } catch (storeErr) {
         console.error(`run ${run.id} could not be finalized: ${String(storeErr)}`);
       }
+      endRunSession(run.sessionId, "run failed");
       if (fromShare) finishShareRequestByTask({ taskId: task.id, status: "failed", error: message, sessionId: null });
     })
     .finally(() => {
@@ -299,6 +301,12 @@ export function repoPathOf(task: TaskRecord): string | null {
   } catch {
     return null;
   }
+}
+
+function endRunSession(sessionId: string | null, message: string): void {
+  if (!sessionId) return;
+  const ended = endSession(sessionId, message);
+  if (ended) broadcast("session", ended);
 }
 
 function broadcastOrigin(task: TaskRecord): void {
