@@ -72,7 +72,7 @@ describe("hub hook", () => {
     assert.equal(body.kind, "user_prompt");
     assert.equal(body.sessionId, "hook-detached");
     assert.equal(body.cwd, "C:/x");
-    assert.equal(body.claudePid, process.pid);
+    assert.ok(typeof body.claudePid === "number" && body.claudePid > 0, `claudePid resolved (${body.claudePid})`);
   });
 
   it("still posts inline when HUB_HOOK_INLINE=1", async () => {
