@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname, homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -116,6 +116,7 @@ function readTranscript(path) {
   let aiTitle = null;
   let customTitle = null;
   for (const line of lines) {
+    if (!line.includes('"ai-title"') && !line.includes('"custom-title"') && !line.includes('"assistant"')) continue;
     let entry;
     try {
       entry = JSON.parse(line);
@@ -163,7 +164,19 @@ async function readStdin() {
   return raw;
 }
 
+const WORKER_FLAG = "--worker";
+const isWorker = process.argv.includes(WORKER_FLAG);
 const raw = await readStdin();
+if (!isWorker && process.env.HUB_HOOK_INLINE !== "1") {
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2), WORKER_FLAG], {
+    detached: true,
+    stdio: ["pipe", "ignore", "ignore"],
+    windowsHide: true,
+  });
+  child.stdin.end(raw);
+  child.unref();
+  process.exit(0);
+}
 let input = {};
 try {
   input = JSON.parse(raw || "{}");
@@ -171,7 +184,8 @@ try {
   input = {};
 }
 
-const kind = process.argv[2] ?? kindByEvent[input.hook_event_name] ?? "notification";
+const explicitKind = process.argv.slice(2).find((arg) => arg !== WORKER_FLAG);
+const kind = explicitKind ?? kindByEvent[input.hook_event_name] ?? "notification";
 const sessionId = input.session_id ?? "unknown";
 const transcript = readTranscript(input.transcript_path);
 const { hostPid, shellPid, claudePid, host } = resolveHostInfo(sessionId);
