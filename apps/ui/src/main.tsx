@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { Widget } from "./components/Widget";
 import "./styles.css";
+import "./responsive.css";
 
 document.documentElement.dataset.theme = localStorage.getItem("hub.theme") === "midnight" ? "midnight" : "dracula";
 const isWidget = new URLSearchParams(location.search).get("widget") === "1";
