@@ -196,12 +196,12 @@ describe("sessions", () => {
 after(() => {
   db.db.close();
   rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+});
 
-  it("ends a session on demand with a message and never twice", () => {
-    db.applyHook(payload({ sessionId: "run-sess", kind: "user_prompt", client: "hub" }));
-    const ended = db.endSession("run-sess", "run completed");
-    assert.equal(ended?.status, "ended");
-    assert.equal(ended?.lastMessage, "run completed");
-    assert.equal(db.endSession("run-sess", "again"), null);
-  });
+it("ends a session on demand with a message and never twice", () => {
+  db.applyHook(payload({ sessionId: "run-sess", kind: "user_prompt", client: "hub" }));
+  const ended = db.endSession("run-sess", "run completed");
+  assert.equal(ended?.status, "ended");
+  assert.equal(ended?.lastMessage, "run completed");
+  assert.equal(db.endSession("run-sess", "again"), null);
 });
