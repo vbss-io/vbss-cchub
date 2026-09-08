@@ -295,6 +295,7 @@ function execute(spec: ProcessSpec, req: RunRequest): Promise<ExecutorResult> {
       env: spec.env,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
       signal: req.signal,
     });
 
