@@ -1,11 +1,12 @@
 import { spawn, spawnSync, execFile, type ChildProcess } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { networkInterfaces, platform, arch } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { config } from "./config.js";
+import { isProcessAlive } from "./db.js";
 import { getSetting, setSetting } from "./delegation-store.js";
 import { broadcast } from "./sse.js";
 
@@ -26,6 +27,7 @@ export interface TunnelStatus {
   localUrl: string;
   sharePort: number;
   endpointError: string | null;
+  notice: string | null;
 }
 
 export interface NgrokEvent {
@@ -59,13 +61,21 @@ export function lanAddress(): string | null {
 }
 
 const AUTH_HELP = "ngrok needs an authtoken: create a free account at ngrok.com and paste the token in Settings › Sharing";
+const DOMAIN_ONLINE = "another ngrok agent is already serving this domain; it was not started by this hub — close it and try again";
+const DOMAIN_NOT_RESERVED = "the static domain in Settings › Sharing is not reserved on your ngrok account";
+
+const ngrokCode = (text: string): string | null => text.match(/ERR_NGROK_\d+/i)?.[0].toUpperCase() ?? null;
+const withCode = (message: string, code: string | null): string => (code ? `${message} (${code})` : message);
 
 export function friendlyNgrokError(raw: string): string {
   const text = raw.replace(/\s+/g, " ").trim();
-  if (/ERR_NGROK_4018|authtoken|authentication failed/i.test(text)) return AUTH_HELP;
-  if (/ERR_NGROK_108|limited to 1 simultaneous|agent session limit/i.test(text)) return "ngrok says another agent is already running on this account; close it (or wait a minute) and start again";
-  if (/ERR_NGROK_334|domain .* not (found|reserved)|not reserved/i.test(text)) return "the static domain in Settings › Sharing is not reserved on your ngrok account";
-  return text.slice(0, 300);
+  const code = ngrokCode(text);
+  if (/ERR_NGROK_4018|authtoken|authentication failed/i.test(text)) return withCode(AUTH_HELP, code);
+  if (/ERR_NGROK_108|limited to 1 simultaneous|agent session limit/i.test(text)) return withCode("ngrok says another agent is already running on this account; close it (or wait a minute) and start again", code);
+  if (/ERR_NGROK_314|custom (host|domain)|requires? (a )?paid|upgrade your account/i.test(text)) return withCode("custom hostnames need a paid ngrok plan", code ?? "ERR_NGROK_314");
+  if (/ERR_NGROK_334|already online|endpoint .* is already|is already (online|bound|serving)/i.test(text)) return withCode(DOMAIN_ONLINE, code ?? "ERR_NGROK_334");
+  if (/ERR_NGROK_3200|domain .* not (found|reserved)|not reserved/i.test(text)) return withCode(DOMAIN_NOT_RESERVED, code);
+  return withCode(text.slice(0, 260), code);
 }
 
 export function parseNgrokLine(line: string): NgrokEvent {
@@ -170,6 +180,158 @@ export function installNgrok(): Promise<string> {
   return installing;
 }
 
+const pidDir = (): string => join(config.dataDir, "pids");
+const ngrokPidFile = (): string => join(pidDir(), "ngrok.pid");
+
+function writeNgrokPid(pid: number): void {
+  mkdirSync(pidDir(), { recursive: true });
+  writeFileSync(ngrokPidFile(), String(pid), "utf8");
+}
+
+function removeNgrokPid(): void {
+  try {
+    rmSync(ngrokPidFile(), { force: true });
+  } catch {
+    /* nothing to remove */
+  }
+}
+
+function readNgrokPid(): number | null {
+  try {
+    const pid = Number(readFileSync(ngrokPidFile(), "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const normalizePath = (value: string): string => value.replace(/\\/g, "/").toLowerCase();
+const sameBinary = (a: string | null, b: string | null): boolean => a !== null && b !== null && normalizePath(a) === normalizePath(b);
+const isNgrokExecutable = (executablePath: string): boolean => {
+  const base = basename(normalizePath(executablePath));
+  return base === "ngrok.exe" || base === "ngrok";
+};
+
+async function executablePathOf(pid: number): Promise<string | null> {
+  try {
+    if (platform() === "win32") {
+      const { stdout } = await run(
+        "powershell",
+        ["-NoProfile", "-NonInteractive", "-Command", `Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object -ExpandProperty ExecutablePath`],
+        { timeout: 10_000, windowsHide: true },
+      );
+      const path = stdout.trim();
+      return path.length > 0 ? path : null;
+    }
+    const { stdout } = await run("ps", ["-p", String(pid), "-o", "comm="], { timeout: 10_000 });
+    const path = stdout.trim();
+    return path.length > 0 ? path : null;
+  } catch {
+    return null;
+  }
+}
+
+interface NgrokProcess {
+  pid: number;
+  executablePath: string;
+}
+
+async function listNgrokProcesses(): Promise<NgrokProcess[]> {
+  try {
+    if (platform() === "win32") {
+      const { stdout } = await run(
+        "powershell",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "Get-CimInstance Win32_Process -Filter \"Name='ngrok.exe'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress",
+        ],
+        { timeout: 10_000, windowsHide: true },
+      );
+      const text = stdout.trim();
+      if (text.length === 0) return [];
+      const parsed: unknown = JSON.parse(text);
+      const rows = (Array.isArray(parsed) ? parsed : [parsed]) as { ProcessId?: number; ExecutablePath?: string | null }[];
+      return rows
+        .map((row) => ({ pid: Number(row.ProcessId ?? 0), executablePath: row.ExecutablePath ?? "" }))
+        .filter((row) => row.pid > 0);
+    }
+    const { stdout } = await run("pgrep", ["-x", "ngrok"], { timeout: 10_000 });
+    const out: NgrokProcess[] = [];
+    for (const raw of stdout.split("\n")) {
+      const pid = Number(raw.trim());
+      if (!Number.isInteger(pid) || pid <= 0) continue;
+      out.push({ pid, executablePath: (await executablePathOf(pid)) ?? "ngrok" });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function killProcessTree(pid: number): Promise<void> {
+  try {
+    if (platform() === "win32") {
+      await run("taskkill", ["/PID", String(pid), "/T", "/F"], { timeout: 10_000, windowsHide: true });
+    } else {
+      process.kill(pid, "SIGTERM");
+    }
+  } catch {
+    /* already gone or not permitted */
+  }
+}
+
+async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await delay(100);
+  }
+  return !isProcessAlive(pid);
+}
+
+export async function reapLeftoverNgrok(): Promise<number | null> {
+  const pid = readNgrokPid();
+  if (!pid || !isProcessAlive(pid)) {
+    removeNgrokPid();
+    return null;
+  }
+  const executable = await executablePathOf(pid);
+  if (!sameBinary(executable, findNgrokBinary()) && !(executable !== null && isNgrokExecutable(executable))) {
+    removeNgrokPid();
+    return null;
+  }
+  await killProcessTree(pid);
+  await waitForExit(pid, 5_000);
+  removeNgrokPid();
+  console.log(`closed a leftover ngrok (pid ${pid}) from a previous run`);
+  return pid;
+}
+
+async function killRunningNgrok(): Promise<number | null> {
+  const binary = findNgrokBinary();
+  const victims = new Set<number>();
+  const tracked = readNgrokPid();
+  if (tracked && tracked !== process.pid && isProcessAlive(tracked)) {
+    const executable = await executablePathOf(tracked);
+    if (sameBinary(executable, binary) || (executable !== null && isNgrokExecutable(executable))) victims.add(tracked);
+  }
+  for (const proc of await listNgrokProcesses()) {
+    if (proc.pid !== process.pid && isProcessAlive(proc.pid) && sameBinary(proc.executablePath, binary)) victims.add(proc.pid);
+  }
+  if (victims.size === 0) return null;
+  let closed: number | null = null;
+  for (const pid of victims.keys()) {
+    await killProcessTree(pid);
+    await waitForExit(pid, 5_000);
+    if (closed === null) closed = pid;
+  }
+  removeNgrokPid();
+  return closed;
+}
+
 interface TunnelRuntime {
   state: TunnelState;
   publicUrl: string | null;
@@ -178,9 +340,10 @@ interface TunnelRuntime {
   startedAt: number | null;
   child: ChildProcess | null;
   generation: number;
+  notice: string | null;
 }
 
-const runtime: TunnelRuntime = { state: "stopped", publicUrl: null, error: null, lastError: null, startedAt: null, child: null, generation: 0 };
+const runtime: TunnelRuntime = { state: "stopped", publicUrl: null, error: null, lastError: null, startedAt: null, child: null, generation: 0, notice: null };
 const stateNow = (): TunnelState => runtime.state;
 let endpointError: string | null = null;
 
@@ -216,6 +379,7 @@ export function tunnelStatus(): TunnelStatus {
     localUrl: `http://127.0.0.1:${config.sharePort}`,
     sharePort: config.sharePort,
     endpointError,
+    notice: runtime.notice,
   };
 }
 
@@ -234,6 +398,7 @@ export async function startTunnel(): Promise<TunnelStatus> {
   if (runtime.state === "running" || runtime.state === "starting" || runtime.state === "installing") return tunnelStatus();
   const generation = runtime.generation + 1;
   runtime.generation = generation;
+  runtime.notice = null;
   let binary = findNgrokBinary();
   if (!binary) {
     setState({ state: "installing", error: null });
@@ -256,9 +421,13 @@ export async function startTunnel(): Promise<TunnelStatus> {
   }
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (settings.authtoken) env.NGROK_AUTHTOKEN = settings.authtoken;
+  const closed = await killRunningNgrok();
+  if (runtime.generation !== generation) return tunnelStatus();
+  if (closed !== null) runtime.notice = `closed an ngrok that was already running (pid ${closed})`;
   setState({ state: "starting", error: null, lastError: null, publicUrl: null, startedAt: Date.now() });
   const child = spawn(binary, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, env });
   runtime.child = child;
+  if (typeof child.pid === "number") writeNgrokPid(child.pid);
   let buffer = "";
   const onLine = (line: string): void => {
     if (runtime.child !== child) return;
@@ -285,6 +454,7 @@ export async function startTunnel(): Promise<TunnelStatus> {
     setState({ state: "error", error: err.message, publicUrl: null, child: null });
   });
   child.on("exit", (code) => {
+    removeNgrokPid();
     if (runtime.child !== child) return;
     const stopped = stateNow() === "stopped";
     setState({
@@ -320,14 +490,19 @@ export function stopTunnel(): TunnelStatus {
   runtime.lastError = null;
   runtime.startedAt = null;
   runtime.child = null;
+  runtime.notice = null;
   if (child) child.kill();
+  removeNgrokPid();
   publish();
   return tunnelStatus();
 }
 
 process.on("exit", () => {
   runtime.child?.kill();
+  removeNgrokPid();
 });
+
+void reapLeftoverNgrok();
 
 export interface FirewallStatus {
   supported: boolean;
