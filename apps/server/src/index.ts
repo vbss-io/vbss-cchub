@@ -20,6 +20,7 @@ import {
   reorderGroups,
   setSessionFavorite,
   updateGroup,
+  applyMeta,
 } from "./db.js";
 import { focusWindow } from "./focus.js";
 import { desktopNotifier } from "./desktop-notify.js";
@@ -105,7 +106,7 @@ app.post("/hook", (req, res) => {
     shareLabel: asString(body.shareLabel),
   };
   const seededAt = process.env.HUB_DEV_SEED === "1" ? asNumber(body.updatedAt) : null;
-  const session = applyHook(payload, seededAt ?? undefined);
+  const session = payload.kind === "meta" ? (applyMeta(payload) ?? applyHook(payload, seededAt ?? undefined)) : applyHook(payload, seededAt ?? undefined);
   broadcast("session", session);
   res.json(session);
 });

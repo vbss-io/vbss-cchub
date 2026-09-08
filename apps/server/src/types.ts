@@ -1,4 +1,5 @@
 export const HOOK_KINDS = [
+  "meta",
   "session_start",
   "user_prompt",
   "notification",

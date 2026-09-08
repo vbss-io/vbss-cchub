@@ -54,6 +54,22 @@ function alive(pid) {
 const envClaudePid = Number(process.env.CLAUDE_PID) > 0 ? Number(process.env.CLAUDE_PID) : null;
 const startPid = envClaudePid ?? (Number(process.env.HUB_HOOK_START_PID) > 0 ? Number(process.env.HUB_HOOK_START_PID) : process.pid);
 
+function cachedHostInfo(sessionId) {
+  if (process.platform !== "win32") return null;
+  const cache = join(homedir(), ".vbss-cchub", "pids", `${sessionId}.json`);
+  try {
+    if (!existsSync(cache)) return null;
+    const cached = JSON.parse(readFileSync(cache, "utf8"));
+    const shellOk = cached.shellPid == null || alive(cached.shellPid);
+    if (Number.isInteger(cached.hostPid) && cached.hostPid > 0 && alive(cached.hostPid) && shellOk) {
+      return { claudePid: null, host: null, ...cached };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 function resolveHostInfo(sessionId) {
   const empty = { hostPid: null, shellPid: null, claudePid: null, host: null };
   if (process.platform !== "win32") return empty;
@@ -169,18 +185,8 @@ async function readStdin() {
 
 const WORKER_FLAG = "--worker";
 const isWorker = process.argv.includes(WORKER_FLAG);
+const inline = process.env.HUB_HOOK_INLINE === "1";
 const raw = await readStdin();
-if (!isWorker && process.env.HUB_HOOK_INLINE !== "1") {
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2), WORKER_FLAG], {
-    detached: true,
-    stdio: ["pipe", "ignore", "ignore"],
-    windowsHide: true,
-    env: { ...process.env, HUB_HOOK_START_PID: String(process.ppid) },
-  });
-  child.stdin.end(raw);
-  child.unref();
-  process.exit(0);
-}
 let input = {};
 try {
   input = JSON.parse(raw || "{}");
@@ -192,46 +198,66 @@ const explicitKind = process.argv.slice(2).find((arg) => arg !== WORKER_FLAG);
 const kind = explicitKind ?? kindByEvent[input.hook_event_name] ?? "notification";
 const sessionId = input.session_id ?? process.env.CLAUDE_CODE_SESSION_ID ?? null;
 if (!sessionId) process.exit(0);
-const transcript = readTranscript(input.transcript_path);
-const resolved = resolveHostInfo(sessionId);
-const { hostPid, shellPid, host } = resolved;
-const claudePid = resolved.claudePid ?? envClaudePid;
 const lastAssistant =
   typeof input.last_assistant_message === "string" ? input.last_assistant_message.slice(0, 400) : null;
 const shareLabel = process.env.HUB_SHARE_LABEL ?? null;
-const client = shareLabel ? "share" : isHeadless ? (process.env.HUB_DELEGATED === "1" ? "hub" : "headless") : (host ?? "terminal");
+const clientFor = (host) => (shareLabel ? "share" : isHeadless ? (process.env.HUB_DELEGATED === "1" ? "hub" : "headless") : (host ?? "terminal"));
 
-const body = {
-  kind,
-  sessionId,
-  cwd: input.cwd ?? null,
-  source: SOURCE,
-  hostPid,
-  shellPid,
-  message: input.message ?? (input.agent_id ? null : lastAssistant),
-  title: sessionTitle(sessionId, transcript.title, transcript.customTitle),
-  model: transcript.model,
-  tokensIn: transcript.tokensIn,
-  tokensOut: transcript.tokensOut,
-  contextTokens: transcript.contextTokens,
-  agentId: input.agent_id ?? null,
-  agentType: input.agent_type ?? null,
-  client,
-  claudePid: claudePid ?? null,
-  transcriptPath: input.transcript_path ?? null,
-  agentMessage: input.agent_id ? lastAssistant : null,
-  shareLabel,
-};
-
-try {
-  await fetch(`http://${HOST}:${PORT}/hook`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(2000),
-  });
-} catch {
-  // hub offline: never block Claude Code
+function buildBody(eventKind, hostInfo, transcript, withMessage) {
+  return {
+    kind: eventKind,
+    sessionId,
+    cwd: input.cwd ?? null,
+    source: SOURCE,
+    hostPid: hostInfo.hostPid,
+    shellPid: hostInfo.shellPid,
+    message: withMessage ? (input.message ?? (input.agent_id ? null : lastAssistant)) : null,
+    title: transcript ? sessionTitle(sessionId, transcript.title, transcript.customTitle) : null,
+    model: transcript ? transcript.model : null,
+    tokensIn: transcript ? transcript.tokensIn : null,
+    tokensOut: transcript ? transcript.tokensOut : null,
+    contextTokens: transcript ? transcript.contextTokens : null,
+    agentId: input.agent_id ?? null,
+    agentType: input.agent_type ?? null,
+    client: hostInfo.host || hostInfo.cached ? clientFor(hostInfo.host) : shareLabel || isHeadless ? clientFor(null) : null,
+    claudePid: hostInfo.claudePid ?? envClaudePid,
+    transcriptPath: input.transcript_path ?? null,
+    agentMessage: withMessage && input.agent_id ? lastAssistant : null,
+    shareLabel,
+  };
 }
 
+async function post(body) {
+  try {
+    await fetch(`http://${HOST}:${PORT}/hook`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(2000),
+    });
+  } catch {
+    // hub offline: never block Claude Code
+  }
+}
+
+if (isWorker) {
+  await post(buildBody("meta", resolveHostInfo(sessionId), readTranscript(input.transcript_path), false));
+  process.exit(0);
+}
+
+if (inline) {
+  await post(buildBody(kind, resolveHostInfo(sessionId), readTranscript(input.transcript_path), true));
+  process.exit(0);
+}
+
+const cached = cachedHostInfo(sessionId);
+await post(buildBody(kind, cached ? { ...cached, cached: true } : { hostPid: null, shellPid: null, claudePid: null, host: null }, null, true));
+const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2), WORKER_FLAG], {
+  detached: true,
+  stdio: ["pipe", "ignore", "ignore"],
+  windowsHide: true,
+  env: { ...process.env, HUB_HOOK_START_PID: String(process.ppid) },
+});
+child.stdin.end(raw);
+child.unref();
 process.exit(0);
