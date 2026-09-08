@@ -51,6 +51,9 @@ function alive(pid) {
   }
 }
 
+const envClaudePid = Number(process.env.CLAUDE_PID) > 0 ? Number(process.env.CLAUDE_PID) : null;
+const startPid = envClaudePid ?? (Number(process.env.HUB_HOOK_START_PID) > 0 ? Number(process.env.HUB_HOOK_START_PID) : process.pid);
+
 function resolveHostInfo(sessionId) {
   const empty = { hostPid: null, shellPid: null, claudePid: null, host: null };
   if (process.platform !== "win32") return empty;
@@ -77,7 +80,7 @@ function resolveHostInfo(sessionId) {
         "-File",
         join(here, "find-host-window.ps1"),
         "-StartPid",
-        String(process.pid),
+        String(startPid),
       ],
       { timeout: 5000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
     ).trim();
@@ -172,6 +175,7 @@ if (!isWorker && process.env.HUB_HOOK_INLINE !== "1") {
     detached: true,
     stdio: ["pipe", "ignore", "ignore"],
     windowsHide: true,
+    env: { ...process.env, HUB_HOOK_START_PID: String(process.ppid) },
   });
   child.stdin.end(raw);
   child.unref();
@@ -188,7 +192,9 @@ const explicitKind = process.argv.slice(2).find((arg) => arg !== WORKER_FLAG);
 const kind = explicitKind ?? kindByEvent[input.hook_event_name] ?? "notification";
 const sessionId = input.session_id ?? "unknown";
 const transcript = readTranscript(input.transcript_path);
-const { hostPid, shellPid, claudePid, host } = resolveHostInfo(sessionId);
+const resolved = resolveHostInfo(sessionId);
+const { hostPid, shellPid, host } = resolved;
+const claudePid = resolved.claudePid ?? envClaudePid;
 const lastAssistant =
   typeof input.last_assistant_message === "string" ? input.last_assistant_message.slice(0, 400) : null;
 const shareLabel = process.env.HUB_SHARE_LABEL ?? null;

@@ -14,6 +14,7 @@ interface Received {
   sessionId: string;
   cwd: string | null;
   title: string | null;
+  claudePid: number | null;
 }
 
 let server: Server;
@@ -64,13 +65,14 @@ function runHook(env: Record<string, string>, input: Record<string, unknown>): P
 describe("hub hook", () => {
   it("returns immediately and posts the event from a detached worker", async () => {
     const arrival = nextHook();
-    const run = await runHook({}, { hook_event_name: "UserPromptSubmit", session_id: "hook-detached", cwd: "C:/x", transcript_path: transcript });
+    const run = await runHook({ CLAUDE_PID: String(process.pid) }, { hook_event_name: "UserPromptSubmit", session_id: "hook-detached", cwd: "C:/x", transcript_path: transcript });
     assert.equal(run.code, 0);
     assert.ok(run.ms < 3_000, `hook took ${run.ms} ms`);
     const body = await Promise.race([arrival, new Promise<Received>((_, reject) => setTimeout(() => reject(new Error("no hook within 15 s")), 15_000))]);
     assert.equal(body.kind, "user_prompt");
     assert.equal(body.sessionId, "hook-detached");
     assert.equal(body.cwd, "C:/x");
+    assert.equal(body.claudePid, process.pid);
   });
 
   it("still posts inline when HUB_HOOK_INLINE=1", async () => {
