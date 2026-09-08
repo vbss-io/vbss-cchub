@@ -100,7 +100,12 @@ describe("share endpoint access", () => {
     assert.equal(res.status, 200);
     assert.match(res.headers.get("content-type") ?? "", /text\/plain/);
     const doc = await res.text();
-    assert.match(doc, /^CC Hub share · Will/);
+    assert.match(doc, /^I'm sharing a CC Hub link so you can help me\. Link: /);
+    assert.ok(doc.startsWith(`I'm sharing a CC Hub link so you can help me. Link: ${url(share)}?key=${share.key}`));
+    assert.match(doc, new RegExp(`GET ${url(share).replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}/about\\?key=${share.key} first`));
+    assert.match(doc, /Trust is read-only/);
+    assert.match(doc, /\nTask: /);
+    assert.match(doc, /CC Hub share · Will/);
     assert.match(doc, /Published by .* with CC Hub/);
     assert.match(doc, /X-Asker/);
     assert.match(doc, /openapi\.json/);
