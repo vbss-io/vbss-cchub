@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { HooksStatus } from "../api";
+import { getDesktopNotifyStatus, type DesktopNotifyStatus, type HooksStatus } from "../api";
 import { GroupManager } from "../components/GroupManager";
 import type { ConnectStatus, DelegationSettings, McpClient, ShellKind } from "../delegation";
 import { COFFEE_URL, GITHUB_URL, notify, openExternal, playSound } from "../notify";
@@ -75,6 +75,27 @@ interface Props {
 
 export function SettingsView(props: Props) {
   const { enabled, hubUrl, version, section, settings, connect, hooks, hooksBusy, notif, groups, tunnel } = props;
+  const [desktopStatus, setDesktopStatus] = useState<DesktopNotifyStatus | null>(null);
+  const [testResult, setTestResult] = useState<string | null>(null);
+  useEffect(() => {
+    void getDesktopNotifyStatus().then(setDesktopStatus).catch(() => setDesktopStatus(null));
+  }, []);
+  const windowsBlocked = desktopStatus?.supported === true && (desktopStatus.toastsEnabled === false || desktopStatus.appEnabled === false);
+  const sendTest = async () => {
+    const outcome = await notify("VBSS CCHUB", "Test notification — this is what an alert looks like.");
+    const fresh = await getDesktopNotifyStatus(true).catch(() => null);
+    if (fresh) setDesktopStatus(fresh);
+    if (outcome === "none") {
+      setTestResult("Could not send: the hub did not accept the toast and the desktop plugin is not available.");
+      return;
+    }
+    const blocked = fresh?.supported === true && (fresh.toastsEnabled === false || fresh.appEnabled === false);
+    setTestResult(
+      blocked
+        ? `Sent to Windows via ${outcome === "hub" ? "the hub" : "the desktop plugin"}, but Windows is dropping notifications for this account or app (see the warning above).`
+        : `Sent to Windows via ${outcome === "hub" ? "the hub (io.vbss.cchub)" : "the desktop plugin"}. It shows bottom-right unless Focus Assist is on.`,
+    );
+  };
   const [ngrokToken, setNgrokToken] = useState("");
   const [ngrokDomain, setNgrokDomain] = useState(tunnel?.domain ?? "");
   const [ngrokBusy, setNgrokBusy] = useState(false);
@@ -453,10 +474,18 @@ export function SettingsView(props: Props) {
           <input type="checkbox" checked={notif.enabled} onChange={(event) => props.onNotif({ ...notif, enabled: event.target.checked })} />
           <span>Notifications on</span>
         </label>
+        {windowsBlocked && (
+          <p className="callout callout--warn">
+            {desktopStatus?.toastsEnabled === false
+              ? "Windows notifications are turned off for your account: open Windows Settings › System › Notifications and switch Notifications on. The hub sends toasts, Windows drops them."
+              : "Windows has notifications disabled for VBSS CCHUB: open Windows Settings › System › Notifications and enable the app."}
+          </p>
+        )}
         <div className="frow">
-          <button className="act" onClick={() => void notify("VBSS CCHUB", "Test notification — this is what an alert looks like.")}>
+          <button className="act" onClick={() => void sendTest()}>
             Send test notification
           </button>
+          {testResult && <span className="muted small">{testResult}</span>}
         </div>
         <h3>What to notify about</h3>
         <ul className="notif-events">
