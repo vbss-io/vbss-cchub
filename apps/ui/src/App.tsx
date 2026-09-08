@@ -6,10 +6,11 @@ import { CodexDrawer } from "./components/CodexDrawer";
 import { RuntimeBar } from "./components/RuntimeBar";
 import { SessionDrawer } from "./components/SessionDrawer";
 import { WhatsNew } from "./components/WhatsNew";
-import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type ShellKind, type TaskRecord, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
+import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, getTask, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
 import { IconClose, IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconWorkspaces } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
-import { notify, playSound, unlockAudio } from "./notify";
+import { unlockAudio } from "./notify";
+import { DEFAULT_NOTIF_EVENTS, firedEvents, notifyEvent, resetFired, setNotifConfig } from "./notifications";
 import { isEmpty, isStale } from "./stale";
 import type { CodexSessionRecord, GroupRecord, RunEventMessage, RuntimeSnapshot, SessionRecord, SessionClient } from "./types";
 import { FlowView } from "./views/FlowView";
@@ -39,18 +40,22 @@ const VIEWS: { key: View; label: string; icon: ReactElement; subtitle: string }[
 ];
 
 const DEFAULT_NOTIF: NotifSettings = {
-  attention: true,
-  finished: true,
+  enabled: true,
   desktop: true,
   sound: true,
-  shares: true,
+  events: { ...DEFAULT_NOTIF_EVENTS },
   clients: { terminal: true, vscode: true, wsl: true, "claude-desktop": false, headless: false, hub: false, share: false },
 };
 
 function loadNotif(): NotifSettings {
   try {
     const stored = JSON.parse(localStorage.getItem("hub.notifications") ?? "{}") as Partial<NotifSettings>;
-    return { ...DEFAULT_NOTIF, ...stored, clients: { ...DEFAULT_NOTIF.clients, ...(stored.clients ?? {}) } };
+    return {
+      ...DEFAULT_NOTIF,
+      ...stored,
+      events: { ...DEFAULT_NOTIF.events, ...(stored.events ?? {}) },
+      clients: { ...DEFAULT_NOTIF.clients, ...(stored.clients ?? {}) },
+    };
   } catch {
     return DEFAULT_NOTIF;
   }
@@ -104,6 +109,7 @@ export function App() {
   const notifRef = useRef(notifSettings);
   const runListeners = useRef(new Set<(event: RunEventMessage) => void>());
   const shareListeners = useRef(new Set<(event: ShareStreamEvent) => void>());
+  const taskStatusRef = useRef(new Map<string, TaskStatus>());
 
   const navigate = useCallback((view: View, param?: string | null) => {
     location.hash = param ? `#/${view}/${param}` : `#/${view}`;
@@ -128,7 +134,19 @@ export function App() {
   useEffect(() => {
     notifRef.current = notifSettings;
     localStorage.setItem("hub.notifications", JSON.stringify(notifSettings));
+    setNotifConfig({ enabled: notifSettings.enabled, desktop: notifSettings.desktop, sound: notifSettings.sound, events: notifSettings.events });
   }, [notifSettings]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as unknown as { __cchubNotifications: unknown }).__cchubNotifications = {
+      fired: firedEvents,
+      reset: resetFired,
+      setEnabled: (value: boolean) => setNotifSettings((prev) => ({ ...prev, enabled: value })),
+      setEvent: (kind: keyof NotifSettings["events"], value: boolean) =>
+        setNotifSettings((prev) => ({ ...prev, events: { ...prev.events, [kind]: value } })),
+    };
+  }, []);
 
   useEffect(() => {
     const unlock = () => unlockAudio();
@@ -179,6 +197,27 @@ export function App() {
     void loadHub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hubTick]);
+
+  useEffect(() => {
+    const seen = taskStatusRef.current;
+    for (const task of tasks) {
+      const before = seen.get(task.id);
+      seen.set(task.id, task.status);
+      if (before === undefined || before === task.status) continue;
+      if (task.status === "completed") {
+        void getTask(task.id)
+          .then((detail) => {
+            const result = [...detail.runs].reverse().find((run) => run.result)?.result ?? null;
+            notifyEvent("taskCompleted", { id: task.id, title: task.title, detail: result });
+          })
+          .catch(() => notifyEvent("taskCompleted", { id: task.id, title: task.title, detail: null }));
+      } else if (task.status === "failed") {
+        notifyEvent("taskFailed", { id: task.id, title: task.title, detail: task.lastError });
+      } else if (task.status === "attention") {
+        notifyEvent("taskNeedsYou", { id: task.id, title: task.title, detail: task.lastError });
+      }
+    }
+  }, [tasks]);
 
   useEffect(() => {
     if (isMock || route.view !== "settings" || !hubEnabled) return;
@@ -232,15 +271,15 @@ export function App() {
           const quiet = !(cfg.clients[(session.client ?? "terminal") as SessionClient] ?? true) || session.archivedAt != null;
           if (!quiet && (!before || before.status !== session.status)) {
             const label = session.customTitle ?? session.title ?? projectOf(session);
-            if ((session.status === "waiting" || session.status === "idle") && cfg.attention) {
-              if (cfg.desktop) void notify("VBSS CCHUB", `${label} • ${session.status === "waiting" ? "needs a decision" : "paused"}`);
-              if (cfg.sound) {
-                void playSound(session.status === "idle" ? "idle" : "attention");
-                navigator.vibrate?.(session.status === "waiting" ? [90, 60, 90] : 160);
-              }
-            } else if (session.status === "ended" && before && cfg.finished) {
-              if (cfg.desktop) void notify("VBSS CCHUB", `${label} • finished`);
-              if (cfg.sound) void playSound("finished");
+            if (session.status === "waiting" || session.status === "idle") {
+              notifyEvent("sessionNeedsYou", {
+                id: session.sessionId,
+                name: label,
+                detail: session.status === "waiting" ? "needs a decision" : "paused",
+                sound: session.status === "idle" ? "idle" : "attention",
+              });
+            } else if (session.status === "ended" && before) {
+              notifyEvent("sessionFinished", { id: session.sessionId, name: label });
             }
           }
           return { ...prev, [session.sessionId]: session };
@@ -272,12 +311,13 @@ export function App() {
       },
       onShareRequest: (request) => {
         if (mounted) setShareTick((value) => value + 1);
-        const cfg = notifRef.current;
-        if (request.status === "running" && cfg.shares) {
-          const text = `${request.asker ?? request.label} • ${request.kind === "ask" ? "asked" : "requested"}: ${request.prompt.slice(0, 90)}`;
-          if (cfg.desktop) void notify("VBSS CCHUB", text);
-          if (cfg.sound) void playSound("attention");
-        }
+        if (request.status !== "running") return;
+        notifyEvent(request.kind === "ask" ? "shareAsk" : "shareImplement", {
+          id: request.id,
+          label: request.label,
+          asker: request.asker,
+          detail: request.prompt,
+        });
       },
       onTunnel: (status) => {
         if (mounted) setTunnel(status);
