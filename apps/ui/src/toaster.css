@@ -45,7 +45,7 @@ html.toast-window body {
   border: 1px solid var(--border-2);
   border-left: 3px solid var(--border-2);
   background: var(--panel);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
   cursor: pointer;
   text-align: left;
 }
