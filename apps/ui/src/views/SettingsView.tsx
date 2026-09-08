@@ -2,18 +2,18 @@ import { useEffect, useState } from "react";
 import type { HooksStatus } from "../api";
 import { GroupManager } from "../components/GroupManager";
 import type { ConnectStatus, DelegationSettings, McpClient, ShellKind } from "../delegation";
-import { COFFEE_URL, GITHUB_URL, openExternal, playSound } from "../notify";
+import { COFFEE_URL, GITHUB_URL, notify, openExternal, playSound } from "../notify";
 import type { SessionClient } from "../types";
 import type { Autonomy, AutostartStatus, TunnelStatus } from "../delegation";
 import { claudeClient } from "../clients";
 import type { GroupRecord } from "../types";
+import { NOTIF_EVENT_META, type NotifEventKind } from "../notifications";
 
 export interface NotifSettings {
-  attention: boolean;
-  finished: boolean;
+  enabled: boolean;
   desktop: boolean;
   sound: boolean;
-  shares: boolean;
+  events: Record<NotifEventKind, boolean>;
   clients: Record<SessionClient, boolean>;
 }
 
@@ -448,7 +448,33 @@ export function SettingsView(props: Props) {
 
       <section className="settings__section" id="settings-notifications">
         <h2>Notifications</h2>
-        <p className="hint">Desktop notifications and sounds when a session needs you or finishes.</p>
+        <p className="hint">Windows desktop notifications, bottom-right like Teams, plus sounds, when something wants your attention.</p>
+        <label className="notif-master">
+          <input type="checkbox" checked={notif.enabled} onChange={(event) => props.onNotif({ ...notif, enabled: event.target.checked })} />
+          <span>Notifications on</span>
+        </label>
+        <div className="frow">
+          <button className="act" onClick={() => void notify("VBSS CCHUB", "Test notification — this is what an alert looks like.")}>
+            Send test notification
+          </button>
+        </div>
+        <h3>What to notify about</h3>
+        <ul className="notif-events">
+          {NOTIF_EVENT_META.map((meta) => (
+            <li key={meta.kind} className="notif-events__row">
+              <label className="notif-events__label">
+                <input
+                  type="checkbox"
+                  checked={notif.events[meta.kind]}
+                  disabled={!notif.enabled}
+                  onChange={(event) => props.onNotif({ ...notif, events: { ...notif.events, [meta.kind]: event.target.checked } })}
+                />
+                <span className="notif-events__name">{meta.label}</span>
+              </label>
+              <span className="notif-events__desc">{meta.description}</span>
+            </li>
+          ))}
+        </ul>
         <h3>Which sessions notify</h3>
         <p className="hint">
           Claude Desktop starts a short Claude Code session behind each chat step; those appear and end within seconds, so they are silent by
@@ -466,21 +492,8 @@ export function SettingsView(props: Props) {
             </label>
           ))}
         </div>
-        <h3>Events and channels</h3>
+        <h3>Channels</h3>
         <div className="notifcfg">
-          <label className="notifcfg__item">
-            <input type="checkbox" checked={notif.attention} onChange={(event) => props.onNotif({ ...notif, attention: event.target.checked })} />
-            On attention (waiting or idle)
-          </label>
-          <label className="notifcfg__item">
-            <input type="checkbox" checked={notif.finished} onChange={(event) => props.onNotif({ ...notif, finished: event.target.checked })} />
-            On finish (ended)
-          </label>
-          <label className="notifcfg__item">
-            <input type="checkbox" checked={notif.shares} onChange={(event) => props.onNotif({ ...notif, shares: event.target.checked })} />
-            Questions arriving through a share
-          </label>
-          <span className="notifcfg__sep" />
           <label className="notifcfg__item">
             <input type="checkbox" checked={notif.desktop} onChange={(event) => props.onNotif({ ...notif, desktop: event.target.checked })} />
             Desktop notification
