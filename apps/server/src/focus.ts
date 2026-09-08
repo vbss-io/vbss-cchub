@@ -34,7 +34,7 @@ export async function focusWindow(
       String(hostPid ?? 0),
       "-Cwd",
       cwd ?? "",
-    ]);
+    ], { windowsHide: true, timeout: 15_000 });
     return { ok: true };
   } catch (error) {
     const code = (error as { code?: number }).code;
