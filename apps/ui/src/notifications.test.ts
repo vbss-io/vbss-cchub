@@ -17,6 +17,7 @@ function harness(overrides: Partial<NotifEventConfig> = {}): Harness & { notify:
       enabled: true,
       desktop: true,
       sound: true,
+      style: "both",
       events: {
         sessionNeedsYou: true,
         sessionFinished: true,
@@ -111,6 +112,28 @@ test("channel toggles gate desktop and sound independently", () => {
   soundOnly.notify("taskFailed", { id: "t1", title: "Build", detail: "boom" });
   assert.equal(soundOnly.sent.length, 0);
   assert.equal(soundOnly.sounds.length, 1);
+});
+
+test("style cchub does not call the windows sender", () => {
+  const h = harness({ style: "cchub" });
+  h.notify("taskCompleted", { id: "t1", title: "Build", detail: "done" });
+  assert.equal(h.sent.length, 0);
+  assert.equal(h.sounds.length, 1);
+  assert.equal(h.fired.length, 1);
+});
+
+test("style windows calls the windows sender", () => {
+  const h = harness({ style: "windows" });
+  h.notify("taskCompleted", { id: "t1", title: "Build", detail: "done" });
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.fired.length, 1);
+});
+
+test("style both calls the windows sender", () => {
+  const h = harness({ style: "both" });
+  h.notify("taskCompleted", { id: "t1", title: "Build", detail: "done" });
+  assert.equal(h.sent.length, 1);
+  assert.equal(h.fired.length, 1);
 });
 
 test("buildNotification shapes each kind", () => {
