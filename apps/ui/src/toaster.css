@@ -1,3 +1,8 @@
+html.toast-window,
+html.toast-window body {
+  background: transparent;
+}
+
 .toaster {
   position: fixed;
   inset: 0;

@@ -180,6 +180,13 @@ app.get("/api/runtimes", (_req, res) => {
   void runtimeSnapshot().then((snapshot) => res.json(snapshot));
 });
 
+app.post("/api/ui/navigate", (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const hash = typeof body.hash === "string" && body.hash.startsWith("#/") ? body.hash.slice(0, 200) : "#/sessions";
+  broadcast("ui-navigate", { hash });
+  res.status(204).end();
+});
+
 app.get("/api/notify/status", (req, res) => {
   void desktopNotifier.status(req.query.force === "1").then((status) => res.json(status));
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactElement } from "react";
-import { subscribe, type ShareRequestEvent } from "../api";
+import { focusSession, reportUiError, requestNavigate, subscribe, type ShareRequestEvent } from "../api";
 import { getTask, listTasks, type TaskStatus } from "../delegation";
 import { IconClose, IconSessions, IconShare, IconTasks } from "../icons";
 import { createNotifier, loadNotifEventConfig, type FiredEvent, type NotifEventKind, type NotifEventPayload } from "../notifications";
@@ -73,8 +73,20 @@ interface MonitorLike {
   workArea?: { position: { x: number; y: number }; size: { width: number; height: number } };
 }
 
+const logToaster = (step: string, err: unknown): void => {
+  void reportUiError("toaster", err instanceof Error ? new Error(`${step}: ${err.message}`) : new Error(`${step}: ${String(err)}`), null);
+};
+
 async function applyWindow(count: number, height: number): Promise<void> {
   if (!inTauri()) return;
+  try {
+    await applyWindowUnsafe(count, height);
+  } catch (err) {
+    logToaster(count === 0 ? "hide" : "show", err);
+  }
+}
+
+async function applyWindowUnsafe(count: number, height: number): Promise<void> {
   const { getCurrentWindow, currentMonitor } = await import("@tauri-apps/api/window");
   const win = getCurrentWindow();
   if (count === 0) {
@@ -112,19 +124,22 @@ async function applyWindow(count: number, height: number): Promise<void> {
   await win.show();
 }
 
-async function focusMain(hash: string): Promise<void> {
+async function openTarget(kind: NotifEventKind, id: string): Promise<void> {
+  const hash = hashFor(kind, id);
   if (!inTauri()) {
     window.open(`${location.origin}${location.pathname}${hash}`, "_blank", "noopener");
     return;
   }
-  const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-  const { emit } = await import("@tauri-apps/api/event");
-  const main = await WebviewWindow.getByLabel("main");
-  if (main) {
-    await main.show();
-    await main.setFocus();
+  if (kind === "sessionNeedsYou" || kind === "sessionFinished") {
+    try {
+      const result = await focusSession(id);
+      if (result.ok) return;
+      logToaster("focus session", new Error(result.reason ?? "focus refused"));
+    } catch (err) {
+      logToaster("focus session", err);
+    }
   }
-  await emit("hub:navigate", hash);
+  await requestNavigate(hash);
 }
 
 export function Toaster(): ReactElement {
@@ -287,7 +302,7 @@ export function Toaster(): ReactElement {
   }, [cards]);
 
   const onCardClick = useCallback((card: Card) => {
-    void focusMain(hashFor(card.kind, card.id));
+    void openTarget(card.kind, card.id);
     setCards((prev) => prev.filter((item) => item.key !== card.key));
   }, []);
 

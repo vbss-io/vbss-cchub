@@ -310,6 +310,16 @@ export function App() {
       onRunEvent: (event) => {
         for (const listener of runListeners.current) listener(event);
       },
+      onNavigate: (hash) => {
+        location.hash = hash;
+        if (!("__TAURI_INTERNALS__" in window)) return;
+        void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
+          const current = getCurrentWindow();
+          await current.show();
+          await current.unminimize();
+          await current.setFocus();
+        }).catch(() => undefined);
+      },
       onShareRequest: (request) => {
         if (mounted) setShareTick((value) => value + 1);
         if (request.status !== "running") return;

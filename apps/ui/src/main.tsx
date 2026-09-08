@@ -11,6 +11,7 @@ document.documentElement.dataset.theme = localStorage.getItem("hub.theme") === "
 const params = new URLSearchParams(location.search);
 const isWidget = params.get("widget") === "1";
 const isToast = params.get("toast") === "1";
+if (isToast) document.documentElement.classList.add("toast-window");
 const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
