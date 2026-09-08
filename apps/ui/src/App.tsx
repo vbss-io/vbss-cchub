@@ -43,6 +43,7 @@ const DEFAULT_NOTIF: NotifSettings = {
   enabled: true,
   desktop: true,
   sound: true,
+  style: "cchub",
   events: { ...DEFAULT_NOTIF_EVENTS },
   clients: { terminal: true, vscode: true, wsl: true, "claude-desktop": false, headless: false, hub: false, share: false },
 };
@@ -134,7 +135,7 @@ export function App() {
   useEffect(() => {
     notifRef.current = notifSettings;
     localStorage.setItem("hub.notifications", JSON.stringify(notifSettings));
-    setNotifConfig({ enabled: notifSettings.enabled, desktop: notifSettings.desktop, sound: notifSettings.sound, events: notifSettings.events });
+    setNotifConfig({ enabled: notifSettings.enabled, desktop: notifSettings.desktop, sound: notifSettings.sound, style: notifSettings.style, events: notifSettings.events });
   }, [notifSettings]);
 
   useEffect(() => {

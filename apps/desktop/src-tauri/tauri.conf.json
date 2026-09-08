@@ -31,6 +31,21 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "visible": false
+      },
+      {
+        "label": "toast",
+        "title": "VBSS CCHUB Toasts",
+        "url": "index.html?toast=1",
+        "width": 380,
+        "height": 120,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "visible": false,
+        "shadow": true,
+        "transparent": false
       }
     ],
     "security": {

@@ -7,15 +7,22 @@ import type { SessionClient } from "../types";
 import type { Autonomy, AutostartStatus, TunnelStatus } from "../delegation";
 import { claudeClient } from "../clients";
 import type { GroupRecord } from "../types";
-import { NOTIF_EVENT_META, type NotifEventKind } from "../notifications";
+import { NOTIF_EVENT_META, type NotifEventKind, type NotifStyle } from "../notifications";
 
 export interface NotifSettings {
   enabled: boolean;
   desktop: boolean;
   sound: boolean;
+  style: NotifStyle;
   events: Record<NotifEventKind, boolean>;
   clients: Record<SessionClient, boolean>;
 }
+
+const NOTIF_STYLE_META: { key: NotifStyle; label: string; hint: string }[] = [
+  { key: "cchub", label: "CC Hub window", hint: "Our own popup bottom-right, independent of Windows settings." },
+  { key: "windows", label: "Windows", hint: "System toasts, need Windows notifications on." },
+  { key: "both", label: "Both", hint: "Our popup and a Windows toast." },
+];
 
 export const NOTIF_CLIENTS: SessionClient[] = ["terminal", "vscode", "wsl", "claude-desktop", "headless", "hub", "share"];
 
@@ -80,8 +87,15 @@ export function SettingsView(props: Props) {
   useEffect(() => {
     void getDesktopNotifyStatus().then(setDesktopStatus).catch(() => setDesktopStatus(null));
   }, []);
-  const windowsBlocked = desktopStatus?.supported === true && (desktopStatus.toastsEnabled === false || desktopStatus.appEnabled === false);
+  const styleWindows = notif.style === "windows" || notif.style === "both";
+  const styleCchub = notif.style === "cchub" || notif.style === "both";
+  const windowsBlocked = styleWindows && desktopStatus?.supported === true && (desktopStatus.toastsEnabled === false || desktopStatus.appEnabled === false);
   const sendTest = async () => {
+    if (styleCchub) localStorage.setItem("hub.toast.test", String(Date.now()));
+    if (!styleWindows) {
+      setTestResult("Sent to the CC Hub toast window (bottom-right).");
+      return;
+    }
     const outcome = await notify("VBSS CCHUB", "Test notification — this is what an alert looks like.");
     const fresh = await getDesktopNotifyStatus(true).catch(() => null);
     if (fresh) setDesktopStatus(fresh);
@@ -469,11 +483,26 @@ export function SettingsView(props: Props) {
 
       <section className="settings__section" id="settings-notifications">
         <h2>Notifications</h2>
-        <p className="hint">Windows desktop notifications, bottom-right like Teams, plus sounds, when something wants your attention.</p>
+        <p className="hint">A popup bottom-right like Teams, independent of Windows settings, plus sounds, when something wants your attention.</p>
         <label className="notif-master">
           <input type="checkbox" checked={notif.enabled} onChange={(event) => props.onNotif({ ...notif, enabled: event.target.checked })} />
           <span>Notifications on</span>
         </label>
+        <div className="notif-style" role="radiogroup" aria-label="Notification style">
+          {NOTIF_STYLE_META.map((item) => (
+            <label key={item.key} className={`notif-style__row ${notif.style === item.key ? "notif-style__row--on" : ""}`}>
+              <input
+                type="radio"
+                name="notif-style"
+                checked={notif.style === item.key}
+                disabled={!notif.enabled}
+                onChange={() => props.onNotif({ ...notif, style: item.key })}
+              />
+              <span className="notif-style__name">{item.label}</span>
+              <span className="notif-style__hint">{item.hint}</span>
+            </label>
+          ))}
+        </div>
         {windowsBlocked && (
           <p className="callout callout--warn">
             {desktopStatus?.toastsEnabled === false
