@@ -207,21 +207,33 @@ export function Toaster(): ReactElement {
   }, [notifier]);
 
   useEffect(() => {
-    const id = setInterval(() => {
-      setNow(Date.now());
+    let lastTick = Date.now();
+    const tick = () => {
+      const current = Date.now();
+      const delta = Math.min(current - lastTick, AUTO_MS);
+      lastTick = current;
+      setNow(current);
       setCards((prev) => {
         if (hoveringRef.current || prev.length === 0) return prev;
         let changed = false;
         const next = prev.map((card) => {
           if (card.sticky) return card;
           changed = true;
-          return { ...card, elapsed: card.elapsed + TICK_MS };
+          return { ...card, elapsed: card.elapsed + delta };
         });
         if (!changed) return prev;
         return next.filter((card) => card.sticky || card.elapsed < AUTO_MS);
       });
-    }, TICK_MS);
-    return () => clearInterval(id);
+    };
+    const id = setInterval(tick, TICK_MS);
+    const onVisible = () => tick();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
   }, []);
 
   useEffect(() => {

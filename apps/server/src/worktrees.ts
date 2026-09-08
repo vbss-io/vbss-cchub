@@ -19,11 +19,11 @@ export class WorktreeError extends Error {
 }
 
 function git(cwd: string, args: string[]): string {
-  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true }).trim();
 }
 
 async function gitAsync(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args]);
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { windowsHide: true });
   return stdout.trim();
 }
 

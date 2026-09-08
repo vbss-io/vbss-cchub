@@ -79,7 +79,7 @@ function resolveHostInfo(sessionId) {
         "-StartPid",
         String(process.pid),
       ],
-      { timeout: 5000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      { timeout: 5000, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
     ).trim();
     const parsed = JSON.parse(out);
     const hostPid = Number(parsed.windowPid);
