@@ -142,6 +142,7 @@ export interface HubEvents {
   onShareRequest?: (request: ShareRequestEvent) => void;
   onTunnel?: (status: TunnelStatus) => void;
   onShareStream?: (event: ShareStreamEvent) => void;
+  onNavigate?: (hash: string) => void;
 }
 
 export interface ShareStreamEvent {
@@ -172,8 +173,14 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("share-request", (event) => handlers.onShareRequest?.(data<ShareRequestEvent>(event)));
   source.addEventListener("tunnel", (event) => handlers.onTunnel?.(data<TunnelStatus>(event)));
   source.addEventListener("share-stream", (event) => handlers.onShareStream?.(data<ShareStreamEvent>(event)));
+  source.addEventListener("ui-navigate", (event) => handlers.onNavigate?.(data<{ hash: string }>(event).hash));
   return () => source.close();
 }
+
+export const requestNavigate = (hash: string): Promise<void> =>
+  fetch(`${base}/api/ui/navigate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hash }) })
+    .then(() => undefined)
+    .catch(() => undefined);
 
 export const reportUiError = (view: string, error: Error, componentStack: string | null): Promise<void> =>
   fetch(`${hubBase}/api/ui-error`, {
