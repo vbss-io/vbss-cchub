@@ -772,6 +772,11 @@ export function ShareView(props: Props) {
             </button>
             {tunnel?.state === "error" && tunnel.error && <span className="taskrow__error">{tunnel.error}</span>}
           </div>
+          {tunnel?.notice && (
+            <div className="reach__row">
+              <span className="muted small">{tunnel.notice}</span>
+            </div>
+          )}
         </div>
         <p className="hint">
           Every share gets a LAN link; while the tunnel is on it also gets a public one. Links carry the key, so send them privately. ngrok

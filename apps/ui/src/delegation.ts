@@ -320,6 +320,7 @@ export interface TunnelStatus {
   localUrl: string;
   sharePort: number;
   endpointError: string | null;
+  notice: string | null;
 }
 
 export interface CreateShareInput {
