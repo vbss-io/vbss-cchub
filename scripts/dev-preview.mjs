@@ -90,9 +90,13 @@ const seedData = async () => {
     { sessionId: "preview-ended", kind: "session_end", client: "terminal", cwd: repoRoot, model: "claude-opus-4-8", title: "Finished cleanup", updatedAt: now - 2 * hour },
   ];
   for (const session of sessions) await post("/hook", session);
-  await post("/delegation/reports", { text: "Preview seeded: four sessions (one ended) and a couple of reports.", kind: "note", source: "dev-preview" });
+  const workspacesRoot = join(dataDir, "workspaces");
+  mkdirSync(workspacesRoot, { recursive: true });
+  await fetch(`${base}/delegation/settings`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ workspacesRoot }) });
+  const workspace = await post("/delegation/workspaces", { name: "preview", repos: [repoRoot] });
+  await post("/delegation/reports", { text: "Preview seeded: four sessions (one ended), the preview workspace and a couple of reports.", kind: "note", source: "dev-preview" });
   await post("/delegation/reports", { text: "Everything is green on the preview.", kind: "progress", source: "dev-preview" });
-  console.log("[seed] posted 4 sessions (1 ended) + 2 reports");
+  console.log(`[seed] posted 4 sessions (1 ended) + workspace "preview" (${workspace.status}) + 2 reports`);
 };
 
 const nodeBin = process.execPath;
