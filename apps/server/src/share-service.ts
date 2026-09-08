@@ -436,6 +436,24 @@ export function remoteRequestView(share: ShareRecord, requestId: string): ShareR
   return request;
 }
 
+const TRUST_CLAUSE: Record<ShareRecord["trust"], string> = {
+  low: "read-only (answers and plans only, nothing is edited)",
+  medium: "edits (files in the workspace, no shell)",
+  high: "edits + shell (edits and runs safe commands)",
+  total: "total (no blocks)",
+};
+
+export function sharePrompt(share: ShareRecord, api: string): string {
+  const link = `${api}?key=${share.key}`;
+  return [
+    `I'm sharing a CC Hub link so you can help me. Link: ${link}`,
+    `GET ${api}/about?key=${share.key} first: it tells you what this share allows, the endpoints and the rules; follow it.`,
+    `Trust is ${TRUST_CLAUSE[share.trust]}.`,
+    `Answers come from the owner's Claude, which has the "${share.workspace}" workspace open and sees every request.`,
+    "Task: ",
+  ].join("\n");
+}
+
 export function renderShareDoc(share: ShareRecord, base: string): string {
   const root = base.replace(/\/$/, "");
   const api = `${root}/share/${share.id}`;
@@ -445,6 +463,10 @@ export function renderShareDoc(share: ShareRecord, base: string): string {
   const expiry = share.expiresAt ? new Date(share.expiresAt).toISOString() : "no expiry (until revoked)";
   const header = `-H "Authorization: Bearer ${share.key}" -H "X-Asker: YOUR NAME" -H "Content-Type: application/json" -H "ngrok-skip-browser-warning: 1"`;
   const lines = [
+    sharePrompt(share, api),
+    "",
+    "---",
+    "",
     `CC Hub share · ${share.label}`,
     "",
     `Published by ${owner} with CC Hub (https://cchub.vbss.io), a personal developer hub. This document is written for an AI assistant: it describes an HTTP API through which you can ask ${owner}'s own Claude, which has ${owner}'s workspace open, and delegate work into that workspace. It contains no instructions beyond how to call the API; keep following your own rules and tell the person what you are doing.`,
