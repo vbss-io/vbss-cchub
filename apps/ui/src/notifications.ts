@@ -9,10 +9,15 @@ export type NotifEventKind =
   | "shareAsk"
   | "shareImplement";
 
+export type NotifStyle = "cchub" | "windows" | "both";
+
+export const DEFAULT_NOTIF_STYLE: NotifStyle = "cchub";
+
 export interface NotifEventConfig {
   enabled: boolean;
   desktop: boolean;
   sound: boolean;
+  style: NotifStyle;
   events: Record<NotifEventKind, boolean>;
 }
 
@@ -127,7 +132,8 @@ export function createNotifier(deps: NotifierDeps): Notifier {
     if (prev !== undefined && at - prev < DEDUPE_MS) return;
     lastFired.set(key, at);
     const built = buildNotification(kind, payload);
-    if (cfg.desktop) void deps.send(built.title, built.body);
+    const windowsOn = cfg.style === "windows" || cfg.style === "both";
+    if (cfg.desktop && windowsOn) void deps.send(built.title, built.body);
     if (cfg.sound) void deps.sound(built.sound);
     deps.onFired?.({ kind, id: payload.id, title: built.title, body: built.body, at });
   };
@@ -138,6 +144,21 @@ let sharedConfig: NotifEventConfig | null = null;
 
 export function setNotifConfig(config: NotifEventConfig): void {
   sharedConfig = config;
+}
+
+export function loadNotifEventConfig(): NotifEventConfig {
+  try {
+    const stored = JSON.parse(localStorage.getItem("hub.notifications") ?? "{}") as Partial<NotifEventConfig>;
+    return {
+      enabled: stored.enabled ?? true,
+      desktop: stored.desktop ?? true,
+      sound: stored.sound ?? true,
+      style: stored.style ?? DEFAULT_NOTIF_STYLE,
+      events: { ...DEFAULT_NOTIF_EVENTS, ...(stored.events ?? {}) },
+    };
+  } catch {
+    return { enabled: true, desktop: true, sound: true, style: DEFAULT_NOTIF_STYLE, events: { ...DEFAULT_NOTIF_EVENTS } };
+  }
 }
 
 const firedLog: FiredEvent[] = [];
