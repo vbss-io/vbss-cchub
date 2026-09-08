@@ -109,7 +109,7 @@ export function isProcessAlive(pid: number | null): boolean {
   }
 }
 
-const statusByKind: Record<HookKind, SessionStatus> = {
+const statusByKind: Record<Exclude<HookKind, "meta">, SessionStatus> = {
   session_start: "active",
   user_prompt: "active",
   notification: "waiting",
@@ -349,8 +349,45 @@ export function listAgents(sessionId: string): AgentRecord[] {
   return (listAgentsStmt.all(sessionId) as AgentRow[]).map(toAgent);
 }
 
+const metaStmt = db.prepare(`
+  UPDATE sessions SET
+    host_pid = COALESCE(@hostPid, host_pid),
+    shell_pid = CASE WHEN @hostPid IS NOT NULL THEN @shellPid ELSE shell_pid END,
+    claude_pid = COALESCE(@claudePid, claude_pid),
+    client = COALESCE(@client, client),
+    transcript_path = COALESCE(@transcriptPath, transcript_path),
+    title = COALESCE(@title, title),
+    model = COALESCE(@model, model),
+    tokens_in = COALESCE(@tokensIn, tokens_in),
+    tokens_out = COALESCE(@tokensOut, tokens_out),
+    context_tokens = COALESCE(@contextTokens, context_tokens)
+  WHERE session_id = @sessionId
+`);
+
+export function applyMeta(payload: HookPayload): SessionRecord | null {
+  metaStmt.run({
+    sessionId: payload.sessionId,
+    hostPid: payload.hostPid,
+    shellPid: payload.shellPid,
+    claudePid: payload.claudePid,
+    client: payload.client,
+    transcriptPath: payload.transcriptPath,
+    title: payload.title,
+    model: payload.model,
+    tokensIn: payload.tokensIn,
+    tokensOut: payload.tokensOut,
+    contextTokens: payload.contextTokens,
+  });
+  const row = getStmt.get(payload.sessionId) as SessionRow | undefined;
+  return row ? toRecord(row) : null;
+}
+
 const apply = db.transaction((payload: HookPayload, now: number): SessionRecord => {
-  const status = statusByKind[payload.kind];
+  if (payload.kind === "meta") {
+    const record = applyMeta(payload);
+    if (record) return record;
+  }
+  const status = payload.kind === "meta" ? "active" : statusByKind[payload.kind];
   upsertStmt.run({
     sessionId: payload.sessionId,
     status,

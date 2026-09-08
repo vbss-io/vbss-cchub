@@ -205,3 +205,15 @@ it("ends a session on demand with a message and never twice", () => {
   assert.equal(ended?.lastMessage, "run completed");
   assert.equal(db.endSession("run-sess", "again"), null);
 });
+
+it("meta hooks update title, model and pids without touching status or updated_at", () => {
+  const before = db.applyHook(payload({ sessionId: "meta-sess", kind: "stop", cwd: "C:/m" }), 1_000);
+  const after = db.applyMeta(payload({ sessionId: "meta-sess", kind: "meta", title: "Named later", model: "claude-opus-4-8", claudePid: process.pid, client: "vscode" }));
+  assert.equal(after?.status, before.status);
+  assert.equal(after?.updatedAt, before.updatedAt);
+  assert.equal(after?.title, "Named later");
+  assert.equal(after?.model, "claude-opus-4-8");
+  assert.equal(after?.claudePid, process.pid);
+  assert.equal(after?.client, "vscode");
+  assert.equal(db.applyMeta(payload({ sessionId: "nope", kind: "meta" })), null);
+});
