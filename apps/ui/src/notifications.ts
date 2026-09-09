@@ -117,6 +117,7 @@ export function buildNotification(kind: NotifEventKind, payload: NotifEventPaylo
 export interface NotifierDeps {
   getConfig: () => NotifEventConfig | null;
   send: (title: string, body: string) => void | Promise<void>;
+  toast?: (card: FiredEvent) => void | Promise<void>;
   sound: (kind: SoundKind) => void | Promise<void>;
   now: () => number;
   onFired?: (record: FiredEvent) => void;
@@ -139,7 +140,9 @@ export function createNotifier(deps: NotifierDeps): Notifier {
     lastFired.set(key, at);
     const built = buildNotification(kind, payload);
     const windowsOn = cfg.style === "windows" || cfg.style === "both";
+    const cchubOn = cfg.style === "cchub" || cfg.style === "both";
     if (cfg.desktop && windowsOn) void deps.send(built.title, built.body);
+    if (cfg.desktop && cchubOn) void deps.toast?.({ kind, id: payload.id, title: built.title, body: built.body, at });
     if (cfg.sound) void deps.sound(built.sound);
     deps.onFired?.({ kind, id: payload.id, title: built.title, body: built.body, at });
   };
@@ -180,6 +183,7 @@ export function resetFired(): void {
 const defaultNotifier = createNotifier({
   getConfig: () => sharedConfig,
   send: (title, body) => void notify(title, body),
+  toast: (card) => void import("./api").then(({ sendToast }) => sendToast(card)),
   sound: playSound,
   now: () => Date.now(),
   onFired: (record) => {

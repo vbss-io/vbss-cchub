@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildNotification, createNotifier, type FiredEvent, type NotifEventConfig } from "./notifications";
+import { buildNotification, createNotifier, DEFAULT_NOTIF_EVENTS, type FiredEvent, type NotifEventConfig } from "./notifications";
 import type { SoundKind } from "./notify";
 
 interface Harness {
@@ -145,4 +145,25 @@ test("buildNotification shapes each kind", () => {
   const ask = buildNotification("shareAsk", { id: "r", label: "Gabi", asker: "Gabi", detail: "how do I run it?\nmore" });
   assert.equal(ask.title, "Ask on share Gabi");
   assert.equal(ask.body, "Gabi: how do I run it?");
+});
+
+test("the style decides between the Windows sender and the CC Hub toast", () => {
+  for (const [style, expectSend, expectToast] of [["cchub", 0, 1], ["windows", 1, 0], ["both", 1, 1]] as const) {
+    let sends = 0;
+    let toasts = 0;
+    const notifier = createNotifier({
+      getConfig: () => ({ enabled: true, desktop: true, sound: false, style, events: { ...DEFAULT_NOTIF_EVENTS } }),
+      send: () => {
+        sends += 1;
+      },
+      toast: () => {
+        toasts += 1;
+      },
+      sound: () => undefined,
+      now: () => 1_000,
+    });
+    notifier.notifyEvent("taskCompleted", { id: "t1", title: "x", detail: null });
+    assert.equal(sends, expectSend, `sends under ${style}`);
+    assert.equal(toasts, expectToast, `toasts under ${style}`);
+  }
 });

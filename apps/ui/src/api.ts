@@ -19,6 +19,7 @@ export const hubBase = base;
 
 export type { HooksStatus, WslHookStatus } from "./types";
 import type { ShareRequestRecord, TunnelStatus } from "./delegation";
+import type { NotifEventKind } from "./notifications";
 
 export type ShareRequestEvent = ShareRequestRecord;
 
@@ -143,6 +144,15 @@ export interface HubEvents {
   onTunnel?: (status: TunnelStatus) => void;
   onShareStream?: (event: ShareStreamEvent) => void;
   onNavigate?: (hash: string) => void;
+  onToast?: (card: ToastCard) => void;
+}
+
+export interface ToastCard {
+  kind: NotifEventKind;
+  id: string;
+  title: string;
+  body: string;
+  at: number;
 }
 
 export interface ShareStreamEvent {
@@ -174,8 +184,14 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("tunnel", (event) => handlers.onTunnel?.(data<TunnelStatus>(event)));
   source.addEventListener("share-stream", (event) => handlers.onShareStream?.(data<ShareStreamEvent>(event)));
   source.addEventListener("ui-navigate", (event) => handlers.onNavigate?.(data<{ hash: string }>(event).hash));
+  source.addEventListener("toast", (event) => handlers.onToast?.(data<ToastCard>(event)));
   return () => source.close();
 }
+
+export const sendToast = (card: Omit<ToastCard, "at"> & { at?: number }): Promise<void> =>
+  fetch(`${base}/api/toast`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(card) })
+    .then(() => undefined)
+    .catch(() => undefined);
 
 export const requestNavigate = (hash: string): Promise<void> =>
   fetch(`${base}/api/ui/navigate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hash }) })
