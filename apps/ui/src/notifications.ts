@@ -2,6 +2,7 @@ import { notify, playSound, type SoundKind } from "./notify";
 
 export type NotifEventKind =
   | "sessionNeedsYou"
+  | "sessionIdle"
   | "sessionFinished"
   | "taskCompleted"
   | "taskFailed"
@@ -47,6 +48,7 @@ export interface NotifEventMeta {
 
 export const DEFAULT_NOTIF_EVENTS: Record<NotifEventKind, boolean> = {
   sessionNeedsYou: true,
+  sessionIdle: false,
   sessionFinished: false,
   taskCompleted: true,
   taskFailed: true,
@@ -56,7 +58,8 @@ export const DEFAULT_NOTIF_EVENTS: Record<NotifEventKind, boolean> = {
 };
 
 export const NOTIF_EVENT_META: NotifEventMeta[] = [
-  { kind: "sessionNeedsYou", label: "Session needs you", description: "A session is waiting on a decision or went idle" },
+  { kind: "sessionNeedsYou", label: "Session needs you", description: "A session is waiting on your decision (permission or question)" },
+  { kind: "sessionIdle", label: "Session turn finished", description: "A session finished answering and is idle" },
   { kind: "sessionFinished", label: "Session finished", description: "A session ended" },
   { kind: "taskCompleted", label: "Delegated task finished", description: "A delegated task completed" },
   { kind: "taskFailed", label: "Delegated task failed", description: "A delegated task ended in error" },
@@ -69,6 +72,7 @@ const DEDUPE_MS = 30_000;
 
 const DEFAULT_SOUND: Record<NotifEventKind, SoundKind> = {
   sessionNeedsYou: "attention",
+  sessionIdle: "idle",
   sessionFinished: "finished",
   taskCompleted: "finished",
   taskFailed: "attention",
@@ -93,6 +97,8 @@ export function buildNotification(kind: NotifEventKind, payload: NotifEventPaylo
   switch (kind) {
     case "sessionNeedsYou":
       return { title: `Session needs you · ${name}`, body: detail, sound };
+    case "sessionIdle":
+      return { title: `Turn finished · ${name}`, body: detail, sound };
     case "sessionFinished":
       return { title: "Session finished", body: name, sound };
     case "taskCompleted":

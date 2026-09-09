@@ -212,6 +212,7 @@ function buildBody(eventKind, hostInfo, transcript, withMessage) {
     hostPid: hostInfo.hostPid,
     shellPid: hostInfo.shellPid,
     message: withMessage ? (input.message ?? (input.agent_id ? null : lastAssistant)) : null,
+    notificationType: typeof input.notification_type === "string" ? input.notification_type : null,
     title: transcript ? sessionTitle(sessionId, transcript.title, transcript.customTitle) : null,
     model: transcript ? transcript.model : null,
     tokensIn: transcript ? transcript.tokensIn : null,
