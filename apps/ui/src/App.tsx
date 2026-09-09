@@ -136,6 +136,7 @@ export function App() {
     notifRef.current = notifSettings;
     localStorage.setItem("hub.notifications", JSON.stringify(notifSettings));
     setNotifConfig({ enabled: notifSettings.enabled, desktop: notifSettings.desktop, sound: notifSettings.sound, style: notifSettings.style, events: notifSettings.events });
+    void reportUiDiag({ window: "main", notif: { enabled: notifSettings.enabled, desktop: notifSettings.desktop, sound: notifSettings.sound, style: notifSettings.style, events: notifSettings.events, clients: notifSettings.clients } });
   }, [notifSettings]);
 
   useEffect(() => {

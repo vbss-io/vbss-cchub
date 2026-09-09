@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { Toaster } from "./components/Toaster";
 import { Widget } from "./components/Widget";
+import { reportUiDiag } from "./api";
 import "./styles.css";
 import "./responsive.css";
 import "./toaster.css";
@@ -11,6 +12,7 @@ document.documentElement.dataset.theme = localStorage.getItem("hub.theme") === "
 const params = new URLSearchParams(location.search);
 const isWidget = params.get("widget") === "1";
 const isToast = params.get("toast") === "1";
+void reportUiDiag({ window: isToast ? "toast" : isWidget ? "widget" : "main", loaded: true, href: location.href, tauri: "__TAURI_INTERNALS__" in window, visibility: document.visibilityState });
 if (isToast) document.documentElement.classList.add("toast-window");
 const root = document.getElementById("root");
 if (root) {

@@ -205,6 +205,20 @@ app.post("/api/toast", (req, res) => {
   res.status(204).end();
 });
 
+const uiDiag = new Map<string, Record<string, unknown>>();
+
+app.post("/api/ui/diag", (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const window = typeof body.window === "string" ? body.window.slice(0, 40) : "unknown";
+  const previous = uiDiag.get(window) ?? {};
+  uiDiag.set(window, { ...previous, ...body, at: new Date().toISOString() });
+  res.status(204).end();
+});
+
+app.get("/api/ui/diag", (_req, res) => {
+  res.json({ sseClients: clientCount(), windows: Object.fromEntries(uiDiag) });
+});
+
 app.get("/api/sse/clients", (_req, res) => {
   res.json({ count: clientCount() });
 });
