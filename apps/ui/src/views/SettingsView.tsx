@@ -10,6 +10,7 @@ import type { GroupRecord } from "../types";
 import { NOTIF_EVENT_META, type NotifEventKind, type NotifStyle } from "../notifications";
 
 export interface NotifSettings {
+  version: number;
   enabled: boolean;
   desktop: boolean;
   sound: boolean;

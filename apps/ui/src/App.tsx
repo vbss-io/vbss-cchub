@@ -39,7 +39,10 @@ const VIEWS: { key: View; label: string; icon: ReactElement; subtitle: string }[
   { key: "settings", label: "Settings", icon: <IconSettings />, subtitle: "Paths, hooks, connections, notifications, groups" },
 ];
 
+const NOTIF_VERSION = 2;
+
 const DEFAULT_NOTIF: NotifSettings = {
+  version: NOTIF_VERSION,
   enabled: true,
   desktop: true,
   sound: true,
@@ -51,10 +54,13 @@ const DEFAULT_NOTIF: NotifSettings = {
 function loadNotif(): NotifSettings {
   try {
     const stored = JSON.parse(localStorage.getItem("hub.notifications") ?? "{}") as Partial<NotifSettings>;
+    const storedEvents = stored.events ?? {};
+    const events = stored.version === NOTIF_VERSION ? storedEvents : { ...storedEvents, sessionIdle: true };
     return {
       ...DEFAULT_NOTIF,
       ...stored,
-      events: { ...DEFAULT_NOTIF.events, ...(stored.events ?? {}) },
+      version: NOTIF_VERSION,
+      events: { ...DEFAULT_NOTIF.events, ...events },
       clients: { ...DEFAULT_NOTIF.clients, ...(stored.clients ?? {}) },
     };
   } catch {
