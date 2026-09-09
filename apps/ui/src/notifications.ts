@@ -187,6 +187,7 @@ const defaultNotifier = createNotifier({
   sound: playSound,
   now: () => Date.now(),
   onFired: (record) => {
+    void import("./api").then(({ reportUiDiag }) => reportUiDiag({ window: "main", lastFired: record.title, lastFiredAt: new Date(record.at).toISOString() }));
     firedLog.push(record);
     if (firedLog.length > 50) firedLog.shift();
   },

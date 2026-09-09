@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactElement } from "react";
-import { focusSession, reportUiError, requestNavigate, subscribe, type ToastCard } from "../api";
+import { focusSession, reportUiDiag, reportUiError, requestNavigate, subscribe, type ToastCard } from "../api";
 import { IconClose, IconSessions, IconShare, IconTasks } from "../icons";
 import type { NotifEventKind } from "../notifications";
 
@@ -111,6 +111,7 @@ async function applyWindowUnsafe(count: number, height: number): Promise<void> {
     /* older webview: focus:false in the window config already prevents focus steal */
   }
   await win.show();
+  void reportUiDiag({ window: "toast", shownAt: new Date().toISOString(), position: { x, y }, height, count });
 }
 
 async function openTarget(kind: NotifEventKind, id: string): Promise<void> {
@@ -140,6 +141,7 @@ export function Toaster(): ReactElement {
   const applied = useRef<{ count: number; height: number }>({ count: -1, height: -1 });
 
   const pushCard = useCallback((toast: ToastCard) => {
+    void reportUiDiag({ window: "toast", lastToast: toast.title, lastToastAt: new Date().toISOString() });
     setCards((prev) => [...prev, { ...toast, key: seq.current++, lifetime: lifetimeOf(toast.kind), elapsed: 0 }]);
   }, []);
 

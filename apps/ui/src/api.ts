@@ -193,6 +193,11 @@ export const sendToast = (card: Omit<ToastCard, "at"> & { at?: number }): Promis
     .then(() => undefined)
     .catch(() => undefined);
 
+export const reportUiDiag = (payload: Record<string, unknown>): Promise<void> =>
+  fetch(`${base}/api/ui/diag`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) })
+    .then(() => undefined)
+    .catch(() => undefined);
+
 export const requestNavigate = (hash: string): Promise<void> =>
   fetch(`${base}/api/ui/navigate`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hash }) })
     .then(() => undefined)
