@@ -387,7 +387,8 @@ const apply = db.transaction((payload: HookPayload, now: number): SessionRecord 
     const record = applyMeta(payload);
     if (record) return record;
   }
-  const status = payload.kind === "meta" ? "active" : statusByKind[payload.kind];
+  const idlePrompt = payload.kind === "notification" && (payload.notificationType === "idle_prompt" || /waiting for your input/i.test(payload.message ?? ""));
+  const status = payload.kind === "meta" ? "active" : idlePrompt ? "idle" : statusByKind[payload.kind];
   const keepStatus = payload.kind === "subagent_start" || payload.kind === "subagent_stop" ? 1 : 0;
   upsertStmt.run({
     sessionId: payload.sessionId,

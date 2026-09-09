@@ -22,6 +22,7 @@ export interface HookPayload {
   shellPid: number | null;
   title: string | null;
   message: string | null;
+  notificationType: string | null;
   model: string | null;
   tokensIn: number | null;
   tokensOut: number | null;

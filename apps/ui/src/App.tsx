@@ -272,13 +272,10 @@ export function App() {
           const quiet = !(cfg.clients[(session.client ?? "terminal") as SessionClient] ?? true) || session.archivedAt != null;
           if (!quiet && (!before || before.status !== session.status)) {
             const label = session.customTitle ?? session.title ?? projectOf(session);
-            if (session.status === "waiting" || session.status === "idle") {
-              notifyEvent("sessionNeedsYou", {
-                id: session.sessionId,
-                name: label,
-                detail: session.status === "waiting" ? "needs a decision" : "paused",
-                sound: session.status === "idle" ? "idle" : "attention",
-              });
+            if (session.status === "waiting") {
+              notifyEvent("sessionNeedsYou", { id: session.sessionId, name: label, detail: session.lastMessage ?? "needs a decision", sound: "attention" });
+            } else if (session.status === "idle") {
+              notifyEvent("sessionIdle", { id: session.sessionId, name: label, detail: session.lastMessage ?? "finished answering", sound: "idle" });
             } else if (session.status === "ended" && before) {
               notifyEvent("sessionFinished", { id: session.sessionId, name: label });
             }

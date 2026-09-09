@@ -20,6 +20,7 @@ const lifetimeOf = (kind: NotifEventKind): number => (ATTENTION.has(kind) ? ATTE
 
 const TONE: Record<NotifEventKind, string> = {
   sessionNeedsYou: "pend",
+  sessionIdle: "ok",
   sessionFinished: "ok",
   taskCompleted: "ok",
   taskFailed: "hold",
@@ -30,13 +31,13 @@ const TONE: Record<NotifEventKind, string> = {
 
 function iconFor(kind: NotifEventKind): ReactElement {
   if (kind === "shareAsk" || kind === "shareImplement") return <IconShare size={16} />;
-  if (kind === "sessionNeedsYou" || kind === "sessionFinished") return <IconSessions size={16} />;
+  if (kind === "sessionNeedsYou" || kind === "sessionIdle" || kind === "sessionFinished") return <IconSessions size={16} />;
   return <IconTasks size={16} />;
 }
 
 function hashFor(kind: NotifEventKind, id: string): string {
   if (kind === "shareAsk" || kind === "shareImplement") return `#/share/${id}`;
-  if (kind === "sessionNeedsYou" || kind === "sessionFinished") return "#/sessions";
+  if (kind === "sessionNeedsYou" || kind === "sessionIdle" || kind === "sessionFinished") return "#/sessions";
   return `#/tasks/${id}`;
 }
 
@@ -132,7 +133,7 @@ async function openTarget(kind: NotifEventKind, id: string): Promise<void> {
     window.open(`${location.origin}${location.pathname}${hash}`, "_blank", "noopener");
     return;
   }
-  if (kind === "sessionNeedsYou" || kind === "sessionFinished") {
+  if (kind === "sessionNeedsYou" || kind === "sessionIdle" || kind === "sessionFinished") {
     try {
       const result = await focusSession(id);
       if (result.ok) return;
@@ -274,12 +275,10 @@ export function Toaster(): ReactElement {
         const clientOn = clientsRef.current[(session.client ?? "terminal") as SessionClient] ?? true;
         if (!clientOn || session.archivedAt != null || before === session.status) return;
         const label = session.customTitle ?? session.title ?? session.sessionId.slice(0, 8);
-        if (session.status === "waiting" || session.status === "idle") {
-          notifier.notifyEvent("sessionNeedsYou", {
-            id: session.sessionId,
-            name: label,
-            detail: session.status === "waiting" ? "needs a decision" : "paused",
-          });
+        if (session.status === "waiting") {
+          notifier.notifyEvent("sessionNeedsYou", { id: session.sessionId, name: label, detail: session.lastMessage ?? "needs a decision" });
+        } else if (session.status === "idle") {
+          notifier.notifyEvent("sessionIdle", { id: session.sessionId, name: label, detail: session.lastMessage ?? "finished answering" });
         } else if (session.status === "ended" && before) {
           notifier.notifyEvent("sessionFinished", { id: session.sessionId, name: label });
         }

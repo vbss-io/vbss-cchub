@@ -22,6 +22,7 @@ const payload = (overrides: Partial<HookPayload>): HookPayload => ({
   shellPid: null,
   title: null,
   message: null,
+  notificationType: null,
   model: null,
   tokensIn: null,
   tokensOut: null,
@@ -227,4 +228,13 @@ it("subagent events never change the session status", () => {
   assert.equal(afterStart.status, "waiting");
   const fresh = db.applyHook(payload({ sessionId: "sub-fresh", kind: "subagent_start", agentId: "a3", agentType: "Explore" }));
   assert.equal(fresh.status, "active");
+});
+
+it("an idle-prompt notification means idle, a permission prompt means waiting", () => {
+  const idle = db.applyHook(payload({ sessionId: "np-sess", kind: "notification", message: "Claude is waiting for your input", notificationType: "idle_prompt" }));
+  assert.equal(idle.status, "idle");
+  const byText = db.applyHook(payload({ sessionId: "np-sess", kind: "notification", message: "Claude is waiting for your input" }));
+  assert.equal(byText.status, "idle");
+  const decision = db.applyHook(payload({ sessionId: "np-sess", kind: "notification", message: "Claude needs your permission to use Bash", notificationType: "permission_prompt" }));
+  assert.equal(decision.status, "waiting");
 });
