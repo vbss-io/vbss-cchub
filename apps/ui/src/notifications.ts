@@ -49,7 +49,7 @@ export interface NotifEventMeta {
 export const DEFAULT_NOTIF_EVENTS: Record<NotifEventKind, boolean> = {
   sessionNeedsYou: true,
   sessionIdle: true,
-  sessionFinished: false,
+  sessionFinished: true,
   taskCompleted: true,
   taskFailed: true,
   taskNeedsYou: true,
