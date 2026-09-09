@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getDesktopNotifyStatus, type DesktopNotifyStatus, type HooksStatus } from "../api";
+import { getDesktopNotifyStatus, sendToast, type DesktopNotifyStatus, type HooksStatus } from "../api";
 import { GroupManager } from "../components/GroupManager";
 import type { ConnectStatus, DelegationSettings, McpClient, ShellKind } from "../delegation";
 import { COFFEE_URL, GITHUB_URL, notify, openExternal, playSound } from "../notify";
@@ -91,7 +91,7 @@ export function SettingsView(props: Props) {
   const styleCchub = notif.style === "cchub" || notif.style === "both";
   const windowsBlocked = styleWindows && desktopStatus?.supported === true && (desktopStatus.toastsEnabled === false || desktopStatus.appEnabled === false);
   const sendTest = async () => {
-    if (styleCchub) localStorage.setItem("hub.toast.test", String(Date.now()));
+    if (styleCchub) await sendToast({ kind: "taskCompleted", id: `test-${Date.now()}`, title: "Test notification", body: "This is a CC Hub toast." });
     if (!styleWindows) {
       setTestResult("Sent to the CC Hub toast window (bottom-right).");
       return;

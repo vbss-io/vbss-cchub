@@ -43,7 +43,7 @@ import { markShareEndpoint, stopTunnel } from "./tunnel.js";
 import { abortAllAsks } from "./share-service.js";
 import { mergeHooks, windowsHooks, wslHooks } from "./hooks-control.js";
 import { readSessionName, readTranscript } from "./transcript.js";
-import { addClient, broadcast } from "./sse.js";
+import { addClient, broadcast, clientCount } from "./sse.js";
 import { HOOK_KINDS, type HookKind, type HookPayload } from "./types.js";
 
 const isHookKind = (value: unknown): value is HookKind =>
@@ -188,6 +188,25 @@ app.post("/api/ui/navigate", (req, res) => {
   const hash = typeof body.hash === "string" && body.hash.startsWith("#/") ? body.hash.slice(0, 200) : "#/sessions";
   broadcast("ui-navigate", { hash });
   res.status(204).end();
+});
+
+const TOAST_KINDS = new Set(["sessionNeedsYou", "sessionIdle", "sessionFinished", "taskCompleted", "taskFailed", "taskNeedsYou", "shareAsk", "shareImplement"]);
+
+app.post("/api/toast", (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const kind = typeof body.kind === "string" && TOAST_KINDS.has(body.kind) ? body.kind : null;
+  const id = typeof body.id === "string" && body.id ? body.id.slice(0, 200) : null;
+  const title = typeof body.title === "string" && body.title.trim() ? body.title.trim().slice(0, 200) : null;
+  if (!kind || !id || !title) {
+    res.status(400).json({ error: "kind, id and title required" });
+    return;
+  }
+  broadcast("toast", { kind, id, title, body: typeof body.body === "string" ? body.body.slice(0, 600) : "", at: Date.now() });
+  res.status(204).end();
+});
+
+app.get("/api/sse/clients", (_req, res) => {
+  res.json({ count: clientCount() });
 });
 
 app.get("/api/notify/status", (req, res) => {

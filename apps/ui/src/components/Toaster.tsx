@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactElement } from "react";
-import { focusSession, reportUiError, requestNavigate, subscribe, type ShareRequestEvent } from "../api";
-import { getTask, listTasks, type TaskStatus } from "../delegation";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactElement } from "react";
+import { focusSession, reportUiError, requestNavigate, subscribe, type ToastCard } from "../api";
 import { IconClose, IconSessions, IconShare, IconTasks } from "../icons";
-import { createNotifier, loadNotifEventConfig, type FiredEvent, type NotifEventKind, type NotifEventPayload } from "../notifications";
-import type { SessionClient, SessionRecord } from "../types";
+import type { NotifEventKind } from "../notifications";
 
 const inTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -29,15 +27,17 @@ const TONE: Record<NotifEventKind, string> = {
   shareImplement: "brand",
 };
 
+const SESSION_KINDS: ReadonlySet<NotifEventKind> = new Set(["sessionNeedsYou", "sessionIdle", "sessionFinished"]);
+
 function iconFor(kind: NotifEventKind): ReactElement {
   if (kind === "shareAsk" || kind === "shareImplement") return <IconShare size={16} />;
-  if (kind === "sessionNeedsYou" || kind === "sessionIdle" || kind === "sessionFinished") return <IconSessions size={16} />;
+  if (SESSION_KINDS.has(kind)) return <IconSessions size={16} />;
   return <IconTasks size={16} />;
 }
 
 function hashFor(kind: NotifEventKind, id: string): string {
   if (kind === "shareAsk" || kind === "shareImplement") return `#/share/${id}`;
-  if (kind === "sessionNeedsYou" || kind === "sessionIdle" || kind === "sessionFinished") return "#/sessions";
+  if (SESSION_KINDS.has(kind)) return "#/sessions";
   return `#/tasks/${id}`;
 }
 
@@ -49,22 +49,8 @@ function relTime(at: number, now: number): string {
   return `${Math.floor(minutes / 60)}h ago`;
 }
 
-function loadClients(): Record<string, boolean> {
-  try {
-    const stored = JSON.parse(localStorage.getItem("hub.notifications") ?? "{}") as { clients?: Record<string, boolean> };
-    return stored.clients ?? {};
-  } catch {
-    return {};
-  }
-}
-
-interface Card {
+interface Card extends ToastCard {
   key: number;
-  kind: NotifEventKind;
-  id: string;
-  title: string;
-  body: string;
-  at: number;
   lifetime: number;
   elapsed: number;
 }
@@ -133,7 +119,7 @@ async function openTarget(kind: NotifEventKind, id: string): Promise<void> {
     window.open(`${location.origin}${location.pathname}${hash}`, "_blank", "noopener");
     return;
   }
-  if (kind === "sessionNeedsYou" || kind === "sessionIdle" || kind === "sessionFinished") {
+  if (SESSION_KINDS.has(kind)) {
     try {
       const result = await focusSession(id);
       if (result.ok) return;
@@ -148,66 +134,24 @@ async function openTarget(kind: NotifEventKind, id: string): Promise<void> {
 export function Toaster(): ReactElement {
   const [cards, setCards] = useState<Card[]>([]);
   const [now, setNow] = useState(() => Date.now());
-  const configRef = useRef(loadNotifEventConfig());
-  const clientsRef = useRef<Record<string, boolean>>(loadClients());
   const hoveringRef = useRef(false);
   const seq = useRef(0);
   const stackRef = useRef<HTMLDivElement | null>(null);
   const applied = useRef<{ count: number; height: number }>({ count: -1, height: -1 });
 
-  const pushCard = useCallback((record: FiredEvent) => {
-    if (configRef.current.style === "windows") return;
-    setCards((prev) => [
-      ...prev,
-      {
-        key: seq.current++,
-        kind: record.kind,
-        id: record.id,
-        title: record.title,
-        body: record.body,
-        at: record.at,
-        lifetime: lifetimeOf(record.kind),
-        elapsed: 0,
-      },
-    ]);
+  const pushCard = useCallback((toast: ToastCard) => {
+    setCards((prev) => [...prev, { ...toast, key: seq.current++, lifetime: lifetimeOf(toast.kind), elapsed: 0 }]);
   }, []);
 
-  const notifier = useMemo(
-    () =>
-      createNotifier({
-        getConfig: () => configRef.current,
-        send: () => {},
-        sound: () => {},
-        now: () => Date.now(),
-        onFired: pushCard,
-      }),
-    [pushCard],
-  );
-
-  useEffect(() => {
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === "hub.notifications") {
-        configRef.current = loadNotifEventConfig();
-        clientsRef.current = loadClients();
-      } else if (event.key === "hub.toast.test") {
-        notifier.notifyEvent("taskCompleted", {
-          id: `test-${event.newValue ?? Date.now()}`,
-          title: "Test notification",
-          detail: "This is a CC Hub toast.",
-        });
-      }
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, [notifier]);
+  useEffect(() => subscribe({ onSession: () => undefined, onToast: pushCard }), [pushCard]);
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
     (window as unknown as { __cchubToaster: unknown }).__cchubToaster = {
-      push: (kind: NotifEventKind, payload: NotifEventPayload) => notifier.notifyEvent(kind, payload),
+      push: (toast: ToastCard) => pushCard(toast),
       clear: () => setCards([]),
     };
-  }, [notifier]);
+  }, [pushCard]);
 
   useEffect(() => {
     let lastTick = Date.now();
@@ -231,74 +175,6 @@ export function Toaster(): ReactElement {
       window.removeEventListener("focus", onVisible);
     };
   }, []);
-
-  useEffect(() => {
-    const sessionStatus = new Map<string, string>();
-    const taskStatus = new Map<string, TaskStatus>();
-    let mounted = true;
-
-    void listTasks()
-      .then((list) => {
-        for (const task of list) taskStatus.set(task.id, task.status);
-      })
-      .catch(() => undefined);
-
-    const reloadTasks = () => {
-      void listTasks()
-        .then((list) => {
-          if (!mounted) return;
-          for (const task of list) {
-            const before = taskStatus.get(task.id);
-            taskStatus.set(task.id, task.status);
-            if (before === undefined || before === task.status) continue;
-            if (task.status === "completed") {
-              void getTask(task.id)
-                .then((detail) => {
-                  const result = [...detail.runs].reverse().find((run) => run.result)?.result ?? null;
-                  notifier.notifyEvent("taskCompleted", { id: task.id, title: task.title, detail: result });
-                })
-                .catch(() => notifier.notifyEvent("taskCompleted", { id: task.id, title: task.title, detail: null }));
-            } else if (task.status === "failed") {
-              notifier.notifyEvent("taskFailed", { id: task.id, title: task.title, detail: task.lastError });
-            } else if (task.status === "attention") {
-              notifier.notifyEvent("taskNeedsYou", { id: task.id, title: task.title, detail: task.lastError });
-            }
-          }
-        })
-        .catch(() => undefined);
-    };
-
-    const unsubscribe = subscribe({
-      onSession: (session: SessionRecord) => {
-        const before = sessionStatus.get(session.sessionId);
-        sessionStatus.set(session.sessionId, session.status);
-        const clientOn = clientsRef.current[(session.client ?? "terminal") as SessionClient] ?? true;
-        if (!clientOn || session.archivedAt != null || before === session.status) return;
-        const label = session.customTitle ?? session.title ?? session.sessionId.slice(0, 8);
-        if (session.status === "waiting") {
-          notifier.notifyEvent("sessionNeedsYou", { id: session.sessionId, name: label, detail: session.lastMessage ?? "needs a decision" });
-        } else if (session.status === "idle") {
-          notifier.notifyEvent("sessionIdle", { id: session.sessionId, name: label, detail: session.lastMessage ?? "finished answering" });
-        } else if (session.status === "ended" && before) {
-          notifier.notifyEvent("sessionFinished", { id: session.sessionId, name: label });
-        }
-      },
-      onDelegation: reloadTasks,
-      onShareRequest: (request: ShareRequestEvent) => {
-        if (request.status !== "running") return;
-        notifier.notifyEvent(request.kind === "ask" ? "shareAsk" : "shareImplement", {
-          id: request.id,
-          label: request.label,
-          asker: request.asker,
-          detail: request.prompt,
-        });
-      },
-    });
-    return () => {
-      mounted = false;
-      unsubscribe();
-    };
-  }, [notifier]);
 
   useLayoutEffect(() => {
     const height = (stackRef.current?.offsetHeight ?? 0) + MARGIN;
@@ -332,13 +208,7 @@ export function Toaster(): ReactElement {
       >
         {hidden > 0 && <div className="toaster__more">+{hidden} more</div>}
         {visible.map((card) => (
-          <div
-            key={card.key}
-            className={`tcard tcard--${TONE[card.kind]}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => onCardClick(card)}
-          >
+          <div key={card.key} className={`tcard tcard--${TONE[card.kind]}`} role="button" tabIndex={0} onClick={() => onCardClick(card)}>
             <span className="tcard__icon">{iconFor(card.kind)}</span>
             <div className="tcard__main">
               <div className="tcard__title">{card.title}</div>

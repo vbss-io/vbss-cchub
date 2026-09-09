@@ -7,6 +7,8 @@ export function addClient(res: Response): void {
   res.on("close", () => clients.delete(res));
 }
 
+export const clientCount = (): number => clients.size;
+
 export function broadcast(event: string, data: unknown): void {
   const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of clients) res.write(frame);
