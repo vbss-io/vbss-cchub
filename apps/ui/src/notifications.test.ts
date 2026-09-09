@@ -20,7 +20,7 @@ function harness(overrides: Partial<NotifEventConfig> = {}): Harness & { notify:
       style: "both",
       events: {
         sessionNeedsYou: true,
-        sessionIdle: false,
+        sessionIdle: true,
         sessionFinished: true,
         taskCompleted: true,
         taskFailed: true,
@@ -91,7 +91,7 @@ test("a disabled event does not fire", () => {
   const h = harness({
     events: {
       sessionNeedsYou: true,
-      sessionIdle: false,
+      sessionIdle: true,
       sessionFinished: false,
       taskCompleted: false,
       taskFailed: true,
