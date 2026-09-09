@@ -92,7 +92,7 @@ test("a disabled event does not fire", () => {
     events: {
       sessionNeedsYou: true,
       sessionIdle: true,
-      sessionFinished: false,
+      sessionFinished: true,
       taskCompleted: false,
       taskFailed: true,
       taskNeedsYou: true,

@@ -39,7 +39,7 @@ const VIEWS: { key: View; label: string; icon: ReactElement; subtitle: string }[
   { key: "settings", label: "Settings", icon: <IconSettings />, subtitle: "Paths, hooks, connections, notifications, groups" },
 ];
 
-const NOTIF_VERSION = 2;
+const NOTIF_VERSION = 3;
 
 const DEFAULT_NOTIF: NotifSettings = {
   version: NOTIF_VERSION,
@@ -55,7 +55,7 @@ function loadNotif(): NotifSettings {
   try {
     const stored = JSON.parse(localStorage.getItem("hub.notifications") ?? "{}") as Partial<NotifSettings>;
     const storedEvents = stored.events ?? {};
-    const events = stored.version === NOTIF_VERSION ? storedEvents : { ...storedEvents, sessionIdle: true };
+    const events = stored.version === NOTIF_VERSION ? storedEvents : { ...storedEvents, sessionIdle: true, sessionFinished: true };
     return {
       ...DEFAULT_NOTIF,
       ...stored,
