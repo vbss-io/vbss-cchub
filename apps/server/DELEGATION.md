@@ -211,7 +211,8 @@ MCP tools for your own agents: `hub_shares`, `hub_share_create`, `hub_share_upda
 - **Autonomy** (Settings › General, `autonomy` in `PUT /delegation/settings`): `full` (default) runs every
   delegation you or your agents create with `--permission-mode bypassPermissions` (Claude) or
   `--dangerously-bypass-approvals-and-sandbox` (Codex), so tasks never stop in "Needs you" for a shell
-  command; `safe` keeps `acceptEdits` and lets commands be denied. Shares ignore this and follow their
+  command, and a `permissionMode` passed by the caller (other than `plan`) is upgraded to bypass so an
+  orchestrating agent cannot accidentally leave a task stuck in "Needs you"; `safe` keeps `acceptEdits` and lets commands be denied. Shares ignore this and follow their
   trust level. Hub runs appear in Sessions like any other session (badge "Hub run").
 - **Start with Windows** (Settings › General): writes the app path in `HKCU\...\Run`
   (`GET/PUT /delegation/system/autostart`); the desktop app passes its own path to the sidecar as
