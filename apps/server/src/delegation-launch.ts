@@ -123,6 +123,12 @@ class RunLog {
 const TIMEOUT_WARNING_MS = 5 * 60_000;
 const TIMEOUT_WARNING_TEXT = "5 minutes left before the run timeout";
 
+export function resolvePermissionMode(requested: PermissionMode | null, autonomous: boolean): PermissionMode {
+  if (requested === "plan") return "plan";
+  if (autonomous) return "bypassPermissions";
+  return requested ?? "acceptEdits";
+}
+
 export function resolveRunTimeoutMs(): number {
   const envRaw = process.env.HUB_DELEGATION_TIMEOUT_MIN;
   if (envRaw !== undefined && envRaw.trim() !== "") {
@@ -151,7 +157,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
   const fromShare = trust !== null;
   const profile: RunProfile | null = trust ? implementProfile(trust) : null;
   const autonomous = getSettings().autonomy === "full";
-  const effectiveMode: PermissionMode = profile ? profile.permissionMode : (permissionMode ?? (autonomous ? "bypassPermissions" : "acceptEdits"));
+  const effectiveMode: PermissionMode = profile ? profile.permissionMode : resolvePermissionMode(permissionMode, autonomous);
   const effectiveSandbox: CodexSandbox | null =
     task.runner === "codex" ? (profile ? profile.codexSandbox : (task.sandbox ?? (autonomous ? "danger-full-access" : "workspace-write"))) : null;
   const run = beginRun({

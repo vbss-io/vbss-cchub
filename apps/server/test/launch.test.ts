@@ -22,6 +22,17 @@ before(async () => {
   ({ db } = await import("../src/db.js"));
 });
 
+describe("permission mode resolution", () => {
+  it("runs every delegation autonomously under full autonomy, honouring only plan", () => {
+    assert.equal(launch.resolvePermissionMode(null, true), "bypassPermissions");
+    assert.equal(launch.resolvePermissionMode("acceptEdits", true), "bypassPermissions");
+    assert.equal(launch.resolvePermissionMode("dontAsk", true), "bypassPermissions");
+    assert.equal(launch.resolvePermissionMode("plan", true), "plan");
+    assert.equal(launch.resolvePermissionMode(null, false), "acceptEdits");
+    assert.equal(launch.resolvePermissionMode("acceptEdits", false), "acceptEdits");
+  });
+});
+
 describe("run timeout resolution", () => {
   it("uses the store setting by default and lets the env override win", () => {
     delete process.env.HUB_DELEGATION_TIMEOUT_MIN;

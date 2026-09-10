@@ -356,6 +356,7 @@ export function delegationRouter(): Router {
             note: "task entries are brief; use hub_task for the full prompt, run log and attached repos",
           },
           crowdedFolders,
+          delegation: { autonomy: getSettings().autonomy, note: getSettings().autonomy === "full" ? "delegations run without permission prompts; do not pass permissionMode unless you want plan mode" : "delegations run with acceptEdits and can stop in Needs you; ask the owner to switch Autonomy to full in Settings" },
           reports: listReports({ limit: 10 }),
           workspaces: workspaces.map((w) => ({ name: w.name, repos: w.repos.length })),
         });

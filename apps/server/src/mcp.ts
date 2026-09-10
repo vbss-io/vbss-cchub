@@ -95,7 +95,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "hub_delegate",
     description:
-      "Delegate work to a headless Claude Code (default) or Codex run inside a workspace. The run starts in the workspace context folder with every repo of that workspace attached, so the agent sees the workspace CLAUDE.md, skills and all repos. Returns the task id to follow with hub_task.",
+      "Delegate work to a headless Claude Code (default) or Codex run inside a workspace. The run starts in the workspace context folder with every repo of that workspace attached, so the agent sees the workspace CLAUDE.md, skills and all repos. Runs are autonomous by default (the hub's Autonomy setting is full: no permission prompts, full shell), so do NOT pass permissionMode or sandbox unless you want plan mode; a restrictive mode is upgraded to autonomous anyway. Returns the task id to follow with hub_task.",
     inputSchema: objectSchema(
       {
         workspace: { type: "string", description: "Workspace name as listed by hub_workspaces" },
@@ -106,7 +106,7 @@ const TOOLS: ToolDefinition[] = [
         permissionMode: {
           type: "string",
           enum: ["acceptEdits", "plan", "dontAsk", "manual"],
-          description: "Claude Code permission mode; acceptEdits lets it edit files without prompts",
+          description: "Only plan is honoured; with the hub autonomy at full every other value runs as bypassPermissions. Omit it.",
         },
         sandbox: {
           type: "string",
