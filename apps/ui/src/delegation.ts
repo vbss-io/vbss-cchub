@@ -21,6 +21,8 @@ export type OriginClient = "claude-code" | "codex" | "share";
 
 export type Isolation = "shared" | "worktree";
 
+export type IsolationReason = "requested" | "busy-repo" | "default";
+
 export interface WorktreeCommit {
   sha: string;
   subject: string;
@@ -35,6 +37,7 @@ export interface WorktreeInfo {
   commits: WorktreeCommit[];
   diffStat: string;
   mergedAt: number | null;
+  hint: string;
 }
 
 export interface WorkspaceRepo {
@@ -80,6 +83,7 @@ export interface TaskRecord {
   runsCount: number;
   archivedAt: number | null;
   isolation: Isolation;
+  isolationReason: IsolationReason | null;
   worktreePath: string | null;
   branch: string | null;
   baseBranch: string | null;

@@ -448,7 +448,7 @@ export function delegationRouter(): Router {
         await mergeTaskWorktree(task);
         const updated = markTaskMerged(task.id);
         broadcast("delegation", { taskId: task.id });
-        res.json(updated);
+        res.json(updated ? taskJson(updated) : updated);
       } catch (err) {
         sendError(res, err);
       }
@@ -470,7 +470,7 @@ export function delegationRouter(): Router {
         await discardTaskWorktree(task, repoPathOf(task));
         const updated = clearTaskWorktreePath(task.id);
         broadcast("delegation", { taskId: task.id });
-        res.json(updated);
+        res.json(updated ? taskJson(updated) : updated);
       } catch (err) {
         sendError(res, err);
       }
@@ -509,7 +509,11 @@ export function delegationRouter(): Router {
           originSessionId: origin.originSessionId,
           originClient: origin.originClient,
         });
-        res.status(201).json({ ...detail, task: taskJson(detail.task) });
+        const note =
+          detail.task.isolationReason === "busy-repo"
+            ? `${detail.task.repo} already has a task running in the shared checkout, so this task works in its own worktree (branch ${detail.task.branch}); merge with hub_task_merge when it completes.`
+            : null;
+        res.status(201).json({ ...detail, task: taskJson(detail.task), ...(note ? { note } : {}) });
       } catch (err) {
         sendError(res, err);
       }
@@ -569,7 +573,7 @@ export function delegationRouter(): Router {
     broadcast("delegation", { taskId: task.id });
     const refreshed = getSession(session.sessionId);
     if (refreshed) broadcast("session", refreshed);
-    res.json(updated);
+    res.json(updated ? taskJson(updated) : updated);
   });
 
   router.post("/tasks/:id/archive", (req, res) => {
@@ -584,7 +588,7 @@ export function delegationRouter(): Router {
     }
     const updated = archiveTask(task.id);
     broadcast("delegation", { taskId: task.id });
-    res.json(updated);
+    res.json(updated ? taskJson(updated) : updated);
   });
 
   router.post("/tasks/:id/unarchive", (req, res) => {
@@ -595,7 +599,7 @@ export function delegationRouter(): Router {
     }
     const updated = unarchiveTask(task.id);
     broadcast("delegation", { taskId: task.id });
-    res.json(updated);
+    res.json(updated ? taskJson(updated) : updated);
   });
 
   router.post("/tasks/:id/cancel", (req, res) => {

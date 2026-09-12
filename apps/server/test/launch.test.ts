@@ -36,6 +36,25 @@ describe("permission mode resolution", () => {
   });
 });
 
+describe("isolation resolution", () => {
+  it("honours an explicit request regardless of repo state", () => {
+    assert.deepEqual(launch.resolveIsolation("worktree", false, false), { isolation: "worktree", reason: "requested" });
+    assert.deepEqual(launch.resolveIsolation("shared", true, true), { isolation: "shared", reason: "requested" });
+  });
+
+  it("isolates automatically when the repo already has a task running in the shared checkout", () => {
+    assert.deepEqual(launch.resolveIsolation(null, true, true), { isolation: "worktree", reason: "busy-repo" });
+  });
+
+  it("defaults to shared when the repo is free", () => {
+    assert.deepEqual(launch.resolveIsolation(null, false, true), { isolation: "shared", reason: "default" });
+  });
+
+  it("defaults to shared when there is no repo to isolate", () => {
+    assert.deepEqual(launch.resolveIsolation(null, true, false), { isolation: "shared", reason: "default" });
+  });
+});
+
 describe("run timeout resolution", () => {
   it("uses the store setting by default and lets the env override win", () => {
     delete process.env.HUB_DELEGATION_TIMEOUT_MIN;
