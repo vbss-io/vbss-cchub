@@ -84,6 +84,8 @@ export interface TaskRecord {
   branch: string | null;
   baseBranch: string | null;
   mergedAt: number | null;
+  portBase: number | null;
+  portEnd: number | null;
   createdAt: number;
   updatedAt: number;
 }

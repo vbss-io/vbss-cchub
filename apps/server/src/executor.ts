@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { config } from "./config.js";
 import type { CodexSandbox, PermissionMode, Runner } from "./delegation-types.js";
+import { portRangeOf } from "./task-ports.js";
 
 const MAX_RESULT_CHARS = 200_000;
 const MAX_LINE_CHARS = 4_000_000;
@@ -30,6 +31,7 @@ export interface RunRequest {
   sandbox: CodexSandbox | null;
   sessionId: string | null;
   resumeSessionId: string | null;
+  portBase?: number | null;
   forkSession?: boolean;
   allowedTools?: string[];
   disallowedTools?: string[];
@@ -122,6 +124,11 @@ function hubEnv(): NodeJS.ProcessEnv {
 function withRunIds(env: NodeJS.ProcessEnv, req: RunRequest): NodeJS.ProcessEnv {
   if (req.taskId) env.HUB_TASK_ID = req.taskId;
   if (req.runId) env.HUB_RUN_ID = req.runId;
+  if (req.portBase != null) {
+    const range = portRangeOf(req.portBase);
+    env.HUB_PORT_BASE = String(range.base);
+    env.HUB_PORT_END = String(range.end);
+  }
   return env;
 }
 

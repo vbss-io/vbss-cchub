@@ -112,6 +112,11 @@ export function TaskCard({ task, origin, selected, archiveSupported, busy, peers
         <span className="chip chip--ws" title={task.cwd}>
           {chip}
         </span>
+        {task.portBase != null && task.portEnd != null && (
+          <span className="chip chip--ports" title="Ports reserved for this task's dev servers and previews">
+            ports {task.portBase}–{task.portEnd}
+          </span>
+        )}
         {isolated && (
           <span className={`chip chip--worktree ${merged ? "chip--worktree-merged" : ""}`} title={merged ? "Worked in its own git worktree; branch already merged" : "Works in its own git worktree and branch; merge it from the detail pane"}>
             {merged ? "merged" : "worktree"}{branch ? ` · ${branch}` : ""}
