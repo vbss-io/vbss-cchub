@@ -111,6 +111,7 @@ export function createTaskWorktree(input: {
 export function worktreeHint(task: TaskRecord, info: WorktreeInfo): string {
   const id8 = task.id.slice(0, 8);
   const branch = info.branch ?? "the branch";
+  if (info.path == null) return "Worktree discarded.";
   if (info.mergedAt != null) return `Merged into ${info.baseBranch}.`;
   if (task.status === "running" || task.status === "pending") {
     return `Runs in its own worktree on branch ${branch}; when it completes, merge with hub_task_merge (taskId ${id8}) or POST /delegation/tasks/${task.id}/merge.`;

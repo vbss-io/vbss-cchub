@@ -312,4 +312,10 @@ describe("worktreeHint", () => {
     const info = makeInfo({ branch: "hub/abc12345", exists: false, commits: [] });
     assert.equal(worktreeHint(task, info), "Worktree folder is gone; discard to clean the branch.");
   });
+
+  it("reports the worktree was discarded before any other rule, even a merged one", () => {
+    const task = makeTask({ status: "completed", branch: "hub/abc12345" });
+    const info = makeInfo({ branch: "hub/abc12345", path: null, exists: false, mergedAt: Date.now() });
+    assert.equal(worktreeHint(task, info), "Worktree discarded.");
+  });
 });

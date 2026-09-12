@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,6 +53,20 @@ describe("isolation resolution", () => {
 
   it("defaults to shared when there is no repo to isolate", () => {
     assert.deepEqual(launch.resolveIsolation(null, true, false), { isolation: "shared", reason: "default" });
+  });
+});
+
+describe("prepareWorktree auto-fallback", () => {
+  it("returns null instead of throwing when the hub auto-isolated a non-git folder", () => {
+    const plain = mkdtempSync(join(tmpdir(), "cch-launch-plain-"));
+    const target = { workspace: "w", repo: "plain", repoPath: plain, cwd: dataDir, addDirs: [] };
+    assert.equal(launch.prepareWorktree(target, randomUUID(), "busy-repo"), null);
+  });
+
+  it("still throws when the caller explicitly requested a worktree on a non-git folder", () => {
+    const plain = mkdtempSync(join(tmpdir(), "cch-launch-plain-"));
+    const target = { workspace: "w", repo: "plain", repoPath: plain, cwd: dataDir, addDirs: [] };
+    assert.throws(() => launch.prepareWorktree(target, randomUUID(), "requested"));
   });
 });
 
