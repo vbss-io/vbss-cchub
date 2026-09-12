@@ -1,4 +1,5 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
+import type { Stats } from "node:fs";
 import { basename, join } from "node:path";
 import { config } from "./config.js";
 import type { TranscriptEntry } from "./transcript.js";
@@ -131,8 +132,8 @@ const isInjectedContext = (text: string): boolean => {
 const HUB_CONTEXT_PREFIXES = ["You are running inside the", "You have an MCP server named"];
 const HUB_CONTEXT_SEPARATOR = "\n\n---\n\n";
 const INJECTED_TAG = /^<([a-z_-]+)[\s>]/i;
-const REALTIME_DELEGATION_SOURCE = /<source>([\s\S]*?)<\/source>/;
-const REALTIME_DELEGATION_INPUT = /<input>([\s\S]*?)<\/input>/;
+const REALTIME_DELEGATION_SOURCE = /<source>([\s\S]*?)<\/source>/i;
+const REALTIME_DELEGATION_INPUT = /<input>([\s\S]*?)<\/input>/i;
 
 export function stripInjectedContext(text: string): string {
   let rest = text.trimStart();
@@ -153,7 +154,7 @@ export function stripInjectedContext(text: string): string {
       const block = rest.slice(0, blockEnd);
       const source = block.match(REALTIME_DELEGATION_SOURCE)?.[1]?.trim() ?? "";
       const input = block.match(REALTIME_DELEGATION_INPUT)?.[1]?.trim() ?? "";
-      if (source !== "transcript_tail_flush" && input.length > 0) return input;
+      if (source !== "transcript_tail_flush" && input.length > 0) return stripInjectedContext(input);
     }
     rest = rest.slice(blockEnd).trimStart();
   }
@@ -175,8 +176,20 @@ export function classifyCodexClient(originator: string | null, source: string | 
   return "codex-cli";
 }
 
-export function parseRollout(file: string, now = Date.now()): CodexSessionRecord | null {
-  const stat = statSync(file);
+type CachedRolloutRecord = Omit<CodexSessionRecord, "status"> & { inTurn: boolean; turnClosed: boolean };
+
+function statusOf(fields: Pick<CachedRolloutRecord, "source" | "updatedAt" | "inTurn" | "turnClosed">, now: number): CodexSessionStatus {
+  const activity: CodexSessionStatus = fields.inTurn && now - fields.updatedAt < ACTIVE_WINDOW_MS ? "active" : "idle";
+  const execEnded = fields.source === "exec" && fields.turnClosed && now - fields.updatedAt > EXEC_ENDED_AFTER_MS;
+  return now - fields.updatedAt > ENDED_AFTER_MS || execEnded ? "ended" : activity;
+}
+
+function toRecord(fields: CachedRolloutRecord, now: number): CodexSessionRecord {
+  const { inTurn, turnClosed, ...rest } = fields;
+  return { ...rest, status: statusOf(fields, now) };
+}
+
+function parseRolloutFields(file: string, stat: Stats, now: number): CachedRolloutRecord | null {
   const head = parseLines(readSlice(file, 0, Math.min(HEAD_BYTES, stat.size)));
   const meta = head.find((entry) => entry.type === "session_meta");
   const payload = meta ? asObject(meta.payload) : null;
@@ -220,15 +233,11 @@ export function parseRollout(file: string, now = Date.now()): CodexSessionRecord
       turns += 1;
     }
   });
-  const updatedAt = Math.max(stat.mtimeMs, newestTailTimestamp);
+  const updatedAt = Math.min(now, Math.max(stat.mtimeMs, newestTailTimestamp));
   const inTurn = lastStarted > lastCompleted;
   const turnClosed = lastCompleted >= 0 && lastCompleted >= lastStarted;
   const originator = isString(payload.originator) ? payload.originator : null;
   const source = isString(payload.source) ? payload.source : null;
-  const activity: CodexSessionStatus = inTurn && now - updatedAt < ACTIVE_WINDOW_MS ? "active" : "idle";
-  const execEnded = source === "exec" && turnClosed && now - updatedAt > EXEC_ENDED_AFTER_MS;
-  const status: CodexSessionStatus =
-    now - updatedAt > ENDED_AFTER_MS || execEnded ? "ended" : activity;
   const startedAt = isString(payload.timestamp) ? Date.parse(payload.timestamp) || stat.birthtimeMs : stat.birthtimeMs;
   return {
     id,
@@ -238,7 +247,6 @@ export function parseRollout(file: string, now = Date.now()): CodexSessionRecord
     source,
     threadSource: isString(payload.thread_source) ? payload.thread_source : null,
     client: classifyCodexClient(originator, source),
-    status,
     turns,
     lastMessage,
     startedAt,
@@ -249,7 +257,15 @@ export function parseRollout(file: string, now = Date.now()): CodexSessionRecord
     customTitle: null,
     archivedAt: null,
     hidden: false,
+    inTurn,
+    turnClosed,
   };
+}
+
+export function parseRollout(file: string, now = Date.now()): CodexSessionRecord | null {
+  const stat = statSync(file);
+  const fields = parseRolloutFields(file, stat, now);
+  return fields ? toRecord(fields, now) : null;
 }
 
 function dayDirs(root: string, days: number, now: number): string[] {
@@ -264,6 +280,19 @@ function dayDirs(root: string, days: number, now: number): string[] {
   return dirs;
 }
 
+const rolloutCache = new Map<string, { size: number; mtimeMs: number; record: CachedRolloutRecord | null }>();
+
+function scanRollout(file: string, now: number): CodexSessionRecord | null {
+  const stat = statSync(file);
+  const cached = rolloutCache.get(file);
+  if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+    return cached.record ? toRecord(cached.record, now) : null;
+  }
+  const fields = parseRolloutFields(file, stat, now);
+  rolloutCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, record: fields });
+  return fields ? toRecord(fields, now) : null;
+}
+
 export function scanCodexSessions(
   root: string = config.codexSessionsDir,
   options: { days?: number; limit?: number; now?: number } = {},
@@ -271,17 +300,23 @@ export function scanCodexSessions(
   const now = options.now ?? Date.now();
   const limit = options.limit ?? 40;
   const records: CodexSessionRecord[] = [];
-  for (const dir of dayDirs(root, options.days ?? 3, now)) {
+  const seen = new Set<string>();
+  for (const dir of dayDirs(root, options.days ?? 14, now)) {
     if (!existsSync(dir)) continue;
     for (const entry of readdirSync(dir)) {
       if (!entry.endsWith(".jsonl")) continue;
+      const file = join(dir, entry);
+      seen.add(file);
       try {
-        const record = parseRollout(join(dir, entry), now);
+        const record = scanRollout(file, now);
         if (record) records.push(record);
       } catch {
         continue;
       }
     }
+  }
+  for (const key of rolloutCache.keys()) {
+    if (!seen.has(key)) rolloutCache.delete(key);
   }
   return records.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
 }
@@ -327,7 +362,7 @@ export function findCodexRollout(
   options: { days?: number; now?: number } = {},
 ): string | null {
   const now = options.now ?? Date.now();
-  for (const dir of dayDirs(root, options.days ?? 3, now)) {
+  for (const dir of dayDirs(root, options.days ?? 14, now)) {
     if (!existsSync(dir)) continue;
     for (const entry of readdirSync(dir)) {
       if (!entry.endsWith(".jsonl")) continue;
