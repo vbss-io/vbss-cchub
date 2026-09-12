@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { fetchHealth } from "../api";
+import { fetchHealth, type ClaimRecord } from "../api";
 import { claudeClient, isHubRun } from "../clients";
 import { CodexCard } from "../components/CodexCard";
 import { SessionCard } from "../components/SessionCard";
@@ -84,6 +84,7 @@ function loadCollapsedGroups(): string[] {
 
 interface Props {
   sessions: Record<string, SessionRecord>;
+  claims: ClaimRecord[];
   groups: GroupRecord[];
   workspaces: WorkspaceRecord[];
   codexSessions: CodexSessionRecord[];
@@ -104,6 +105,7 @@ interface Props {
 
 export function SessionsView({
   sessions,
+  claims,
   groups,
   workspaces,
   codexSessions,
@@ -198,6 +200,14 @@ export function SessionsView({
   }, [sessions, codexSessions, filter, clientFilter, sort, query, tick]);
 
   const sessionValues = useMemo(() => Object.values(sessions), [sessions]);
+  const claimsBySession = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const claim of claims) {
+      if (!claim.sessionId) continue;
+      map.set(claim.sessionId, (map.get(claim.sessionId) ?? 0) + 1);
+    }
+    return map;
+  }, [claims]);
   const grouped = useMemo(() => {
     const groupNameFor = (cwd: string | null): string | null => {
       const lower = (cwd ?? "").toLowerCase().replace(HOME_PREFIX, "");
@@ -265,6 +275,7 @@ export function SessionsView({
         stale={isStale(session)}
         peers={folderPeers(session.cwd, sessionValues, [], { sessionId: session.sessionId })}
         forkParentName={forkParentName}
+        claimsCount={claimsBySession.get(session.sessionId) ?? 0}
         onOpen={onOpen}
         onArchive={onArchive}
         onDelete={onDelete}

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { resolve } from "node:path";
 import { listCodexSessions } from "./codex-store.js";
 import { config } from "./config.js";
-import { getSession, listSessions, sessionByPid } from "./db.js";
+import { getSession, listClaims, listSessions, sessionByPid } from "./db.js";
 import { broadcast } from "./sse.js";
 import { brainToday } from "./second-brain.js";
 import { runtimeSnapshot } from "./runtimes.js";
@@ -363,6 +363,14 @@ export function delegationRouter(): Router {
           },
           crowdedFolders,
           delegation: { autonomy: getSettings().autonomy, note: getSettings().autonomy === "full" ? "delegations run without permission prompts; do not pass permissionMode unless you want plan mode" : "delegations run with acceptEdits and can stop in Needs you; ask the owner to switch Autonomy to full in Settings" },
+          claims: listClaims().map((claim) => ({
+            id: claim.id,
+            sessionTitle: claim.sessionTitle,
+            repoPath: claim.repoPath,
+            paths: claim.paths,
+            note: claim.note,
+            expiresAt: claim.expiresAt,
+          })),
           reports: listReports({ limit: 10 }),
           workspaces: workspaces.map((w) => ({ name: w.name, repos: w.repos.length })),
         });

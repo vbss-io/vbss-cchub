@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type HooksStatus, type ShareStreamEvent } from "./api";
+import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type HooksStatus, type ShareStreamEvent } from "./api";
 import { isHubRun } from "./clients";
 import { BrandMark, Wordmark } from "./components/BrandMark";
 import { CodexDrawer } from "./components/CodexDrawer";
@@ -83,6 +83,7 @@ const projectOf = (session: SessionRecord): string => {
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash));
   const [sessions, setSessions] = useState<Record<string, SessionRecord>>({});
+  const [claims, setClaims] = useState<ClaimRecord[]>([]);
   const [groups, setGroups] = useState<GroupRecord[]>([]);
   const [hooks, setHooksState] = useState<HooksStatus | null>(null);
   const [hooksBusy, setHooksBusy] = useState(false);
@@ -275,6 +276,9 @@ export function App() {
     void fetchGroups().then((list) => {
       if (mounted) setGroups(list);
     });
+    void fetchClaims().then((list) => {
+      if (mounted) setClaims(list);
+    });
     const unsubscribe = subscribe({
       onSession: (session) => {
         setSessions((prev) => {
@@ -343,6 +347,9 @@ export function App() {
       },
       onShareStream: (event) => {
         for (const listener of shareListeners.current) listener(event);
+      },
+      onClaims: (list) => {
+        if (mounted) setClaims(list);
       },
     });
     return () => {
@@ -530,6 +537,7 @@ export function App() {
           {route.view === "sessions" && (
             <SessionsView
               sessions={sessions}
+              claims={claims}
               groups={groups}
               workspaces={workspaces}
               codexSessions={codexSessions}
@@ -668,6 +676,8 @@ export function App() {
         <SessionDrawer
           session={drawerSession}
           workspace={workspaceOf(workspaces, drawerSession.cwd)}
+          claims={claims.filter((claim) => claim.sessionId === drawerSession.sessionId)}
+          onReleaseClaim={(id) => void releaseClaim(id)}
           onClose={() => setDrawer(null)}
           onShare={(id) => {
             setDrawer(null);

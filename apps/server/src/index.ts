@@ -7,17 +7,22 @@ import { config } from "./config.js";
 import {
   applyHook,
   archiveSession,
+  createClaim,
   endDeadSessions,
   listAgents,
   createGroup,
   deleteGroup,
   deleteSession,
   getSession,
+  listClaims,
   listGroups,
   listSessions,
   purgeEmptySessions,
+  purgeExpiredClaims,
+  releaseClaim,
   renameSession,
   reorderGroups,
+  sessionByPid,
   setSessionFavorite,
   updateGroup,
   applyMeta,
@@ -36,6 +41,7 @@ import { sessionLive } from "./live.js";
 import { runtimeSnapshot } from "./runtimes.js";
 import { ensureExtension } from "./ensure-extension.js";
 import { abortActiveRuns, delegationRouter } from "./delegation-routes.js";
+import { resolveWorkspaceTarget } from "./delegation-launch.js";
 import { markRunningAsInterrupted } from "./delegation-store.js";
 import { createShareApp } from "./share-server.js";
 import { deleteOrphanShareForks, limitOf, listAsksForSession, listForksForSession, markInterruptedShareRequests } from "./share-store.js";
@@ -409,6 +415,53 @@ app.post("/api/groups/reorder", (req, res) => {
   res.json(groups);
 });
 
+app.get("/api/claims", (req, res) => {
+  const repoPath = asString(req.query.repoPath);
+  res.json(listClaims(repoPath ? { repoPath } : {}));
+});
+
+const asStringArray = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+
+app.post("/api/claims", (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const paths = asStringArray(body.paths);
+  let repoPath = asString(body.repoPath);
+  if (!repoPath) {
+    const workspace = asString(body.workspace);
+    if (workspace) {
+      try {
+        repoPath = resolveWorkspaceTarget(workspace, asString(body.repo)).repoPath;
+      } catch (err) {
+        res.status(400).json({ error: err instanceof Error ? err.message : "could not resolve workspace" });
+        return;
+      }
+    }
+  }
+  if (!repoPath || paths.length === 0) {
+    res.status(400).json({ error: "repoPath (or workspace/repo) and paths required" });
+    return;
+  }
+  const originPid = asNumber(body.originPid);
+  const sessionId = asString(body.sessionId) ?? (originPid ? (sessionByPid(originPid)?.sessionId ?? null) : null);
+  const ttlMinutes = asNumber(body.ttlMinutes);
+  const claim = createClaim({
+    sessionId,
+    repoPath,
+    paths,
+    note: asString(body.note),
+    ttlMs: ttlMinutes != null ? ttlMinutes * 60_000 : null,
+  });
+  broadcast("claims", listClaims());
+  res.status(201).json(claim);
+});
+
+app.delete("/api/claims/:id", (req, res) => {
+  releaseClaim(req.params.id);
+  broadcast("claims", listClaims());
+  res.status(204).end();
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, hostname: hostname() });
 });
@@ -499,6 +552,7 @@ setInterval(purgeEmpty, PURGE_INTERVAL_MS).unref();
 
 function sweepDead(): void {
   for (const session of endDeadSessions()) broadcast("session", session);
+  if (purgeExpiredClaims() > 0) broadcast("claims", listClaims());
 }
 
 sweepDead();

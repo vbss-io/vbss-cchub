@@ -316,6 +316,28 @@ const TOOLS: ToolDefinition[] = [
     call: (args) => http("GET", `/delegation/shares/activity${query({ limit: args.limit })}`),
   },
   {
+    name: "hub_claim",
+    description:
+      "Tell the hub which files you are editing in a repo so delegated tasks and other agents keep off them. Advisory only; expires after ttlMinutes (default 240). Pass release: true with claimId to drop a claim early.",
+    inputSchema: objectSchema({
+      workspace: { type: "string", description: "Workspace name as listed by hub_workspaces" },
+      repo: { type: "string", description: "Repo name of that workspace" },
+      paths: { type: "array", items: { type: "string" }, description: "Repo-relative paths or globs you are editing" },
+      note: { type: "string" },
+      ttlMinutes: { type: "number", description: "Default 240, max 1440" },
+      release: { type: "boolean", description: "Pass true with claimId to drop a claim early instead of creating one" },
+      claimId: { type: "string" },
+    }),
+    call: (args) => {
+      if (args.release === true) {
+        const id = asString(args.claimId);
+        if (!id) throw new Error("claimId is required to release a claim");
+        return http("DELETE", `/api/claims/${encodeURIComponent(id)}`);
+      }
+      return http("POST", "/api/claims", { ...args, ...originFields() });
+    },
+  },
+  {
     name: "hub_tunnel",
     description:
       "The share endpoint (LAN url) and the ngrok tunnel: action status, start (installs ngrok on first use and returns the public url) or stop.",
