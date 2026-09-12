@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,6 +58,72 @@ describe("codex rollouts", () => {
     );
     const record = parseRollout(file, Date.now())!;
     assert.equal(record.title, "Actually build the parser");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("uses the newest line timestamp when the Codex app appends without bumping mtime", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cch-stale-"));
+    const file = join(dir, "rollout.jsonl");
+    const now = Date.now();
+    const lineTs = new Date(now - 3_600_000).toISOString();
+    const line = (payload: unknown) => JSON.stringify({ timestamp: lineTs, type: "response_item", payload });
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ timestamp: lineTs, type: "session_meta", payload: { id: "stale-1", cwd: "C:\\work\\y", source: "cli" } }),
+        line({ type: "message", role: "user", content: [{ type: "input_text", text: "Do the thing" }] }),
+        JSON.stringify({ timestamp: lineTs, type: "event_msg", payload: { type: "task_started" } }),
+        JSON.stringify({ timestamp: lineTs, type: "event_msg", payload: { type: "task_complete" } }),
+        "",
+      ].join("\n"),
+    );
+    const threeDaysAgo = new Date(now - 3 * 86_400_000);
+    utimesSync(file, threeDaysAgo, threeDaysAgo);
+    const record = parseRollout(file, now)!;
+    assert.equal(record.updatedAt, Date.parse(lineTs));
+    assert.equal(record.status, "idle");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("extracts the real message from a realtime_delegation block but not from a tail flush", () => {
+    assert.equal(
+      stripInjectedContext("<realtime_delegation>\n  <input>oi tudo bem</input>\n</realtime_delegation>"),
+      "oi tudo bem",
+    );
+    assert.equal(
+      stripInjectedContext(
+        "<realtime_delegation>\n  <source>transcript_tail_flush</source>\n  <input>The user just ended their realtime session</input>\n</realtime_delegation>",
+      ),
+      "",
+    );
+  });
+
+  it("falls back to the cwd basename when the only user message is a transcript tail flush", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cch-tailflush-"));
+    const file = join(dir, "rollout.jsonl");
+    const line = (payload: unknown) => JSON.stringify({ type: "response_item", payload });
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({
+          type: "session_meta",
+          payload: { id: "tf-1", cwd: "C:\\work\\realtime-voice-chat-2", source: "cli" },
+        }),
+        line({
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "<realtime_delegation>\n  <source>transcript_tail_flush</source>\n  <input>The user just ended their realtime session</input>\n</realtime_delegation>",
+            },
+          ],
+        }),
+        "",
+      ].join("\n"),
+    );
+    const record = parseRollout(file, Date.now())!;
+    assert.equal(record.title, "realtime-voice-chat-2");
     rmSync(dir, { recursive: true, force: true });
   });
 

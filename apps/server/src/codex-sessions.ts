@@ -19,6 +19,7 @@ const INJECTED_USER_PREFIXES = [
   "<turn_aborted",
   "<codex_internal_context",
   "<system-reminder",
+  "<realtime_delegation",
   "# AGENTS.md instructions",
   "You are running inside the",
   "You have an MCP server named",
@@ -130,6 +131,8 @@ const isInjectedContext = (text: string): boolean => {
 const HUB_CONTEXT_PREFIXES = ["You are running inside the", "You have an MCP server named"];
 const HUB_CONTEXT_SEPARATOR = "\n\n---\n\n";
 const INJECTED_TAG = /^<([a-z_-]+)[\s>]/i;
+const REALTIME_DELEGATION_SOURCE = /<source>([\s\S]*?)<\/source>/;
+const REALTIME_DELEGATION_INPUT = /<input>([\s\S]*?)<\/input>/;
 
 export function stripInjectedContext(text: string): string {
   let rest = text.trimStart();
@@ -145,7 +148,14 @@ export function stripInjectedContext(text: string): string {
     if (!name) return "";
     const close = rest.indexOf(`</${name}>`);
     if (close < 0) return "";
-    rest = rest.slice(close + name.length + 3).trimStart();
+    const blockEnd = close + name.length + 3;
+    if (name === "realtime_delegation") {
+      const block = rest.slice(0, blockEnd);
+      const source = block.match(REALTIME_DELEGATION_SOURCE)?.[1]?.trim() ?? "";
+      const input = block.match(REALTIME_DELEGATION_INPUT)?.[1]?.trim() ?? "";
+      if (source !== "transcript_tail_flush" && input.length > 0) return input;
+    }
+    rest = rest.slice(blockEnd).trimStart();
   }
   return rest.trim();
 }
@@ -191,7 +201,10 @@ export function parseRollout(file: string, now = Date.now()): CodexSessionRecord
   let lastCompleted = -1;
   let turns = 0;
   let lastMessage: string | null = null;
+  let newestTailTimestamp = -1;
   tail.forEach((entry, index) => {
+    const ts = isString(entry.timestamp) ? Date.parse(entry.timestamp) : NaN;
+    if (!Number.isNaN(ts) && ts > newestTailTimestamp) newestTailTimestamp = ts;
     if (entry.type === "response_item") {
       const inner = asObject(entry.payload);
       const text = inner ? messageText(inner, "assistant") : null;
@@ -207,7 +220,7 @@ export function parseRollout(file: string, now = Date.now()): CodexSessionRecord
       turns += 1;
     }
   });
-  const updatedAt = stat.mtimeMs;
+  const updatedAt = Math.max(stat.mtimeMs, newestTailTimestamp);
   const inTurn = lastStarted > lastCompleted;
   const turnClosed = lastCompleted >= 0 && lastCompleted >= lastStarted;
   const originator = isString(payload.originator) ? payload.originator : null;
