@@ -27,6 +27,7 @@ import {
 import { delegationGuard } from "./delegation-security.js";
 import { abortRun, BadRequestError, NotFoundError, brainNote, delegateTask, startRun, repoPathOf } from "./delegation-launch.js";
 import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus, WorktreeError } from "./worktrees.js";
+import { portRangeOf } from "./task-ports.js";
 import { shareRouter } from "./share-routes.js";
 import { systemRouter } from "./system-routes.js";
 export { abortActiveRuns } from "./delegation-launch.js";
@@ -98,6 +99,11 @@ const sendError = (res: { status: (code: number) => { json: (body: unknown) => v
 };
 
 const clipText = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+const taskJson = (task: TaskRecord): TaskRecord & { portEnd: number | null } => ({
+  ...task,
+  portEnd: task.portBase != null ? portRangeOf(task.portBase).end : null,
+});
 
 async function resolveOrigin(
   originPid: number | null,
@@ -379,10 +385,10 @@ export function delegationRouter(): Router {
       const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
       const includeArchived = req.query.archived === "1" || req.query.archived === "true";
       if (typeof req.query.origin === "string" && req.query.origin) {
-        res.json(listTasksByOrigin(req.query.origin, Number.isFinite(limit) ? limit : undefined));
+        res.json(listTasksByOrigin(req.query.origin, Number.isFinite(limit) ? limit : undefined).map(taskJson));
         return;
       }
-      res.json(listTasks({ status, limit: Number.isFinite(limit) ? limit : undefined, includeArchived }));
+      res.json(listTasks({ status, limit: Number.isFinite(limit) ? limit : undefined, includeArchived }).map(taskJson));
     } catch (err) {
       sendError(res, err);
     }
@@ -405,7 +411,7 @@ export function delegationRouter(): Router {
       }
       try {
         const worktree = detail.task.isolation === "worktree" ? await worktreeStatus(detail.task) : null;
-        res.json({ ...detail, worktree });
+        res.json({ ...detail, task: taskJson(detail.task), worktree });
       } catch (err) {
         sendError(res, err);
       }
@@ -503,7 +509,7 @@ export function delegationRouter(): Router {
           originSessionId: origin.originSessionId,
           originClient: origin.originClient,
         });
-        res.status(201).json(detail);
+        res.status(201).json({ ...detail, task: taskJson(detail.task) });
       } catch (err) {
         sendError(res, err);
       }

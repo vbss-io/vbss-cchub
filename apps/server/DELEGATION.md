@@ -328,6 +328,15 @@ silent by default. The always-on-top widget is unchanged.
 `tauri build` produces both an MSI (per-machine, needs UAC) and an NSIS setup (per-user, installs
 under `%LOCALAPPDATA%\VBSS CCHUB` without elevation; `/S` for silent).
 
+## Port reservation
+
+Every delegated task gets a reserved block of 10 TCP ports from `20000-29999`, picked by
+`allocatePortBase` in `task-ports.ts` so parallel tasks never collide. Both the launch and every
+`continue` run receive `HUB_PORT_BASE` and `HUB_PORT_END` in the process env, and the task context
+tells the agent to bind dev servers, previews and test listeners inside that range instead of
+project defaults (3000, 4317, 5173, 14317...). `scripts/dev-preview.mjs` defaults its own hub/share/UI
+ports off `HUB_PORT_BASE` when the `PREVIEW_*` overrides are not set.
+
 ## Dev preview
 
 `scripts/dev-preview.mjs` (repo root) brings up an isolated hub + UI that never touches the installed

@@ -3608,6 +3608,12 @@ h6.md__h {
   font-size: 11px;
 }
 
+.chip--ports {
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
 .chip--worktree-merged {
   color: var(--go);
   border-color: color-mix(in srgb, var(--go) 45%, transparent);

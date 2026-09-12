@@ -95,7 +95,7 @@ const TOOLS: ToolDefinition[] = [
   {
     name: "hub_delegate",
     description:
-      "Delegate work to a headless Claude Code (default) or Codex run inside a workspace. The run starts in the workspace context folder with every repo of that workspace attached, so the agent sees the workspace CLAUDE.md, skills and all repos. Runs are autonomous by default (the hub's Autonomy setting is full: no permission prompts, full shell), so do NOT pass permissionMode or sandbox unless you want plan mode; a restrictive mode is upgraded to autonomous anyway. Returns the task id to follow with hub_task.",
+      "Delegate work to a headless Claude Code (default) or Codex run inside a workspace. The run starts in the workspace context folder with every repo of that workspace attached, so the agent sees the workspace CLAUDE.md, skills and all repos. Runs are autonomous by default (the hub's Autonomy setting is full: no permission prompts, full shell), so do NOT pass permissionMode or sandbox unless you want plan mode; a restrictive mode is upgraded to autonomous anyway. Each task gets a reserved port range (env HUB_PORT_BASE..HUB_PORT_END) for any dev server it starts. Returns the task id to follow with hub_task.",
     inputSchema: objectSchema(
       {
         workspace: { type: "string", description: "Workspace name as listed by hub_workspaces" },

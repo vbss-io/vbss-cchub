@@ -3,7 +3,8 @@ import { basename, join } from "node:path";
 import { runTask, type RunEvent } from "./executor.js";
 import { broadcast } from "./sse.js";
 import { appendHubSource } from "./second-brain.js";
-import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail } from "./delegation-store.js";
+import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail, listTasks } from "./delegation-store.js";
+import { allocatePortBase, portRangeOf } from "./task-ports.js";
 import type { CodexSandbox, Isolation, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
 import { createTaskWorktree, worktreeMainRepo } from "./worktrees.js";
 import { finishShareRequestByTask, getShare } from "./share-store.js";
@@ -56,6 +57,12 @@ function taskContext(task: TaskRecord): string {
     }),
   ];
   if (task.repo) lines.push(`This task targets the "${task.repo}" repository.`);
+  if (task.portBase != null) {
+    const range = portRangeOf(task.portBase);
+    lines.push(
+      `Ports reserved for this task: ${range.base}-${range.end} (env HUB_PORT_BASE, HUB_PORT_END). Bind every dev server, preview or test listener to a port in this range; other tasks run in parallel with their own ranges, so never use project defaults such as 3000, 4317, 5173 or 14317.`,
+    );
+  }
   lines.push("When you finish, state clearly what was done, what was verified and what is still open.");
   if (worktreeActive) {
     const original = worktreeMainRepo(task.worktreePath as string) ?? "the main checkout";
@@ -198,6 +205,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
     sandbox: effectiveSandbox,
     sessionId: plannedSession,
     resumeSessionId,
+    portBase: task.portBase,
     restricted: profile?.restricted,
     strictMcpConfig: profile?.strictMcpConfig,
     permissionPrompts: profile?.permissionPrompts,
@@ -342,6 +350,11 @@ export function delegateTask(input: DelegateInput): TaskDetail {
     addDirs = target.addDirs.map((dir) => (samePath(dir, target.repoPath as string) ? created.path : dir));
     if (!addDirs.some((dir) => samePath(dir, created.path))) addDirs = [...addDirs, created.path];
   }
+  const usedPortBases = listTasks({ limit: 500 })
+    .filter((existing) => existing.status === "running" || existing.status === "pending")
+    .map((existing) => existing.portBase)
+    .filter((base): base is number => base != null);
+  const portBase = allocatePortBase(usedPortBases);
   const task = createTask({
     id,
     title: input.title?.trim() || titleFrom(input.prompt),
@@ -361,6 +374,7 @@ export function delegateTask(input: DelegateInput): TaskDetail {
     worktreePath,
     branch,
     baseBranch,
+    portBase,
   });
   startRun(task, "launch", input.prompt, input.model, input.permissionMode);
   broadcastOrigin(task);

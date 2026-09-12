@@ -99,6 +99,7 @@ for (const [name, type] of [
   ["branch", "TEXT"],
   ["base_branch", "TEXT"],
   ["merged_at", "INTEGER"],
+  ["port_base", "INTEGER"],
 ] as const) {
   if (!hubTaskColumns.has(name)) db.exec(`ALTER TABLE hub_tasks ADD COLUMN ${name} ${type}`);
 }
@@ -129,6 +130,7 @@ interface TaskRow {
   branch: string | null;
   base_branch: string | null;
   merged_at: number | null;
+  port_base: number | null;
   created_at: number;
   updated_at: number;
   last_error: string | null;
@@ -208,6 +210,7 @@ const toTask = (row: TaskRow): TaskRecord => ({
   branch: row.branch,
   baseBranch: row.base_branch,
   mergedAt: row.merged_at,
+  portBase: row.port_base,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -317,9 +320,9 @@ const TASK_SELECT = `
 
 const insertTaskStmt = db.prepare(`
   INSERT INTO hub_tasks
-    (id, title, prompt, workspace, repo, cwd, add_dirs, runner, requested_model, permission_mode, sandbox, status, created_by, origin_session_id, origin_client, isolation, worktree_path, branch, base_branch, created_at, updated_at)
+    (id, title, prompt, workspace, repo, cwd, add_dirs, runner, requested_model, permission_mode, sandbox, status, created_by, origin_session_id, origin_client, isolation, worktree_path, branch, base_branch, port_base, created_at, updated_at)
   VALUES
-    (@id, @title, @prompt, @workspace, @repo, @cwd, @addDirs, @runner, @requestedModel, @permissionMode, @sandbox, @status, @createdBy, @originSessionId, @originClient, @isolation, @worktreePath, @branch, @baseBranch, @now, @now)
+    (@id, @title, @prompt, @workspace, @repo, @cwd, @addDirs, @runner, @requestedModel, @permissionMode, @sandbox, @status, @createdBy, @originSessionId, @originClient, @isolation, @worktreePath, @branch, @baseBranch, @portBase, @now, @now)
 `);
 const getTaskStmt = db.prepare(`${TASK_SELECT} WHERE t.id = ?`);
 const listTasksStmt = db.prepare(`${TASK_SELECT} ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`);
@@ -408,6 +411,7 @@ export function createTask(input: {
   worktreePath?: string | null;
   branch?: string | null;
   baseBranch?: string | null;
+  portBase?: number | null;
 }): TaskRecord {
   const id = input.id ?? randomUUID();
   insertTaskStmt.run({
@@ -430,6 +434,7 @@ export function createTask(input: {
     worktreePath: input.worktreePath ?? null,
     branch: input.branch ?? null,
     baseBranch: input.baseBranch ?? null,
+    portBase: input.portBase ?? null,
     now: Date.now(),
   });
   return toTask(getTaskStmt.get(id) as TaskRow);
