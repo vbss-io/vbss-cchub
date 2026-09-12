@@ -126,7 +126,8 @@ function messageText(payload: Json, role: "user" | "assistant"): string | null {
 
 const isInjectedContext = (text: string): boolean => {
   const trimmed = text.trimStart();
-  return INJECTED_USER_PREFIXES.some((prefix) => trimmed.startsWith(prefix));
+  const lowered = trimmed.toLowerCase();
+  return INJECTED_USER_PREFIXES.some((prefix) => lowered.startsWith(prefix.toLowerCase()));
 };
 
 const HUB_CONTEXT_PREFIXES = ["You are running inside the", "You have an MCP server named"];
@@ -150,7 +151,7 @@ export function stripInjectedContext(text: string): string {
     const close = rest.indexOf(`</${name}>`);
     if (close < 0) return "";
     const blockEnd = close + name.length + 3;
-    if (name === "realtime_delegation") {
+    if (name.toLowerCase() === "realtime_delegation") {
       const block = rest.slice(0, blockEnd);
       const source = block.match(REALTIME_DELEGATION_SOURCE)?.[1]?.trim() ?? "";
       const input = block.match(REALTIME_DELEGATION_INPUT)?.[1]?.trim() ?? "";
