@@ -253,6 +253,9 @@ and that repo must be a git checkout on a branch (400 otherwise).
   `discard: true`, discards. `hub_overview` lists `isolation`/`branch` per task and `crowdedFolders`
   (folders with 2+ live agents) to hint when a worktree is worth it.
 - Add `.worktrees/` to the workspace repo's `.gitignore` so the worktrees never get committed back.
+- **Only a task delegated with a `repo` marks that repo busy.** Workspace-level tasks (no `repo`) and
+  tasks on another repo of the same workspace can still edit any attached repo in the shared checkout;
+  pass `repo` (or `isolation: "worktree"`) when that matters.
 
 ## File claims
 

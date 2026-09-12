@@ -90,6 +90,13 @@ describe("claims", () => {
     assert.equal(db.listClaims({ repoPath: "C:\\work\\repo-d" }).length, 0);
   });
 
+  it("releases a session's claims when that session ends", () => {
+    db.applyHook(sessionPayload("sess-c", "ending soon"));
+    db.createClaim({ sessionId: "sess-c", repoPath: "C:\\work\\repo-g", paths: ["i.ts"], ttlMs: 60_000 });
+    db.endSession("sess-c", "run completed");
+    assert.equal(db.listClaims({ repoPath: "C:\\work\\repo-g" }).length, 0);
+  });
+
   it("purges expired claims and reports at least one removed", () => {
     const claim = db.createClaim({ sessionId: null, repoPath: "C:\\work\\repo-f", paths: ["h.ts"], ttlMs: 60_000 });
     assert.notEqual(db.getClaim(claim.id), null);

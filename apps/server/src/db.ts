@@ -467,6 +467,7 @@ export function endSession(sessionId: string, message: string): SessionRecord | 
   if (changed === 0) return null;
   endAgentsStmt.run(now, sessionId);
   insertEventStmt.run({ sessionId, kind: "session_end", message, now });
+  releaseClaimsOfSession(sessionId);
   const row = getStmt.get(sessionId) as SessionRow | undefined;
   return row ? toRecord(row) : null;
 }

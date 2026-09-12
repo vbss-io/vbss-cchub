@@ -20,6 +20,7 @@ import {
   purgeEmptySessions,
   purgeExpiredClaims,
   releaseClaim,
+  releaseClaimsOfSession,
   renameSession,
   reorderGroups,
   sessionByPid,
@@ -115,6 +116,10 @@ app.post("/hook", (req, res) => {
   const seededAt = process.env.HUB_DEV_SEED === "1" ? asNumber(body.updatedAt) : null;
   const session = payload.kind === "meta" ? (applyMeta(payload) ?? applyHook(payload, seededAt ?? undefined)) : applyHook(payload, seededAt ?? undefined);
   broadcast("session", session);
+  if (payload.kind === "session_end") {
+    const releasedClaims = releaseClaimsOfSession(payload.sessionId);
+    if (releasedClaims > 0) broadcast("claims", listClaims());
+  }
   res.json(session);
 });
 
@@ -551,8 +556,13 @@ purgeEmpty();
 setInterval(purgeEmpty, PURGE_INTERVAL_MS).unref();
 
 function sweepDead(): void {
-  for (const session of endDeadSessions()) broadcast("session", session);
-  if (purgeExpiredClaims() > 0) broadcast("claims", listClaims());
+  let releasedClaims = 0;
+  for (const session of endDeadSessions()) {
+    broadcast("session", session);
+    releasedClaims += releaseClaimsOfSession(session.sessionId);
+  }
+  releasedClaims += purgeExpiredClaims();
+  if (releasedClaims > 0) broadcast("claims", listClaims());
 }
 
 sweepDead();

@@ -6,9 +6,9 @@ import { appendHubSource } from "./second-brain.js";
 import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail, listTasks } from "./delegation-store.js";
 import { allocatePortBase, portRangeOf } from "./task-ports.js";
 import type { CodexSandbox, Isolation, IsolationReason, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
-import { createTaskWorktree, worktreeMainRepo } from "./worktrees.js";
+import { createTaskWorktree, worktreeMainRepo, WorktreeError } from "./worktrees.js";
 import { finishShareRequestByTask, getShare } from "./share-store.js";
-import { endSession, getSession, listClaims } from "./db.js";
+import { endSession, getSession, listClaims, releaseClaimsOfSession } from "./db.js";
 import { SHARE_CREATED_BY_PREFIX, implementGuardrail, implementProfile, type RunProfile, type TrustLevel } from "./share-types.js";
 import { discoverWorkspaces, findRepo, findWorkspace, isDirectory, samePath } from "./workspaces.js";
 
@@ -338,6 +338,27 @@ export function resolveWorkspaceTarget(workspaceName: string, repoName: string |
   return { workspace: workspace.name, repo: repo?.name ?? null, repoPath: repo?.path ?? null, cwd, addDirs };
 }
 
+export function prepareWorktree(
+  target: WorkspaceTarget,
+  id: string,
+  reason: IsolationReason,
+): { path: string; branch: string; baseBranch: string } | null {
+  if (!target.repo || !target.repoPath) {
+    throw new BadRequestError("worktree isolation requires a repo of the workspace to run in");
+  }
+  try {
+    return createTaskWorktree({ repoPath: target.repoPath, repoName: target.repo, taskId: id, root: target.cwd });
+  } catch (err) {
+    if (reason === "busy-repo" && err instanceof WorktreeError) return null;
+    throw err;
+  }
+}
+
+function worktreeAddDirs(target: WorkspaceTarget, created: { path: string }): string[] {
+  const mapped = target.addDirs.map((dir) => (samePath(dir, target.repoPath as string) ? created.path : dir));
+  return mapped.some((dir) => samePath(dir, created.path)) ? mapped : [...mapped, created.path];
+}
+
 export function repoPathOf(task: TaskRecord): string | null {
   if (!task.repo) return null;
   try {
@@ -349,8 +370,10 @@ export function repoPathOf(task: TaskRecord): string | null {
 
 function endRunSession(sessionId: string | null, message: string): void {
   if (!sessionId) return;
+  const releasedClaims = releaseClaimsOfSession(sessionId);
   const ended = endSession(sessionId, message);
   if (ended) broadcast("session", ended);
+  if (releasedClaims > 0) broadcast("claims", listClaims());
 }
 
 function broadcastOrigin(task: TaskRecord): void {
@@ -373,22 +396,14 @@ export function delegateTask(input: DelegateInput): TaskDetail {
       const existingPath = repoPathOf(existing);
       return existingPath != null && samePath(existingPath, target.repoPath as string);
     });
-  const { isolation, reason: isolationReason } = resolveIsolation(input.isolation ?? null, repoBusy, target.repoPath != null);
-  let addDirs = target.addDirs;
-  let worktreePath: string | null = null;
-  let branch: string | null = null;
-  let baseBranch: string | null = null;
-  if (isolation === "worktree") {
-    if (!target.repo || !target.repoPath) {
-      throw new BadRequestError("worktree isolation requires a repo of the workspace to run in");
-    }
-    const created = createTaskWorktree({ repoPath: target.repoPath, repoName: target.repo, taskId: id, root: target.cwd });
-    worktreePath = created.path;
-    branch = created.branch;
-    baseBranch = created.baseBranch;
-    addDirs = target.addDirs.map((dir) => (samePath(dir, target.repoPath as string) ? created.path : dir));
-    if (!addDirs.some((dir) => samePath(dir, created.path))) addDirs = [...addDirs, created.path];
-  }
+  const { isolation: requestedIsolation, reason: requestedReason } = resolveIsolation(input.isolation ?? null, repoBusy, target.repoPath != null);
+  const created = requestedIsolation === "worktree" ? prepareWorktree(target, id, requestedReason) : null;
+  const isolation: Isolation = requestedIsolation === "worktree" && !created ? "shared" : requestedIsolation;
+  const isolationReason: IsolationReason = requestedIsolation === "worktree" && !created ? "default" : requestedReason;
+  const addDirs = created ? worktreeAddDirs(target, created) : target.addDirs;
+  const worktreePath = created?.path ?? null;
+  const branch = created?.branch ?? null;
+  const baseBranch = created?.baseBranch ?? null;
   const usedPortBases = activeTasks.map((existing) => existing.portBase).filter((base): base is number => base != null);
   const portBase = allocatePortBase(usedPortBases);
   const task = createTask({
