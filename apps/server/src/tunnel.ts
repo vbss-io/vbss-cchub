@@ -1,5 +1,5 @@
-import { spawn, spawnSync, execFile, type ChildProcess } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { createWriteStream, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { networkInterfaces, platform, arch } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -108,16 +108,23 @@ const managedBinary = (): string => join(config.binDir, exeName);
 
 function runnable(candidate: string): boolean {
   try {
-    if (statSync(candidate).isFile()) return true;
+    const stats = lstatSync(candidate);
+    return stats.isFile() || stats.isSymbolicLink();
   } catch {
-    if (config.ngrokArgsPrefix.length > 0) return false;
-    const probe = spawnSync(candidate, ["version"], { timeout: 8_000, windowsHide: true, stdio: "ignore" });
-    return probe.status === 0;
+    return config.ngrokArgsPrefix.length > 0 && basename(candidate) === candidate;
   }
-  return false;
+}
+
+const NGROK_BINARY_CACHE_TTL_MS = 30_000;
+let ngrokBinaryCache: { at: number; value: string | null } | null = null;
+
+export function resetNgrokBinaryCache(): void {
+  ngrokBinaryCache = null;
 }
 
 export function findNgrokBinary(): string | null {
+  const now = Date.now();
+  if (ngrokBinaryCache && now - ngrokBinaryCache.at < NGROK_BINARY_CACHE_TTL_MS) return ngrokBinaryCache.value;
   const candidates: (string | null)[] = [config.ngrokBin, managedBinary()];
   if (platform() === "win32") {
     const local = process.env.LOCALAPPDATA ?? join(config.homeDir, "AppData", "Local");
@@ -127,12 +134,17 @@ export function findNgrokBinary(): string | null {
     for (const dir of (process.env.PATH ?? "").split(":")) if (dir) candidates.push(join(dir, "ngrok"));
   }
   const seen = new Set<string>();
+  let found: string | null = null;
   for (const candidate of candidates) {
     if (!candidate || seen.has(candidate)) continue;
     seen.add(candidate);
-    if (runnable(candidate)) return candidate;
+    if (runnable(candidate)) {
+      found = candidate;
+      break;
+    }
   }
-  return null;
+  ngrokBinaryCache = { at: now, value: found };
+  return found;
 }
 
 const psLiteral = (value: string): string => `'${value.replace(/'/g, "''")}'`;
@@ -167,6 +179,7 @@ export function installNgrok(): Promise<string> {
     if (!res.ok || !res.body) throw new Error(`ngrok download failed (${res.status})`);
     await pipeline(Readable.fromWeb(res.body as never), createWriteStream(archive));
     await extract(archive, config.binDir);
+    resetNgrokBinaryCache();
     const binary = managedBinary();
     if (!existsSync(binary)) {
       const found = readdirSync(config.binDir).find((name) => name.toLowerCase().startsWith("ngrok") && !name.endsWith(".zip") && !name.endsWith(".tgz"));
