@@ -207,6 +207,122 @@ describe("codex rollouts", () => {
     assert.equal(found[0]?.id, "01a0aaaa-0000-7000-8000-000000000001");
     assert.deepEqual(scanCodexSessions(join(tmp, "missing")), []);
   });
+
+  it("clamps a bogus future line timestamp to now", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cch-future-"));
+    const file = join(dir, "rollout.jsonl");
+    const now = Date.now();
+    const futureTs = "2099-01-01T00:00:00.000Z";
+    const line = (payload: unknown) => JSON.stringify({ timestamp: futureTs, type: "response_item", payload });
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ timestamp: futureTs, type: "session_meta", payload: { id: "future-1", cwd: "C:\\work\\z", source: "cli" } }),
+        line({ type: "message", role: "user", content: [{ type: "input_text", text: "Do the thing" }] }),
+        "",
+      ].join("\n"),
+    );
+    const record = parseRollout(file, now)!;
+    assert.equal(record.updatedAt, now);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not guarantee ended for an exec rollout with a future line timestamp and a stale mtime", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cch-future-exec-"));
+    const file = join(dir, "rollout.jsonl");
+    const now = Date.now();
+    const futureTs = "2099-01-01T00:00:00.000Z";
+    const line = (payload: unknown) => JSON.stringify({ timestamp: futureTs, type: "response_item", payload });
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ timestamp: futureTs, type: "session_meta", payload: { id: "future-exec-1", cwd: "C:\\work\\z2", source: "exec" } }),
+        line({ type: "message", role: "user", content: [{ type: "input_text", text: "Do the thing" }] }),
+        JSON.stringify({ timestamp: futureTs, type: "event_msg", payload: { type: "task_started" } }),
+        JSON.stringify({ timestamp: futureTs, type: "event_msg", payload: { type: "task_complete" } }),
+        "",
+      ].join("\n"),
+    );
+    const fiveDaysAgo = new Date(now - 5 * 86_400_000);
+    utimesSync(file, fiveDaysAgo, fiveDaysAgo);
+    const record = parseRollout(file, now)!;
+    assert.ok(record.updatedAt <= now);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("re-strips the extracted realtime_delegation input and matches SOURCE/INPUT case-insensitively", () => {
+    assert.equal(
+      stripInjectedContext(
+        "<realtime_delegation><input><system-reminder>x</system-reminder></input></realtime_delegation>",
+      ),
+      "",
+    );
+    assert.equal(
+      stripInjectedContext(
+        "<realtime_delegation>\n  <SOURCE>transcript_tail_flush</SOURCE>\n  <input>ignored</input>\n</realtime_delegation>",
+      ),
+      "",
+    );
+  });
+
+  it("scans a wider dated window with a size/mtime cache and reflects fresh appends", () => {
+    const dir = mkdtempSync(join(tmpdir(), "cch-scan-window-"));
+    const now = Date.now();
+    const tenDaysAgo = new Date(now - 10 * 86_400_000);
+    const day = join(
+      dir,
+      String(tenDaysAgo.getFullYear()),
+      String(tenDaysAgo.getMonth() + 1).padStart(2, "0"),
+      String(tenDaysAgo.getDate()).padStart(2, "0"),
+    );
+    mkdirSync(day, { recursive: true });
+    const file = join(day, "rollout.jsonl");
+    const firstTs = tenDaysAgo.toISOString();
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ timestamp: firstTs, type: "session_meta", payload: { id: "win-1", cwd: "C:\\work\\win", source: "cli" } }),
+        JSON.stringify({
+          timestamp: firstTs,
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Start the thing" }] },
+        }),
+        "",
+      ].join("\n"),
+    );
+    utimesSync(file, tenDaysAgo, tenDaysAgo);
+
+    const firstScan = scanCodexSessions(dir, { now });
+    assert.equal(firstScan.length, 1);
+    assert.equal(firstScan[0]?.id, "win-1");
+    assert.equal(firstScan[0]?.updatedAt, tenDaysAgo.getTime());
+
+    const secondScan = scanCodexSessions(dir, { now });
+    assert.deepEqual(secondScan, firstScan);
+
+    const newer = new Date(now - 60_000);
+    writeFileSync(
+      file,
+      [
+        JSON.stringify({ timestamp: firstTs, type: "session_meta", payload: { id: "win-1", cwd: "C:\\work\\win", source: "cli" } }),
+        JSON.stringify({
+          timestamp: firstTs,
+          type: "response_item",
+          payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Start the thing" }] },
+        }),
+        JSON.stringify({ timestamp: newer.toISOString(), type: "event_msg", payload: { type: "task_started" } }),
+        "",
+      ].join("\n"),
+    );
+    utimesSync(file, newer, newer);
+
+    const thirdScan = scanCodexSessions(dir, { now });
+    assert.equal(thirdScan.length, 1);
+    assert.equal(thirdScan[0]?.updatedAt, newer.getTime());
+    assert.ok((thirdScan[0]?.updatedAt ?? 0) > (firstScan[0]?.updatedAt ?? 0));
+
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 after(() => {
