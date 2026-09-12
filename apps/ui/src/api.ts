@@ -10,6 +10,17 @@ import type {
   TranscriptEntry,
 } from "./types";
 
+export interface ClaimRecord {
+  id: string;
+  sessionId: string | null;
+  sessionTitle: string | null;
+  repoPath: string;
+  paths: string[];
+  note: string | null;
+  createdAt: number;
+  expiresAt: number;
+}
+
 const envUrl = import.meta.env.VITE_HUB_URL as string | undefined;
 const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const host = inTauri ? "127.0.0.1" : location.hostname || "localhost";
@@ -131,6 +142,11 @@ export const deleteGroup = (id: string): Promise<void> => send("DELETE", `/api/g
 
 export const reorderGroups = (ids: string[]): Promise<void> => send("POST", "/api/groups/reorder", { ids });
 
+export const fetchClaims = (repoPath?: string): Promise<ClaimRecord[]> =>
+  getJson(`/api/claims${repoPath ? `?repoPath=${encodeURIComponent(repoPath)}` : ""}`);
+
+export const releaseClaim = (id: string): Promise<void> => send("DELETE", `/api/claims/${encodeURIComponent(id)}`);
+
 export interface HubEvents {
   onSession: (session: SessionRecord) => void;
   onCodex?: (sessions: CodexSessionRecord[]) => void;
@@ -145,6 +161,7 @@ export interface HubEvents {
   onShareStream?: (event: ShareStreamEvent) => void;
   onNavigate?: (hash: string) => void;
   onToast?: (card: ToastCard) => void;
+  onClaims?: (claims: ClaimRecord[]) => void;
 }
 
 export interface ToastCard {
@@ -185,6 +202,7 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("share-stream", (event) => handlers.onShareStream?.(data<ShareStreamEvent>(event)));
   source.addEventListener("ui-navigate", (event) => handlers.onNavigate?.(data<{ hash: string }>(event).hash));
   source.addEventListener("toast", (event) => handlers.onToast?.(data<ToastCard>(event)));
+  source.addEventListener("claims", (event) => handlers.onClaims?.(data<ClaimRecord[]>(event)));
   return () => source.close();
 }
 

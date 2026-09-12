@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchSessionLive, focusSession } from "../api";
+import { fetchSessionLive, focusSession, type ClaimRecord } from "../api";
 import { ClientBadge, claudeClient, sessionClient } from "../clients";
 import { IconClose, IconExpand, IconFocus, IconShare } from "../icons";
 import { fetchSessionAsks, type SessionAsks } from "../api";
@@ -13,6 +13,8 @@ import { TASK_STATUS_LABEL } from "./TaskCard";
 interface Props {
   session: SessionRecord;
   workspace: string | null;
+  claims?: ClaimRecord[];
+  onReleaseClaim?: (id: string) => void;
   onClose: () => void;
   onShare?: (sessionId: string) => void;
   onOpenTask?: (taskId: string) => void;
@@ -83,7 +85,7 @@ export function Timeline({ entries, empty, detail, onShowDetail, assistantLabel 
   );
 }
 
-export function SessionDrawer({ session, workspace, onClose, onShare, onOpenTask }: Props) {
+export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim, onClose, onShare, onOpenTask }: Props) {
   const [tab, setTab] = useState<Tab>("activity");
   const [delegated, setDelegated] = useState<TaskRecord[] | null>(null);
   useEffect(() => {
@@ -387,6 +389,23 @@ export function SessionDrawer({ session, workspace, onClose, onShare, onOpenTask
             <dd>{new Date(current.startedAt).toLocaleString()}</dd>
             <dt>Updated</dt>
             <dd>{new Date(current.updatedAt).toLocaleString()}</dd>
+            <dt>File claims</dt>
+            <dd>
+              {claims.length === 0 && "—"}
+              {claims.length > 0 && (
+                <ul className="plainlist">
+                  {claims.map((claim) => (
+                    <li key={claim.id}>
+                      {claim.paths.join(", ")} · until {new Date(claim.expiresAt).toLocaleString()}
+                      {claim.note ? ` · ${claim.note}` : ""}{" "}
+                      <button className="linklike" onClick={() => onReleaseClaim?.(claim.id)} disabled={!onReleaseClaim}>
+                        Release
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </dd>
           </dl>
         )}
       </div>

@@ -8,7 +8,7 @@ import { allocatePortBase, portRangeOf } from "./task-ports.js";
 import type { CodexSandbox, Isolation, IsolationReason, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
 import { createTaskWorktree, worktreeMainRepo } from "./worktrees.js";
 import { finishShareRequestByTask, getShare } from "./share-store.js";
-import { endSession, getSession } from "./db.js";
+import { endSession, getSession, listClaims } from "./db.js";
 import { SHARE_CREATED_BY_PREFIX, implementGuardrail, implementProfile, type RunProfile, type TrustLevel } from "./share-types.js";
 import { discoverWorkspaces, findRepo, findWorkspace, isDirectory, samePath } from "./workspaces.js";
 
@@ -56,7 +56,22 @@ function taskContext(task: TaskRecord): string {
       return `- ${label}: ${dir}`;
     }),
   ];
-  if (task.repo) lines.push(`This task targets the "${task.repo}" repository.`);
+  if (task.repo) {
+    lines.push(`This task targets the "${task.repo}" repository.`);
+    const repoPath = repoPathOf(task);
+    const claims = repoPath ? listClaims({ repoPath }) : [];
+    if (claims.length > 0) {
+      lines.push(
+        "",
+        `Files claimed by other agents in "${task.repo}" (do not edit them; if your task needs them, report with hub_report kind "blocked" and stop):`,
+        ...claims.map((claim) => {
+          const who = claim.sessionTitle ?? (claim.sessionId ? claim.sessionId.slice(0, 8) : claim.id.slice(0, 8));
+          const note = claim.note ? `, ${claim.note}` : "";
+          return `- ${claim.paths.join(", ")} (session ${who}, until ${new Date(claim.expiresAt).toISOString()}${note})`;
+        }),
+      );
+    }
+  }
   if (task.portBase != null) {
     const range = portRangeOf(task.portBase);
     lines.push(

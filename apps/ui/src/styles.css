@@ -3601,6 +3601,11 @@ h6.md__h {
   border-color: color-mix(in srgb, var(--pend) 50%, transparent);
 }
 
+.chip--claims {
+  color: var(--pend);
+  border-color: color-mix(in srgb, var(--pend) 50%, transparent);
+}
+
 .chip--worktree {
   color: var(--brand);
   border-color: color-mix(in srgb, var(--brand) 45%, transparent);

@@ -51,6 +51,7 @@ interface Props {
   stale?: boolean;
   forkParentName?: string | null;
   peers?: number;
+  claimsCount?: number;
   onOpen: (sessionId: string) => void;
   onArchive: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
@@ -66,6 +67,7 @@ export function SessionCard({
   stale = false,
   forkParentName = null,
   peers = 0,
+  claimsCount = 0,
   onOpen,
   onArchive,
   onDelete,
@@ -143,6 +145,11 @@ export function SessionCard({
         {peers > 0 && !archived && session.status !== "ended" && !stale && (
           <span className="chip chip--peers" title="Other live agents share this folder right now; edits can collide. Delegate with isolation: worktree, or use the Agent tool worktree isolation.">
             {peers} more here
+          </span>
+        )}
+        {claimsCount > 0 && (
+          <span className="chip chip--claims" title="Files this session has claimed; delegated tasks in this repo are told to keep off them">
+            claims {claimsCount}
           </span>
         )}
         {session.forkOf && (

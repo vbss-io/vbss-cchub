@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "./config.js";
-import type { AgentRecord, GroupRecord, HookKind, HookPayload, SessionRecord, SessionStatus } from "./types.js";
+import type { AgentRecord, ClaimRecord, GroupRecord, HookKind, HookPayload, SessionRecord, SessionStatus } from "./types.js";
 
 mkdirSync(dirname(config.dbPath), { recursive: true });
 
@@ -42,6 +42,16 @@ db.exec(`
     match_pattern TEXT NOT NULL,
     position      INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS claims (
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT,
+    repo_path   TEXT NOT NULL,
+    paths       TEXT NOT NULL,
+    note        TEXT,
+    created_at  INTEGER NOT NULL,
+    expires_at  INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_claims_repo ON claims(repo_path, expires_at);
 `);
 
 const existingColumns = new Set(
@@ -599,4 +609,111 @@ const reorderTx = db.transaction((ids: string[]) => {
 export function reorderGroups(ids: string[]): GroupRecord[] {
   reorderTx(ids);
   return listGroups();
+}
+
+const CLAIM_DEFAULT_TTL_MS = 4 * 3_600_000;
+const CLAIM_MAX_TTL_MS = 24 * 3_600_000;
+const CLAIM_MAX_PATHS = 50;
+
+interface ClaimRow {
+  id: string;
+  session_id: string | null;
+  repo_path: string;
+  paths: string;
+  note: string | null;
+  created_at: number;
+  expires_at: number;
+}
+
+function normalizeClaimPaths(paths: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of paths) {
+    const trimmed = raw.trim();
+    if (trimmed.length === 0 || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+    if (result.length >= CLAIM_MAX_PATHS) break;
+  }
+  return result;
+}
+
+const claimSessionTitleStmt = db.prepare(`SELECT title, custom_title AS "customTitle" FROM sessions WHERE session_id = ?`);
+
+function toClaim(row: ClaimRow): ClaimRecord {
+  const session = row.session_id
+    ? (claimSessionTitleStmt.get(row.session_id) as { title: string | null; customTitle: string | null } | undefined)
+    : undefined;
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    sessionTitle: session ? (session.customTitle ?? session.title) : null,
+    repoPath: row.repo_path,
+    paths: JSON.parse(row.paths) as string[],
+    note: row.note,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+}
+
+const insertClaimStmt = db.prepare(`
+  INSERT INTO claims (id, session_id, repo_path, paths, note, created_at, expires_at)
+  VALUES (@id, @sessionId, @repoPath, @paths, @note, @now, @expiresAt)
+`);
+
+export interface CreateClaimInput {
+  sessionId: string | null;
+  repoPath: string;
+  paths: string[];
+  note?: string | null;
+  ttlMs?: number | null;
+}
+
+export function createClaim(input: CreateClaimInput): ClaimRecord {
+  const id = randomUUID();
+  const now = Date.now();
+  const requestedTtl = input.ttlMs != null && input.ttlMs > 0 ? input.ttlMs : CLAIM_DEFAULT_TTL_MS;
+  const ttl = Math.min(requestedTtl, CLAIM_MAX_TTL_MS);
+  const paths = normalizeClaimPaths(input.paths);
+  const note = input.note && input.note.trim().length > 0 ? input.note.trim() : null;
+  insertClaimStmt.run({
+    id,
+    sessionId: input.sessionId,
+    repoPath: input.repoPath,
+    paths: JSON.stringify(paths),
+    note,
+    now,
+    expiresAt: now + ttl,
+  });
+  return getClaim(id) as ClaimRecord;
+}
+
+const getClaimStmt = db.prepare(`SELECT * FROM claims WHERE id = ?`);
+
+export function getClaim(id: string): ClaimRecord | null {
+  const row = getClaimStmt.get(id) as ClaimRow | undefined;
+  return row ? toClaim(row) : null;
+}
+
+export function releaseClaim(id: string): boolean {
+  return db.prepare(`DELETE FROM claims WHERE id = ?`).run(id).changes > 0;
+}
+
+export function releaseClaimsOfSession(sessionId: string): number {
+  return db.prepare(`DELETE FROM claims WHERE session_id = ?`).run(sessionId).changes;
+}
+
+const listClaimsByRepoStmt = db.prepare(`SELECT * FROM claims WHERE repo_path = ? AND expires_at > ? ORDER BY created_at DESC`);
+const listClaimsAllStmt = db.prepare(`SELECT * FROM claims WHERE expires_at > ? ORDER BY created_at DESC`);
+
+export function listClaims(options: { repoPath?: string; now?: number } = {}): ClaimRecord[] {
+  const now = options.now ?? Date.now();
+  const rows = options.repoPath
+    ? (listClaimsByRepoStmt.all(options.repoPath, now) as ClaimRow[])
+    : (listClaimsAllStmt.all(now) as ClaimRow[]);
+  return rows.map(toClaim);
+}
+
+export function purgeExpiredClaims(now?: number): number {
+  return db.prepare(`DELETE FROM claims WHERE expires_at <= ?`).run(now ?? Date.now()).changes;
 }

@@ -56,6 +56,17 @@ export interface GroupRecord {
   position: number;
 }
 
+export interface ClaimRecord {
+  id: string;
+  sessionId: string | null;
+  sessionTitle: string | null;
+  repoPath: string;
+  paths: string[];
+  note: string | null;
+  createdAt: number;
+  expiresAt: number;
+}
+
 export interface SessionRecord {
   sessionId: string;
   status: SessionStatus;

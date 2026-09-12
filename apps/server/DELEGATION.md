@@ -254,6 +254,15 @@ and that repo must be a git checkout on a branch (400 otherwise).
   (folders with 2+ live agents) to hint when a worktree is worth it.
 - Add `.worktrees/` to the workspace repo's `.gitignore` so the worktrees never get committed back.
 
+## File claims
+
+Advisory only, no filesystem locks. `hub_claim` (or `POST /api/claims`) tells the hub an interactive session
+is editing some paths of a repo, for `ttlMinutes` (default 240, max 1440); `GET /api/claims?repoPath=` lists
+active claims, `DELETE /api/claims/:id` (or `release: true` + `claimId`) drops one early. Claims expire on
+their own and are swept every 30s alongside `sweepDead`. A delegated task whose repo has active claims gets
+them listed in its system prompt at run start, with an instruction to leave those paths alone and report
+`blocked` instead of editing them; `hub_overview` also lists active claims.
+
 ## Security model
 
 - **Off by default.** No `HUB_DELEGATION=1`, no routes.
