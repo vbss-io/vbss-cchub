@@ -263,6 +263,11 @@ describe("codex rollouts", () => {
       ),
       "",
     );
+    assert.equal(
+      stripInjectedContext("<REALTIME_DELEGATION><source>voice</source><input>oi mano</input></REALTIME_DELEGATION>"),
+      "oi mano",
+    );
+    assert.equal(stripInjectedContext("<SYSTEM-REMINDER>x</SYSTEM-REMINDER>"), "");
   });
 
   it("scans a wider dated window with a size/mtime cache and reflects fresh appends", () => {
