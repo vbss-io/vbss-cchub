@@ -437,6 +437,7 @@ export function TasksView({ tasks, sessions, enabled, selectedId, tick, onSelect
                       branch <code>{worktree.branch}</code> from <code>{worktree.baseBranch}</code> · <span className="path">{worktree.path}</span>
                       {!worktree.exists && " · folder removed"}
                     </p>
+                    {worktree.hint && <p className="muted small">{worktree.hint}</p>}
                     {worktree.mergedAt !== null && (
                       <p className="worktree__state worktree__state--ok">Merged into {worktree.baseBranch} {relativeTime(worktree.mergedAt)}. Discard the worktree when you no longer need the folder.</p>
                     )}

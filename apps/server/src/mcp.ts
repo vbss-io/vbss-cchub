@@ -117,7 +117,7 @@ const TOOLS: ToolDefinition[] = [
           type: "string",
           enum: ["shared", "worktree"],
           description:
-            "use worktree when other agents may be editing the same repo; the task commits on its own branch and you merge with hub_task_merge",
+            "Omit to let the hub decide: worktree when the repo already has a task running in the shared checkout, shared otherwise. Pass repo so the hub can isolate. worktree = the task commits on its own branch and you merge with hub_task_merge.",
         },
         title: { type: "string", description: "Optional short title; defaults to the first prompt line" },
       },
@@ -127,7 +127,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_task",
-    description: "Get a delegated task with all its runs (results, errors, session id) and reports.",
+    description:
+      "Get a delegated task with all its runs (results, errors, session id) and reports. Worktree tasks include worktree.hint telling you whether to merge or discard.",
     inputSchema: objectSchema({ taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" } }, ["taskId"]),
     call: (args) => http("GET", taskPath(args)),
   },

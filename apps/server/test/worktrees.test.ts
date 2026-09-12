@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import type { TaskRecord } from "../src/delegation-types.js";
-import { createTaskWorktree, discardTaskWorktree, mergeTaskWorktree, worktreeMainRepo, worktreeStatus, WorktreeError } from "../src/worktrees.js";
+import type { WorktreeInfo } from "../src/delegation-types.js";
+import { createTaskWorktree, discardTaskWorktree, mergeTaskWorktree, worktreeHint, worktreeMainRepo, worktreeStatus, WorktreeError } from "../src/worktrees.js";
 
 const git = (cwd: string, ...args: string[]): string => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
 
@@ -45,12 +46,29 @@ function makeTask(over: Partial<TaskRecord>): TaskRecord {
     runsCount: 0,
     archivedAt: null,
     isolation: "worktree",
+    isolationReason: null,
     worktreePath: null,
     branch: null,
     baseBranch: null,
     mergedAt: null,
+    portBase: null,
     createdAt: 0,
     updatedAt: 0,
+    ...over,
+  };
+}
+
+function makeInfo(over: Partial<WorktreeInfo>): WorktreeInfo {
+  return {
+    path: "/tmp/wt",
+    branch: "hub/abc12345",
+    baseBranch: "main",
+    exists: true,
+    dirty: false,
+    commits: [],
+    diffStat: "",
+    mergedAt: null,
+    hint: "",
     ...over,
   };
 }
@@ -255,5 +273,43 @@ describe("worktrees", () => {
         /* disposable */
       }
     }
+  });
+});
+
+describe("worktreeHint", () => {
+  it("points at merge or discard while the task is still running or pending", () => {
+    const task = makeTask({ status: "running", branch: "hub/abc12345" });
+    const info = makeInfo({ branch: "hub/abc12345", commits: [] });
+    assert.equal(
+      worktreeHint(task, info),
+      `Runs in its own worktree on branch hub/abc12345; when it completes, merge with hub_task_merge (taskId ${task.id.slice(0, 8)}) or POST /delegation/tasks/${task.id}/merge.`,
+    );
+  });
+
+  it("counts the commits waiting to merge once the task has finished", () => {
+    const task = makeTask({ status: "completed", branch: "hub/abc12345" });
+    const info = makeInfo({ branch: "hub/abc12345", commits: [{ sha: "a", subject: "one" }, { sha: "b", subject: "two" }] });
+    assert.equal(
+      worktreeHint(task, info),
+      `2 commit(s) on hub/abc12345 waiting: merge with hub_task_merge (taskId ${task.id.slice(0, 8)}), or discard with { discard: true }.`,
+    );
+  });
+
+  it("tells the caller there is nothing to merge when the branch has no commits", () => {
+    const task = makeTask({ status: "completed", branch: "hub/abc12345" });
+    const info = makeInfo({ branch: "hub/abc12345", commits: [] });
+    assert.equal(worktreeHint(task, info), `No commits on hub/abc12345: discard with hub_task_merge { taskId ${task.id.slice(0, 8)}, discard: true }.`);
+  });
+
+  it("reports the merge once mergedAt is set", () => {
+    const task = makeTask({ status: "completed", branch: "hub/abc12345" });
+    const info = makeInfo({ branch: "hub/abc12345", baseBranch: "main", mergedAt: Date.now() });
+    assert.equal(worktreeHint(task, info), "Merged into main.");
+  });
+
+  it("tells the caller to discard when the worktree folder is gone", () => {
+    const task = makeTask({ status: "failed", branch: "hub/abc12345" });
+    const info = makeInfo({ branch: "hub/abc12345", exists: false, commits: [] });
+    assert.equal(worktreeHint(task, info), "Worktree folder is gone; discard to clean the branch.");
   });
 });

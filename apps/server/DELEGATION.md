@@ -223,17 +223,21 @@ MCP tools for your own agents: `hub_shares`, `hub_share_create`, `hub_share_upda
 
 ## Worktree isolation
 
-When several agents may edit the same repo at once, delegate with `isolation: "worktree"` (default is
-`shared`). The hub then runs `git -C <repo> worktree add -b hub/<task8> <ws>/.worktrees/<repo>/<task8> HEAD`
-before creating the task, points the repo's `--add-dir` and the system-prompt map at the worktree, and
-links `node_modules` with a junction (Windows) or symlink so installs are reused. Worktree isolation
-needs a `repo` of the workspace and that repo must be a git checkout on a branch (400 otherwise).
+When several agents may edit the same repo at once, delegate with `isolation: "worktree"`. Omit `isolation`
+and the hub decides: `worktree` when the repo already has a running/pending task in the shared checkout
+(reason `busy-repo`, with a `note` on the `POST /tasks` response), `shared` otherwise (reason `default`);
+the decision is stored as `isolationReason` on the task. The hub then runs
+`git -C <repo> worktree add -b hub/<task8> <ws>/.worktrees/<repo>/<task8> HEAD` before creating the task,
+points the repo's `--add-dir` and the system-prompt map at the worktree, and links `node_modules` with a
+junction (Windows) or symlink so installs are reused. Worktree isolation needs a `repo` of the workspace
+and that repo must be a git checkout on a branch (400 otherwise).
 
 - **What the agent sees**: the repo is mapped to the worktree, with a note to make every change there,
   never in the original checkout, and to `git add -A && git commit` on `hub/<task8>` — never push, switch
   branch or touch other worktrees. The base branch stays untouched until you merge.
 - **Follow it**: `GET /delegation/tasks/:id/worktree` (also embedded under `worktree` in the task detail)
-  returns `{ path, branch, baseBranch, exists, dirty, commits, diffStat, mergedAt }`.
+  returns `{ path, branch, baseBranch, exists, dirty, commits, diffStat, mergedAt, hint }` — `hint` is a
+  one-sentence merge/discard nudge.
 - **Merge**: `POST /delegation/tasks/:id/merge` runs `git merge --no-ff --no-edit hub/<task8>` onto the
   base branch and sets `mergedAt`. If the original checkout is already on the base branch the merge runs
   there; otherwise the base branch is merged without disturbing the user's current checkout — into whatever

@@ -7,6 +7,7 @@ import type {
   CodexSandbox,
   DelegationSettings,
   Isolation,
+  IsolationReason,
   OriginClient,
   PermissionMode,
   ReportKind,
@@ -95,6 +96,7 @@ for (const [name, type] of [
   ["origin_client", "TEXT"],
   ["archived_at", "INTEGER"],
   ["isolation", "TEXT DEFAULT 'shared'"],
+  ["isolation_reason", "TEXT"],
   ["worktree_path", "TEXT"],
   ["branch", "TEXT"],
   ["base_branch", "TEXT"],
@@ -126,6 +128,7 @@ interface TaskRow {
   origin_client: string | null;
   archived_at: number | null;
   isolation: string | null;
+  isolation_reason: string | null;
   worktree_path: string | null;
   branch: string | null;
   base_branch: string | null;
@@ -206,6 +209,7 @@ const toTask = (row: TaskRow): TaskRecord => ({
   runsCount: row.runs_count ?? 0,
   archivedAt: row.archived_at,
   isolation: (row.isolation as Isolation | null) ?? "shared",
+  isolationReason: (row.isolation_reason as IsolationReason | null) ?? null,
   worktreePath: row.worktree_path,
   branch: row.branch,
   baseBranch: row.base_branch,
@@ -320,9 +324,9 @@ const TASK_SELECT = `
 
 const insertTaskStmt = db.prepare(`
   INSERT INTO hub_tasks
-    (id, title, prompt, workspace, repo, cwd, add_dirs, runner, requested_model, permission_mode, sandbox, status, created_by, origin_session_id, origin_client, isolation, worktree_path, branch, base_branch, port_base, created_at, updated_at)
+    (id, title, prompt, workspace, repo, cwd, add_dirs, runner, requested_model, permission_mode, sandbox, status, created_by, origin_session_id, origin_client, isolation, isolation_reason, worktree_path, branch, base_branch, port_base, created_at, updated_at)
   VALUES
-    (@id, @title, @prompt, @workspace, @repo, @cwd, @addDirs, @runner, @requestedModel, @permissionMode, @sandbox, @status, @createdBy, @originSessionId, @originClient, @isolation, @worktreePath, @branch, @baseBranch, @portBase, @now, @now)
+    (@id, @title, @prompt, @workspace, @repo, @cwd, @addDirs, @runner, @requestedModel, @permissionMode, @sandbox, @status, @createdBy, @originSessionId, @originClient, @isolation, @isolationReason, @worktreePath, @branch, @baseBranch, @portBase, @now, @now)
 `);
 const getTaskStmt = db.prepare(`${TASK_SELECT} WHERE t.id = ?`);
 const listTasksStmt = db.prepare(`${TASK_SELECT} ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`);
@@ -408,6 +412,7 @@ export function createTask(input: {
   originSessionId: string | null;
   originClient: OriginClient | null;
   isolation?: Isolation;
+  isolationReason?: IsolationReason | null;
   worktreePath?: string | null;
   branch?: string | null;
   baseBranch?: string | null;
@@ -431,6 +436,7 @@ export function createTask(input: {
     originSessionId: input.originSessionId,
     originClient: input.originClient,
     isolation: input.isolation ?? "shared",
+    isolationReason: input.isolationReason ?? null,
     worktreePath: input.worktreePath ?? null,
     branch: input.branch ?? null,
     baseBranch: input.baseBranch ?? null,

@@ -108,6 +108,20 @@ export function createTaskWorktree(input: {
   return { path, branch, baseBranch };
 }
 
+export function worktreeHint(task: TaskRecord, info: WorktreeInfo): string {
+  const id8 = task.id.slice(0, 8);
+  const branch = info.branch ?? "the branch";
+  if (info.mergedAt != null) return `Merged into ${info.baseBranch}.`;
+  if (task.status === "running" || task.status === "pending") {
+    return `Runs in its own worktree on branch ${branch}; when it completes, merge with hub_task_merge (taskId ${id8}) or POST /delegation/tasks/${task.id}/merge.`;
+  }
+  if (!info.exists) return "Worktree folder is gone; discard to clean the branch.";
+  if (info.commits.length > 0) {
+    return `${info.commits.length} commit(s) on ${branch} waiting: merge with hub_task_merge (taskId ${id8}), or discard with { discard: true }.`;
+  }
+  return `No commits on ${branch}: discard with hub_task_merge { taskId ${id8}, discard: true }.`;
+}
+
 export async function worktreeStatus(task: TaskRecord): Promise<WorktreeInfo> {
   const path = task.worktreePath;
   const info: WorktreeInfo = {
@@ -119,22 +133,26 @@ export async function worktreeStatus(task: TaskRecord): Promise<WorktreeInfo> {
     commits: [],
     diffStat: "",
     mergedAt: task.mergedAt,
+    hint: "",
   };
-  if (!path || !isCheckedOut(path)) return info;
-  info.exists = true;
-  try {
-    info.dirty = (await gitAsync(path, ["status", "--porcelain"])).length > 0;
-    if (task.baseBranch) {
-      const log = await gitAsync(path, ["log", `${task.baseBranch}..HEAD`, "--format=%H%x1f%s"]);
-      info.commits = log.length === 0 ? [] : log.split(/\r?\n/).map((line) => {
-        const [sha, subject] = line.split("\x1f");
-        return { sha: sha ?? "", subject: subject ?? "" };
-      });
-      info.diffStat = await gitAsync(path, ["diff", "--stat", `${task.baseBranch}...HEAD`]);
+  if (path && isCheckedOut(path)) {
+    info.exists = true;
+    try {
+      info.dirty = (await gitAsync(path, ["status", "--porcelain"])).length > 0;
+      if (task.baseBranch) {
+        const log = await gitAsync(path, ["log", `${task.baseBranch}..HEAD`, "--format=%H%x1f%s"]);
+        info.commits = log.length === 0 ? [] : log.split(/\r?\n/).map((line) => {
+          const [sha, subject] = line.split("\x1f");
+          return { sha: sha ?? "", subject: subject ?? "" };
+        });
+        info.diffStat = await gitAsync(path, ["diff", "--stat", `${task.baseBranch}...HEAD`]);
+      }
+    } catch {
+      info.hint = worktreeHint(task, info);
+      return info;
     }
-  } catch {
-    return info;
   }
+  info.hint = worktreeHint(task, info);
   return info;
 }
 

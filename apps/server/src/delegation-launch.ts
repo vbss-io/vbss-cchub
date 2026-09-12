@@ -5,7 +5,7 @@ import { broadcast } from "./sse.js";
 import { appendHubSource } from "./second-brain.js";
 import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail, listTasks } from "./delegation-store.js";
 import { allocatePortBase, portRangeOf } from "./task-ports.js";
-import type { CodexSandbox, Isolation, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
+import type { CodexSandbox, Isolation, IsolationReason, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
 import { createTaskWorktree, worktreeMainRepo } from "./worktrees.js";
 import { finishShareRequestByTask, getShare } from "./share-store.js";
 import { endSession, getSession } from "./db.js";
@@ -66,9 +66,13 @@ function taskContext(task: TaskRecord): string {
   lines.push("When you finish, state clearly what was done, what was verified and what is still open.");
   if (worktreeActive) {
     const original = worktreeMainRepo(task.worktreePath as string) ?? "the main checkout";
+    const auto =
+      task.isolationReason === "busy-repo"
+        ? " The hub isolated this task automatically because another task is already working in the shared checkout."
+        : "";
     lines.push(
       "",
-      `This task runs in an isolated git worktree of "${task.repo}" at ${task.worktreePath}, branch ${task.branch} (base ${task.baseBranch}). Make every change there and never in ${original}. When you finish, commit your work on that branch inside the worktree (git add -A && git commit); do not push, do not switch branches, do not touch other worktrees.`,
+      `This task runs in an isolated git worktree of "${task.repo}" at ${task.worktreePath}, branch ${task.branch} (base ${task.baseBranch}). Make every change there and never in ${original}. When you finish, commit your work on that branch inside the worktree (git add -A && git commit); do not push, do not switch branches, do not touch other worktrees.${auto}`,
     );
   }
   const shareLabel = shareLabelFromCreatedBy(task.createdBy);
@@ -129,6 +133,17 @@ class RunLog {
 
 const TIMEOUT_WARNING_MS = 5 * 60_000;
 const TIMEOUT_WARNING_TEXT = "5 minutes left before the run timeout";
+
+export function resolveIsolation(
+  requested: Isolation | null,
+  repoBusy: boolean,
+  hasRepo: boolean,
+): { isolation: Isolation; reason: IsolationReason } {
+  if (requested === "worktree") return { isolation: "worktree", reason: "requested" };
+  if (requested === "shared") return { isolation: "shared", reason: "requested" };
+  if (repoBusy && hasRepo) return { isolation: "worktree", reason: "busy-repo" };
+  return { isolation: "shared", reason: "default" };
+}
 
 export function resolvePermissionMode(requested: PermissionMode | null, autonomous: boolean): PermissionMode {
   if (requested === "plan") return "plan";
@@ -333,8 +348,17 @@ export function delegateTask(input: DelegateInput): TaskDetail {
   if (!input.prompt || !input.workspace) throw new BadRequestError("prompt and workspace required");
   const target = resolveWorkspaceTarget(input.workspace, input.repo);
   const runner = input.runner ?? "claude";
-  const isolation: Isolation = input.isolation === "worktree" ? "worktree" : "shared";
   const id = randomUUID();
+  const allTasks = listTasks({ limit: 500, includeArchived: true });
+  const activeTasks = allTasks.filter((existing) => existing.status === "running" || existing.status === "pending");
+  const repoBusy =
+    target.repoPath != null &&
+    activeTasks.some((existing) => {
+      if (existing.isolation !== "shared") return false;
+      const existingPath = repoPathOf(existing);
+      return existingPath != null && samePath(existingPath, target.repoPath as string);
+    });
+  const { isolation, reason: isolationReason } = resolveIsolation(input.isolation ?? null, repoBusy, target.repoPath != null);
   let addDirs = target.addDirs;
   let worktreePath: string | null = null;
   let branch: string | null = null;
@@ -350,10 +374,7 @@ export function delegateTask(input: DelegateInput): TaskDetail {
     addDirs = target.addDirs.map((dir) => (samePath(dir, target.repoPath as string) ? created.path : dir));
     if (!addDirs.some((dir) => samePath(dir, created.path))) addDirs = [...addDirs, created.path];
   }
-  const usedPortBases = listTasks({ limit: 500 })
-    .filter((existing) => existing.status === "running" || existing.status === "pending")
-    .map((existing) => existing.portBase)
-    .filter((base): base is number => base != null);
+  const usedPortBases = activeTasks.map((existing) => existing.portBase).filter((base): base is number => base != null);
   const portBase = allocatePortBase(usedPortBases);
   const task = createTask({
     id,
@@ -371,6 +392,7 @@ export function delegateTask(input: DelegateInput): TaskDetail {
     originSessionId: input.originSessionId ?? null,
     originClient: input.originClient ?? null,
     isolation,
+    isolationReason,
     worktreePath,
     branch,
     baseBranch,

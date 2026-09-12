@@ -42,6 +42,10 @@ export const ISOLATION_MODES = ["shared", "worktree"] as const;
 
 export type Isolation = (typeof ISOLATION_MODES)[number];
 
+export const ISOLATION_REASONS = ["requested", "busy-repo", "default"] as const;
+
+export type IsolationReason = (typeof ISOLATION_REASONS)[number];
+
 export interface WorktreeCommit {
   sha: string;
   subject: string;
@@ -56,6 +60,7 @@ export interface WorktreeInfo {
   commits: WorktreeCommit[];
   diffStat: string;
   mergedAt: number | null;
+  hint: string;
 }
 
 export interface WorkspaceRepo {
@@ -105,6 +110,7 @@ export interface TaskRecord {
   runsCount: number;
   archivedAt: number | null;
   isolation: Isolation;
+  isolationReason: IsolationReason | null;
   worktreePath: string | null;
   branch: string | null;
   baseBranch: string | null;

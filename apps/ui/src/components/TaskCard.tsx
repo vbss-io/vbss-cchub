@@ -118,8 +118,18 @@ export function TaskCard({ task, origin, selected, archiveSupported, busy, peers
           </span>
         )}
         {isolated && (
-          <span className={`chip chip--worktree ${merged ? "chip--worktree-merged" : ""}`} title={merged ? "Worked in its own git worktree; branch already merged" : "Works in its own git worktree and branch; merge it from the detail pane"}>
-            {merged ? "merged" : "worktree"}{branch ? ` · ${branch}` : ""}
+          <span
+            className={`chip chip--worktree ${merged ? "chip--worktree-merged" : ""}`}
+            title={
+              merged
+                ? "Worked in its own git worktree; branch already merged"
+                : task.isolationReason === "busy-repo"
+                  ? "Isolated automatically: the repo already had a task running"
+                  : "Works in its own git worktree and branch; merge it from the detail pane"
+            }
+          >
+            {merged ? "merged" : task.isolationReason === "busy-repo" ? "worktree · auto" : "worktree"}
+            {branch ? ` · ${branch}` : ""}
           </span>
         )}
         {!isolated && peers > 0 && (

@@ -216,7 +216,11 @@ export function App() {
         void getTask(task.id)
           .then((detail) => {
             const result = [...detail.runs].reverse().find((run) => run.result)?.result ?? null;
-            notifyEvent("taskCompleted", { id: task.id, title: task.title, detail: result });
+            const detailText =
+              detail.task.isolation === "worktree" && detail.task.mergedAt == null
+                ? `Worktree ready to merge${result ? ` · ${result}` : ""}`
+                : result;
+            notifyEvent("taskCompleted", { id: task.id, title: task.title, detail: detailText });
           })
           .catch(() => notifyEvent("taskCompleted", { id: task.id, title: task.title, detail: null }));
       } else if (task.status === "failed") {
