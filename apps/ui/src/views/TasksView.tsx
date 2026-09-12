@@ -434,12 +434,16 @@ export function TasksView({ tasks, sessions, enabled, selectedId, tick, onSelect
                 {worktree && (
                   <>
                     <p className="muted small">
-                      branch <code>{worktree.branch}</code> from <code>{worktree.baseBranch}</code> · <span className="path">{worktree.path}</span>
-                      {!worktree.exists && " · folder removed"}
+                      branch <code>{worktree.branch}</code> from <code>{worktree.baseBranch}</code>
+                      {worktree.path && <> · <span className="path">{worktree.path}</span></>}
+                      {worktree.path && !worktree.exists && " · folder removed"}
+                      {!worktree.path && " · worktree discarded"}
                     </p>
                     {worktree.hint && worktree.mergedAt === null && <p className="muted small">{worktree.hint}</p>}
                     {worktree.mergedAt !== null && (
-                      <p className="worktree__state worktree__state--ok">Merged into {worktree.baseBranch} {relativeTime(worktree.mergedAt)}. Discard the worktree when you no longer need the folder.</p>
+                      <p className="worktree__state worktree__state--ok">
+                        Merged into {worktree.baseBranch} {relativeTime(worktree.mergedAt)}.{worktree.path ? " Discard the worktree when you no longer need the folder." : ""}
+                      </p>
                     )}
                     {worktree.dirty && <p className="worktree__state worktree__state--warn">Uncommitted changes in the worktree: the agent did not commit everything. Open the folder and commit, or continue the task asking it to commit.</p>}
                     {worktree.exists && worktree.commits.length === 0 && worktree.mergedAt === null && <p className="muted">No commits on the branch yet.</p>}
