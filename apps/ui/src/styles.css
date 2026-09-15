@@ -3468,6 +3468,27 @@ h6.md__h {
   gap: 10px;
 }
 
+.daily__session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.daily__session-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.daily__session-chips {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
 .flow__expander {
   cursor: pointer;
 }

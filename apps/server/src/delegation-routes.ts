@@ -36,6 +36,7 @@ import {
   dailySessionsForDate,
   dailyTemplatePath,
   generateDaily,
+  isValidDailyDate,
   listDiaryDates,
   readDaily,
   watchDaily,
@@ -449,7 +450,7 @@ export function delegationRouter(): Router {
       root,
       dir: dailyDir(settings),
       today: localDate(),
-      dates: listDiaryDates(root).slice(0, 60),
+      dates: listDiaryDates(settings).slice(0, 60),
       running,
       templatePath: dailyTemplatePath(settings),
     });
@@ -457,16 +458,16 @@ export function delegationRouter(): Router {
 
   router.get("/daily/sessions", (req, res) => {
     const date = typeof req.query.date === "string" ? req.query.date : "";
-    if (!DATE_RE.test(date)) {
-      res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isValidDailyDate(date)) {
+      res.status(400).json({ error: "date must be a valid YYYY-MM-DD" });
       return;
     }
     res.json(dailySessionsForDate(date));
   });
 
   router.get("/daily/:date", (req, res) => {
-    if (!DATE_RE.test(req.params.date)) {
-      res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isValidDailyDate(req.params.date)) {
+      res.status(400).json({ error: "date must be a valid YYYY-MM-DD" });
       return;
     }
     try {
@@ -477,8 +478,8 @@ export function delegationRouter(): Router {
   });
 
   router.put("/daily/:date", (req, res) => {
-    if (!DATE_RE.test(req.params.date)) {
-      res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isValidDailyDate(req.params.date)) {
+      res.status(400).json({ error: "date must be a valid YYYY-MM-DD" });
       return;
     }
     const body = req.body as Record<string, unknown>;
@@ -487,8 +488,16 @@ export function delegationRouter(): Router {
       return;
     }
     const baseUpdatedAt = typeof body.baseUpdatedAt === "number" ? body.baseUpdatedAt : undefined;
+    let writeId: string | null = null;
+    if (body.writeId !== undefined && body.writeId !== null) {
+      if (typeof body.writeId !== "string" || body.writeId.length > 64) {
+        res.status(400).json({ error: "writeId must be a string of at most 64 characters" });
+        return;
+      }
+      writeId = body.writeId;
+    }
     try {
-      res.json(writeDaily(getSettings(), req.params.date, body.content, baseUpdatedAt));
+      res.json(writeDaily(getSettings(), req.params.date, body.content, baseUpdatedAt, writeId));
     } catch (err) {
       if (err instanceof DailyConflictError) {
         res.status(409).json({ error: err.message, content: err.content, updatedAt: err.updatedAt });
@@ -499,8 +508,8 @@ export function delegationRouter(): Router {
   });
 
   router.post("/daily/:date/generate", (req, res) => {
-    if (!DATE_RE.test(req.params.date)) {
-      res.status(400).json({ error: "date must be YYYY-MM-DD" });
+    if (!isValidDailyDate(req.params.date)) {
+      res.status(400).json({ error: "date must be a valid YYYY-MM-DD" });
       return;
     }
     const body = req.body as Record<string, unknown>;

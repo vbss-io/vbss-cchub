@@ -170,6 +170,7 @@ export interface DailyStreamEvent {
   date: string;
   updatedAt: number | null;
   source: "disk" | "hub";
+  writeId: string | null;
 }
 
 export interface ToastCard {

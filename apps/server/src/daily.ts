@@ -5,14 +5,25 @@ import { listSessions } from "./db.js";
 import { BadRequestError, createInternalTask, startRun } from "./delegation-launch.js";
 import { activeDailyTask, getSettings } from "./delegation-store.js";
 import type { DelegationSettings, TaskRecord } from "./delegation-types.js";
-import { diaryPath, localDate } from "./second-brain.js";
+import { localDate } from "./second-brain.js";
 import { broadcast } from "./sse.js";
 import type { SessionStatus } from "./types.js";
 import { isDirectory } from "./workspaces.js";
 
 const DATE_FILE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
-const MONTH_DIR_RE = /^\d{4}-\d{2}$/;
+const DAILY_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const WATCH_DEBOUNCE_MS = 300;
+
+export function isValidDailyDate(text: string): boolean {
+  if (!DAILY_DATE_RE.test(text)) return false;
+  const [yearStr, monthStr, dayStr] = text.split("-");
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  if (year < 2000 || year > 2100) return false;
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+}
 
 export const BUILT_IN_TEMPLATE = `---
 type: diario
@@ -99,34 +110,50 @@ export function dailyTemplatePath(settings: DelegationSettings): string | null {
   return existsSync(builtin) ? builtin : null;
 }
 
+function findExistingDailyFile(dir: string, date: string): string | null {
+  const flat = join(dir, `${date}.md`);
+  if (existsSync(flat)) return flat;
+  const archived = join(dir, date.slice(0, 7), `${date}.md`);
+  if (existsSync(archived)) return archived;
+  if (!isDirectory(dir)) return null;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const candidate = join(dir, entry.name, `${date}.md`);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 export function dailyFile(settings: DelegationSettings, date: string): string | null {
   const root = dailyRoot(settings);
   if (!root) return null;
-  const existing = diaryPath(root, date);
-  if (existing) return existing;
   const dir = dailyDir(settings) ?? join(root, "diario");
-  return join(dir, `${date}.md`);
+  return findExistingDailyFile(dir, date) ?? join(dir, `${date}.md`);
 }
 
-export function listDiaryDates(root: string): string[] {
-  const dir = join(root, "diario");
-  if (!isDirectory(dir)) return [];
+export function listDiaryDates(settings: DelegationSettings): string[] {
+  const dir = dailyDir(settings);
+  if (!dir || !isDirectory(dir)) return [];
   const dates = new Set<string>();
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isFile() && DATE_FILE_RE.test(entry.name)) {
-      dates.add(entry.name.slice(0, 10));
-    } else if (entry.isDirectory() && MONTH_DIR_RE.test(entry.name)) {
-      const monthDir = join(dir, entry.name);
-      for (const sub of readdirSync(monthDir, { withFileTypes: true })) {
-        if (sub.isFile() && DATE_FILE_RE.test(sub.name)) dates.add(sub.name.slice(0, 10));
+      const date = entry.name.slice(0, 10);
+      if (isValidDailyDate(date)) dates.add(date);
+    } else if (entry.isDirectory()) {
+      const subDir = join(dir, entry.name);
+      for (const sub of readdirSync(subDir, { withFileTypes: true })) {
+        if (sub.isFile() && DATE_FILE_RE.test(sub.name)) {
+          const date = sub.name.slice(0, 10);
+          if (isValidDailyDate(date)) dates.add(date);
+        }
       }
     }
   }
   return [...dates].sort().reverse();
 }
 
-export function findYesterday(root: string, date: string): string | null {
-  const before = listDiaryDates(root).filter((candidate) => candidate < date);
+export function findYesterday(settings: DelegationSettings, date: string): string | null {
+  const before = listDiaryDates(settings).filter((candidate) => candidate < date);
   return before[0] ?? null;
 }
 
@@ -201,7 +228,13 @@ export interface DailyWriteResult {
   updatedAt: number;
 }
 
-export function writeDaily(settings: DelegationSettings, date: string, content: string, baseUpdatedAt?: number): DailyWriteResult {
+export function writeDaily(
+  settings: DelegationSettings,
+  date: string,
+  content: string,
+  baseUpdatedAt?: number,
+  writeId?: string | null,
+): DailyWriteResult {
   const root = dailyRoot(settings);
   if (!root) throw new BadRequestError("second brain root not set");
   const path = dailyFile(settings, date) as string;
@@ -220,7 +253,7 @@ export function writeDaily(settings: DelegationSettings, date: string, content: 
   renameSync(tmpPath, path);
   const stat = statSync(path);
   lastHubHash.set(path, hashOf(content));
-  broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "hub" });
+  broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "hub", writeId: writeId ?? null });
   return { date, path, updatedAt: stat.mtimeMs };
 }
 
@@ -239,7 +272,7 @@ export function generateDaily(date: string, focus: string | null): { taskId: str
   if (busy) throw new DailyBusyError(busy.id);
   const file = dailyFile(settings, date) as string;
   const templatePath = dailyTemplatePath(settings);
-  const yesterday = findYesterday(root, date);
+  const yesterday = findYesterday(settings, date);
   const promptTemplate = settings.daily.prompt ?? DEFAULT_DAILY_PROMPT;
   const prompt = renderDailyPrompt(promptTemplate, {
     date,
@@ -305,6 +338,7 @@ export function watchDaily(settings: DelegationSettings): void {
     const watcher = watch(dir, (_event, filename) => {
       if (!filename || !filename.endsWith(".md")) return;
       const date = filename.slice(0, -3);
+      if (!isValidDailyDate(date)) return;
       const existingTimer = debounceTimers.get(date);
       if (existingTimer) clearTimeout(existingTimer);
       debounceTimers.set(
