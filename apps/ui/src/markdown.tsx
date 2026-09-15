@@ -84,6 +84,22 @@ function leadingSpaces(line: string): number {
   return line.match(/^ */)?.[0].length ?? 0;
 }
 
+function normalizeIndent(line: string): string {
+  const lead = line.match(/^[ \t]*/)?.[0] ?? "";
+  if (!lead.includes("\t")) return line;
+  let normalized = "";
+  for (const ch of lead) normalized += ch === "\t" ? "    " : ch;
+  return normalized + line.slice(lead.length);
+}
+
+export type TaskFilter = "all" | "open" | "done";
+
+function taskHidden(checked: boolean, filter: TaskFilter): boolean {
+  if (filter === "open") return checked;
+  if (filter === "done") return !checked;
+  return false;
+}
+
 function bulletKind(stripped: string): ListKind | null {
   if (/^[-*]\s+/.test(stripped)) return "ul";
   if (/^\d+\.\s+/.test(stripped)) return "ol";
@@ -108,14 +124,26 @@ function parseListBlock(
   indent: number,
   lineBase: number,
   nextKey: () => string,
+  taskFilter: TaskFilter,
   onToggleTask?: (lineIndex: number, checked: boolean) => void,
 ): { node: ReactNode; next: number } {
   const kind = bulletKind(lines[start]!.slice(indent))!;
   const items: ReactNode[] = [];
   let index = start;
   while (index < lines.length) {
-    const raw = lines[index]!;
-    if (raw.trim() === "") break;
+    let raw = lines[index]!;
+    let loose = false;
+    if (raw.trim() === "") {
+      let peek = index;
+      while (peek < lines.length && lines[peek]!.trim() === "") peek += 1;
+      if (peek >= lines.length) break;
+      const peekRaw = lines[peek]!;
+      const peekIndent = leadingSpaces(peekRaw);
+      if (peekIndent !== indent || bulletKind(peekRaw.slice(peekIndent)) !== kind) break;
+      loose = true;
+      index = peek;
+      raw = lines[index]!;
+    }
     const curIndent = leadingSpaces(raw);
     if (curIndent !== indent) break;
     const stripped = raw.slice(indent);
@@ -130,17 +158,19 @@ function parseListBlock(
       const nextRaw = lines[index]!;
       const nextIndent = leadingSpaces(nextRaw);
       if (nextRaw.trim() !== "" && nextIndent > indent && bulletKind(nextRaw.slice(nextIndent))) {
-        const result = parseListBlock(lines, index, nextIndent, lineBase, nextKey, onToggleTask);
+        const result = parseListBlock(lines, index, nextIndent, lineBase, nextKey, taskFilter, onToggleTask);
         nested = result.node;
         index = result.next;
       }
     }
+    if (task && taskHidden(task.checked, taskFilter)) continue;
     const ikey = nextKey();
     const body = task ? task.rest : content;
     const inline = parseInline(body, ikey);
     if (task) {
+      const className = loose ? "md__task md__item--loose" : "md__task";
       items.push(
-        <li key={ikey} className="md__task">
+        <li key={ikey} className={className}>
           <label>
             <input
               type="checkbox"
@@ -155,13 +185,14 @@ function parseListBlock(
       );
     } else {
       items.push(
-        <li key={ikey}>
+        <li key={ikey} className={loose ? "md__item--loose" : undefined}>
           {inline}
           {nested}
         </li>,
       );
     }
   }
+  if (items.length === 0) return { node: null, next: index };
   const node =
     kind === "ol" ? (
       <ol key={nextKey()} className="md__list">
@@ -179,6 +210,7 @@ function parseBlockLines(
   lines: string[],
   lineBase: number,
   nextKey: () => string,
+  taskFilter: TaskFilter,
   onToggleTask?: (lineIndex: number, checked: boolean) => void,
 ): ReactNode[] {
   const blocks: ReactNode[] = [];
@@ -224,14 +256,14 @@ function parseBlockLines(
       const bkey = nextKey();
       blocks.push(
         <blockquote key={bkey} className="md__quote">
-          {parseBlockLines(buffer, lineBase + start, nextKey, onToggleTask)}
+          {parseBlockLines(buffer, lineBase + start, nextKey, taskFilter, onToggleTask)}
         </blockquote>,
       );
       continue;
     }
     const indent = leadingSpaces(line);
     if (bulletKind(line.slice(indent))) {
-      const result = parseListBlock(lines, index, indent, lineBase, nextKey, onToggleTask);
+      const result = parseListBlock(lines, index, indent, lineBase, nextKey, taskFilter, onToggleTask);
       blocks.push(result.node);
       index = result.next;
       continue;
@@ -298,26 +330,40 @@ export function toggleTaskLine(markdown: string, lineIndex: number, checked: boo
   return parts.join("");
 }
 
+export function countTasks(markdown: string): { open: number; done: number } {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  let open = 0;
+  let done = 0;
+  for (const raw of lines) {
+    const match = raw.match(/^\s*[-*]\s+\[([ xX])\]/);
+    if (!match) continue;
+    if (match[1]!.toLowerCase() === "x") done += 1;
+    else open += 1;
+  }
+  return { open, done };
+}
+
 interface MarkdownProps {
   text: string;
   frontmatter?: "hidden" | "chip";
+  taskFilter?: TaskFilter;
   onToggleTask?: (lineIndex: number, checked: boolean) => void;
 }
 
-export function Markdown({ text, frontmatter, onToggleTask }: MarkdownProps): ReactNode {
+export function Markdown({ text, frontmatter, taskFilter = "all", onToggleTask }: MarkdownProps): ReactNode {
   let key = 0;
   const nextKey = () => `md-${key++}`;
   if (!frontmatter) {
-    const lines = text.replace(/\r\n/g, "\n").split("\n");
-    return <div className="md">{parseBlockLines(lines, 0, nextKey, onToggleTask)}</div>;
+    const lines = text.replace(/\r\n/g, "\n").split("\n").map(normalizeIndent);
+    return <div className="md">{parseBlockLines(lines, 0, nextKey, taskFilter, onToggleTask)}</div>;
   }
   const { frontmatter: fm, body, bodyOffset } = splitFrontmatter(text);
-  const lines = body.split("\n");
+  const lines = body.split("\n").map(normalizeIndent);
   const summary = fm ? Object.values(fm).filter((value) => value.length > 0) : [];
   return (
     <div className="md">
       {frontmatter === "chip" && summary.length > 0 && <div className="chip md__frontmatter">{summary.join(" · ")}</div>}
-      {parseBlockLines(lines, bodyOffset, nextKey, onToggleTask)}
+      {parseBlockLines(lines, bodyOffset, nextKey, taskFilter, onToggleTask)}
     </div>
   );
 }
