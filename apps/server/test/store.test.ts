@@ -40,7 +40,7 @@ const newTask = (title: string, runner: "claude" | "codex" = "claude") =>
 
 describe("settings", () => {
   it("falls back to environment defaults and persists updates", () => {
-    const dailyDefaults = { features: { daily: false }, daily: { dir: null, template: null, prompt: null, runner: "claude" } };
+    const dailyDefaults = { features: { daily: false }, daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false } };
     assert.deepEqual(store.getSettings(), { workspacesRoot: null, editorCommand: "code", secondBrainRoot: null, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60, ...dailyDefaults });
     const updated = store.updateSettings({ workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir });
     assert.deepEqual(updated, { workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60, ...dailyDefaults });

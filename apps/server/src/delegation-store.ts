@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { db } from "./db.js";
 import type {
   CodexSandbox,
+  DailyHeadings,
   DelegationSettings,
   Isolation,
   IsolationReason,
@@ -299,6 +300,13 @@ export function getSettings(): DelegationSettings {
       template: stored.get("daily.template") ?? null,
       prompt: stored.get("daily.prompt") ?? null,
       runner: stored.get("daily.runner") === "codex" ? "codex" : "claude",
+      headings: {
+        focus: stored.get("daily.headings.focus") ?? "Focus",
+        meetings: stored.get("daily.headings.meetings") ?? "Meetings",
+        sessions: stored.get("daily.headings.sessions") ?? "Sessions",
+      },
+      closedKey: stored.get("daily.closedKey") ?? "closed",
+      wikilinks: stored.get("daily.wikilinks") === "1",
     },
   };
 }
@@ -320,7 +328,7 @@ export interface UpdateSettingsInput {
   ownerName?: string;
   runTimeoutMinutes?: number;
   features?: Partial<DelegationSettings["features"]>;
-  daily?: Partial<DelegationSettings["daily"]>;
+  daily?: Partial<Omit<DelegationSettings["daily"], "headings">> & { headings?: Partial<DailyHeadings> };
 }
 
 export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
@@ -338,6 +346,11 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     if (patch.daily?.template !== undefined) upsertSettingStmt.run("daily.template", patch.daily.template);
     if (patch.daily?.prompt !== undefined) upsertSettingStmt.run("daily.prompt", patch.daily.prompt);
     if (patch.daily?.runner !== undefined) upsertSettingStmt.run("daily.runner", patch.daily.runner);
+    if (patch.daily?.headings?.focus !== undefined) upsertSettingStmt.run("daily.headings.focus", patch.daily.headings.focus);
+    if (patch.daily?.headings?.meetings !== undefined) upsertSettingStmt.run("daily.headings.meetings", patch.daily.headings.meetings);
+    if (patch.daily?.headings?.sessions !== undefined) upsertSettingStmt.run("daily.headings.sessions", patch.daily.headings.sessions);
+    if (patch.daily?.closedKey !== undefined) upsertSettingStmt.run("daily.closedKey", patch.daily.closedKey);
+    if (patch.daily?.wikilinks !== undefined) upsertSettingStmt.run("daily.wikilinks", patch.daily.wikilinks ? "1" : "0");
   });
   apply();
   return getSettings();
