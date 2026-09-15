@@ -3308,10 +3308,14 @@ h6.md__h {
 
 .md__list {
   margin: 0;
-  padding-left: 18px;
+  padding-left: 1.25rem;
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.md__item--loose {
+  margin-top: 0.6rem;
 }
 
 .md__quote {
@@ -3378,7 +3382,6 @@ h6.md__h {
 
 .md__task {
   list-style: none;
-  margin-left: -18px;
 }
 
 .md__task label {
@@ -3390,6 +3393,12 @@ h6.md__h {
 
 .md__task input {
   margin-top: 3px;
+  flex: none;
+}
+
+.md__task > .md__list {
+  margin-top: 2px;
+  margin-left: 1.4rem;
 }
 
 .md__wikilink {
@@ -3428,6 +3437,11 @@ h6.md__h {
 
 .daily__main {
   min-width: 0;
+}
+
+.daily__taskfilter {
+  margin-bottom: 8px;
+  flex-wrap: wrap;
 }
 
 .daily__editor {

@@ -13,7 +13,7 @@ import {
   type DailySession,
   type DelegationSettings,
 } from "../delegation";
-import { Markdown, toggleTaskLine } from "../markdown";
+import { countTasks, Markdown, toggleTaskLine, type TaskFilter } from "../markdown";
 
 interface Props {
   settings: DelegationSettings | null;
@@ -52,6 +52,16 @@ function formatClock(ts: number): string {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+const TASK_FILTER_KEY = "hub.daily.taskFilter";
+
+function readStoredTaskFilter(): TaskFilter {
+  try {
+    const stored = window.localStorage.getItem(TASK_FILTER_KEY);
+    if (stored === "all" || stored === "open" || stored === "done") return stored;
+  } catch {}
+  return "all";
+}
+
 export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily }: Props) {
   const [overview, setOverview] = useState<DailyOverview | null>(null);
   const [overviewFailed, setOverviewFailed] = useState<"stale-hub" | "error" | null>(null);
@@ -70,6 +80,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
   const [focusText, setFocusText] = useState("");
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [generateBusy, setGenerateBusy] = useState(false);
+  const [taskFilter, setTaskFilter] = useState<TaskFilter>(readStoredTaskFilter);
 
   const ownWriteIdsRef = useRef<Set<string>>(new Set());
   const ownWriteOrderRef = useRef<string[]>([]);
@@ -82,6 +93,12 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
   useEffect(() => {
     textRef.current = text;
   }, [text]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(TASK_FILTER_KEY, taskFilter);
+    } catch {}
+  }, [taskFilter]);
 
   const loadOverview = () => {
     getDaily()
@@ -316,6 +333,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
   }
 
   const running = overview.running && overview.running.date === date ? overview.running : null;
+  const taskCounts = countTasks(text);
   const statusLabel = saveStatus === "saving" ? "Saving…" : saveStatus === "saved" && savedAt ? `Saved ${formatClock(savedAt)}` : dirty ? "Unsaved" : "";
   const obsidianHref = entry?.exists && entry.path ? `obsidian://open?path=${encodeURIComponent(entry.path)}` : null;
 
@@ -402,7 +420,18 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
           )}
           {entry && entry.exists && mode === "preview" && (
             <>
-              <Markdown text={text} frontmatter="chip" onToggleTask={handleToggle} />
+              <div className="row daily__taskfilter" role="tablist" aria-label="Task filter">
+                <button className={`pill ${taskFilter === "all" ? "pill--on" : ""}`} onClick={() => setTaskFilter("all")}>
+                  All
+                </button>
+                <button className={`pill ${taskFilter === "open" ? "pill--on" : ""}`} onClick={() => setTaskFilter("open")}>
+                  Open <span className="pill__count">{taskCounts.open}</span>
+                </button>
+                <button className={`pill ${taskFilter === "done" ? "pill--on" : ""}`} onClick={() => setTaskFilter("done")}>
+                  Done <span className="pill__count">{taskCounts.done}</span>
+                </button>
+              </div>
+              <Markdown text={text} frontmatter="chip" taskFilter={taskFilter} onToggleTask={handleToggle} />
               <span className="daily__status muted small">{statusLabel}</span>
             </>
           )}

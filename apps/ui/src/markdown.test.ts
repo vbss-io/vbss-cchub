@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Markdown, splitFrontmatter, toggleTaskLine } from "./markdown";
+import { countTasks, Markdown, splitFrontmatter, toggleTaskLine } from "./markdown";
 
 const render = (props: Parameters<typeof Markdown>[0]) => renderToStaticMarkup(createElement(Markdown, props) as never);
 
@@ -94,4 +94,53 @@ test("frontmatter=hidden strips the yaml without rendering a chip", () => {
   assert.doesNotMatch(html, /md__frontmatter/);
   assert.doesNotMatch(html, /---/);
   assert.match(html, /Today/);
+});
+
+test("a task item nests a 2-space sub-bullet and a 4-space sub-sub-bullet three levels deep", () => {
+  const source = "- [ ] top task\n  - mid\n      - deep";
+  const html = render({ text: source });
+  const listCount = (html.match(/<ul class="md__list">/g) ?? []).length;
+  assert.equal(listCount, 3, `expected 3 nested <ul>, saw markup: ${html}`);
+  assert.match(
+    html,
+    /<ul class="md__list"><li class="md__task"><label>[\s\S]*?<\/label><ul class="md__list"><li>[\s\S]*?<ul class="md__list"><li>[\s\S]*?deep/,
+  );
+  assert.ok(html.indexOf("mid") < html.indexOf("deep"));
+});
+
+test("leading tabs are normalised to 4 spaces so nesting still resolves", () => {
+  const source = "- top\n\t- mid\n\t\t- deep";
+  const html = render({ text: source });
+  const listCount = (html.match(/<ul class="md__list">/g) ?? []).length;
+  assert.equal(listCount, 3, `expected 3 nested <ul>, saw markup: ${html}`);
+});
+
+test("a blank line between two sibling items marks the following one as loose", () => {
+  const source = "- one\n\n- two";
+  const html = render({ text: source });
+  assert.match(html, /<li>one<\/li>/);
+  assert.match(html, /<li class="md__item--loose">two<\/li>/);
+  const listCount = (html.match(/<ul class="md__list">/g) ?? []).length;
+  assert.equal(listCount, 1, `blank line must not split the list: ${html}`);
+});
+
+test("taskFilter=open hides checked tasks together with their nested subtree", () => {
+  const source = "- [ ] open task\n  - [x] nested done task\n- [x] done task";
+  const html = render({ text: source, taskFilter: "open" });
+  assert.match(html, /open task/);
+  assert.doesNotMatch(html, /nested done task/);
+  assert.doesNotMatch(html, />done task</);
+});
+
+test("taskFilter=done hides unchecked tasks together with their nested subtree", () => {
+  const source = "- [ ] open task\n  - [x] nested done task\n- [x] done task";
+  const html = render({ text: source, taskFilter: "done" });
+  assert.doesNotMatch(html, /open task/);
+  assert.doesNotMatch(html, /nested done task/);
+  assert.match(html, />done task</);
+});
+
+test("countTasks counts open and done task lines, nested included", () => {
+  const source = "- [ ] a\n  - [x] b\n- [x] c\n- [ ] d";
+  assert.deepEqual(countTasks(source), { open: 2, done: 2 });
 });
