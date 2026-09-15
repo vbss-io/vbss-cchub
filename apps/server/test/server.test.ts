@@ -93,7 +93,16 @@ describe("hub surface", () => {
   });
 
   it("stores settings, discovers workspaces and creates or updates them", async () => {
-    assert.deepEqual((await http("GET", "/delegation/settings")).json, { workspacesRoot: null, editorCommand: "code", secondBrainRoot: null, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60 });
+    assert.deepEqual((await http("GET", "/delegation/settings")).json, {
+      workspacesRoot: null,
+      editorCommand: "code",
+      secondBrainRoot: null,
+      autonomy: "full",
+      ownerName: userInfo().username,
+      runTimeoutMinutes: 60,
+      features: { daily: false },
+      daily: { dir: null, template: null, prompt: null, runner: "claude" },
+    });
     assert.equal((await http("PUT", "/delegation/settings", { body: { workspacesRoot: join(box.tmp, "nope") } })).status, 400);
     const saved = await http("PUT", "/delegation/settings", { body: { workspacesRoot: box.root, secondBrainRoot: box.brain } });
     assert.equal(saved.status, 200);

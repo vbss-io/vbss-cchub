@@ -76,6 +76,17 @@ export interface WorkspaceRecord {
   error: string | null;
 }
 
+export interface DelegationFeatures {
+  daily: boolean;
+}
+
+export interface DailyFeatureSettings {
+  dir: string | null;
+  template: string | null;
+  prompt: string | null;
+  runner: Runner;
+}
+
 export interface DelegationSettings {
   workspacesRoot: string | null;
   editorCommand: string;
@@ -83,6 +94,8 @@ export interface DelegationSettings {
   autonomy: Autonomy;
   ownerName: string;
   runTimeoutMinutes: number;
+  features: DelegationFeatures;
+  daily: DailyFeatureSettings;
 }
 
 export const RUN_TIMEOUT_MIN = 5;
@@ -116,6 +129,7 @@ export interface TaskRecord {
   baseBranch: string | null;
   mergedAt: number | null;
   portBase: number | null;
+  dailyDate: string | null;
   createdAt: number;
   updatedAt: number;
 }

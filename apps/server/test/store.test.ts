@@ -40,9 +40,10 @@ const newTask = (title: string, runner: "claude" | "codex" = "claude") =>
 
 describe("settings", () => {
   it("falls back to environment defaults and persists updates", () => {
-    assert.deepEqual(store.getSettings(), { workspacesRoot: null, editorCommand: "code", secondBrainRoot: null, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60 });
+    const dailyDefaults = { features: { daily: false }, daily: { dir: null, template: null, prompt: null, runner: "claude" } };
+    assert.deepEqual(store.getSettings(), { workspacesRoot: null, editorCommand: "code", secondBrainRoot: null, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60, ...dailyDefaults });
     const updated = store.updateSettings({ workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir });
-    assert.deepEqual(updated, { workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60 });
+    assert.deepEqual(updated, { workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60, ...dailyDefaults });
     assert.equal(store.updateSettings({ ownerName: "Vitor" }).ownerName, "Vitor");
     assert.equal(store.updateSettings({ autonomy: "safe" }).autonomy, "safe");
     store.updateSettings({ autonomy: "full" });

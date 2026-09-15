@@ -4,9 +4,10 @@ import { listCodexSessions } from "./codex-store.js";
 import { config } from "./config.js";
 import { getSession, listClaims, listSessions, sessionByPid } from "./db.js";
 import { broadcast } from "./sse.js";
-import { brainToday } from "./second-brain.js";
+import { brainToday, localDate } from "./second-brain.js";
 import { runtimeSnapshot } from "./runtimes.js";
 import {
+  activeDailyTask,
   archiveTask,
   clearTaskWorktreePath,
   createReport,
@@ -23,9 +24,23 @@ import {
   setTaskOrigin,
   listTasksByOrigin,
   resolveTaskId,
+  type UpdateSettingsInput,
 } from "./delegation-store.js";
 import { delegationGuard } from "./delegation-security.js";
 import { abortRun, BadRequestError, NotFoundError, brainNote, delegateTask, startRun, repoPathOf } from "./delegation-launch.js";
+import {
+  DailyBusyError,
+  DailyConflictError,
+  dailyRoot,
+  dailyDir,
+  dailySessionsForDate,
+  dailyTemplatePath,
+  generateDaily,
+  listDiaryDates,
+  readDaily,
+  watchDaily,
+  writeDaily,
+} from "./daily.js";
 import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus, WorktreeError } from "./worktrees.js";
 import { portRangeOf } from "./task-ports.js";
 import { shareRouter } from "./share-routes.js";
@@ -132,7 +147,7 @@ export function delegationRouter(): Router {
 
   router.put("/settings", (req, res) => {
     const body = req.body as Record<string, unknown>;
-    const patch: { workspacesRoot?: string | null; editorCommand?: string; secondBrainRoot?: string | null; autonomy?: Autonomy; ownerName?: string; runTimeoutMinutes?: number } = {};
+    const patch: UpdateSettingsInput = {};
     if ("runTimeoutMinutes" in body) {
       const minutes = typeof body.runTimeoutMinutes === "number" ? body.runTimeoutMinutes : Number(body.runTimeoutMinutes);
       if (!Number.isFinite(minutes) || minutes < RUN_TIMEOUT_MIN || minutes > RUN_TIMEOUT_MAX) {
@@ -181,7 +196,33 @@ export function delegationRouter(): Router {
       }
       patch.secondBrainRoot = root;
     }
-    res.json(updateSettings(patch));
+    const featuresBody = body.features as Record<string, unknown> | undefined;
+    if (featuresBody && typeof featuresBody === "object" && "daily" in featuresBody) {
+      if (typeof featuresBody.daily !== "boolean") {
+        res.status(400).json({ error: "features.daily must be a boolean" });
+        return;
+      }
+      patch.features = { daily: featuresBody.daily };
+    }
+    const dailyBody = body.daily as Record<string, unknown> | undefined;
+    if (dailyBody && typeof dailyBody === "object") {
+      const dailyPatch: NonNullable<UpdateSettingsInput["daily"]> = {};
+      if ("dir" in dailyBody) dailyPatch.dir = asString(dailyBody.dir);
+      if ("template" in dailyBody) dailyPatch.template = asString(dailyBody.template);
+      if ("prompt" in dailyBody) dailyPatch.prompt = asString(dailyBody.prompt);
+      if ("runner" in dailyBody) {
+        const runner = asString(dailyBody.runner);
+        if (!runner || !(RUNNERS as readonly string[]).includes(runner)) {
+          res.status(400).json({ error: `daily.runner must be one of: ${RUNNERS.join(", ")}` });
+          return;
+        }
+        dailyPatch.runner = runner as Runner;
+      }
+      patch.daily = dailyPatch;
+    }
+    const updated = updateSettings(patch);
+    watchDaily(updated);
+    res.json(updated);
   });
 
   router.get("/workspaces", (_req, res) => {
@@ -385,6 +426,94 @@ export function delegationRouter(): Router {
       return;
     }
     res.json(brainToday(root));
+  });
+
+  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  router.get("/daily", (_req, res) => {
+    const settings = getSettings();
+    const root = dailyRoot(settings);
+    if (!root) {
+      res.json({ enabled: false, root: null, dir: null, today: localDate(), dates: [], running: null, templatePath: null });
+      return;
+    }
+    const active = activeDailyTask();
+    let running: { taskId: string; date: string; startedAt: number } | null = null;
+    if (active && active.dailyDate) {
+      const detail = getTaskDetail(active.id);
+      const lastRun = detail?.runs[detail.runs.length - 1] ?? null;
+      running = { taskId: active.id, date: active.dailyDate, startedAt: lastRun?.startedAt ?? active.createdAt };
+    }
+    res.json({
+      enabled: settings.features.daily,
+      root,
+      dir: dailyDir(settings),
+      today: localDate(),
+      dates: listDiaryDates(root).slice(0, 60),
+      running,
+      templatePath: dailyTemplatePath(settings),
+    });
+  });
+
+  router.get("/daily/sessions", (req, res) => {
+    const date = typeof req.query.date === "string" ? req.query.date : "";
+    if (!DATE_RE.test(date)) {
+      res.status(400).json({ error: "date must be YYYY-MM-DD" });
+      return;
+    }
+    res.json(dailySessionsForDate(date));
+  });
+
+  router.get("/daily/:date", (req, res) => {
+    if (!DATE_RE.test(req.params.date)) {
+      res.status(400).json({ error: "date must be YYYY-MM-DD" });
+      return;
+    }
+    try {
+      res.json(readDaily(getSettings(), req.params.date));
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.put("/daily/:date", (req, res) => {
+    if (!DATE_RE.test(req.params.date)) {
+      res.status(400).json({ error: "date must be YYYY-MM-DD" });
+      return;
+    }
+    const body = req.body as Record<string, unknown>;
+    if (typeof body.content !== "string") {
+      res.status(400).json({ error: "content required" });
+      return;
+    }
+    const baseUpdatedAt = typeof body.baseUpdatedAt === "number" ? body.baseUpdatedAt : undefined;
+    try {
+      res.json(writeDaily(getSettings(), req.params.date, body.content, baseUpdatedAt));
+    } catch (err) {
+      if (err instanceof DailyConflictError) {
+        res.status(409).json({ error: err.message, content: err.content, updatedAt: err.updatedAt });
+        return;
+      }
+      sendError(res, err);
+    }
+  });
+
+  router.post("/daily/:date/generate", (req, res) => {
+    if (!DATE_RE.test(req.params.date)) {
+      res.status(400).json({ error: "date must be YYYY-MM-DD" });
+      return;
+    }
+    const body = req.body as Record<string, unknown>;
+    const focus = asString(body.focus);
+    try {
+      res.status(201).json(generateDaily(req.params.date, focus));
+    } catch (err) {
+      if (err instanceof DailyBusyError) {
+        res.status(409).json({ error: err.message, taskId: err.taskId });
+        return;
+      }
+      sendError(res, err);
+    }
   });
 
   router.get("/tasks", (req, res) => {
