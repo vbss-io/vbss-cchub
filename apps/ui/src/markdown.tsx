@@ -118,6 +118,14 @@ function parseTaskContent(content: string): { checked: boolean; rest: string } |
 
 const HR_RE = /^(-{3,}|\*{3,}|_{3,})$/;
 
+interface ParsedListItem {
+  lineNo: number;
+  task: { checked: boolean; rest: string } | null;
+  content: string;
+  roughLoose: boolean;
+  nested: { node: ReactNode; hasMatch: boolean } | null;
+}
+
 function parseListBlock(
   lines: string[],
   start: number,
@@ -126,13 +134,13 @@ function parseListBlock(
   nextKey: () => string,
   taskFilter: TaskFilter,
   onToggleTask?: (lineIndex: number, checked: boolean) => void,
-): { node: ReactNode; next: number } {
+): { node: ReactNode; next: number; hasMatch: boolean } {
   const kind = bulletKind(lines[start]!.slice(indent))!;
-  const items: ReactNode[] = [];
+  const parsedItems: ParsedListItem[] = [];
   let index = start;
   while (index < lines.length) {
     let raw = lines[index]!;
-    let loose = false;
+    let roughLoose = false;
     if (raw.trim() === "") {
       let peek = index;
       while (peek < lines.length && lines[peek]!.trim() === "") peek += 1;
@@ -140,7 +148,7 @@ function parseListBlock(
       const peekRaw = lines[peek]!;
       const peekIndent = leadingSpaces(peekRaw);
       if (peekIndent !== indent || bulletKind(peekRaw.slice(peekIndent)) !== kind) break;
-      loose = true;
+      roughLoose = true;
       index = peek;
       raw = lines[index]!;
     }
@@ -153,46 +161,62 @@ function parseListBlock(
     const lineNo = lineBase + index;
     const task = parseTaskContent(content);
     index += 1;
-    let nested: ReactNode = null;
+    let nested: { node: ReactNode; hasMatch: boolean } | null = null;
     if (index < lines.length) {
       const nextRaw = lines[index]!;
       const nextIndent = leadingSpaces(nextRaw);
       if (nextRaw.trim() !== "" && nextIndent > indent && bulletKind(nextRaw.slice(nextIndent))) {
         const result = parseListBlock(lines, index, nextIndent, lineBase, nextKey, taskFilter, onToggleTask);
-        nested = result.node;
+        nested = { node: result.node, hasMatch: result.hasMatch };
         index = result.next;
       }
     }
-    if (task && taskHidden(task.checked, taskFilter)) continue;
+    parsedItems.push({ lineNo, task, content, roughLoose, nested });
+  }
+  const items: ReactNode[] = [];
+  let listHasMatch = false;
+  let visibleCount = 0;
+  for (const parsed of parsedItems) {
+    const nestedHasMatch = parsed.nested?.hasMatch ?? false;
+    const selfMatch = parsed.task ? !taskHidden(parsed.task.checked, taskFilter) : false;
+    const contributesMatch = selfMatch || nestedHasMatch;
+    if (contributesMatch) listHasMatch = true;
+    const visible = parsed.task ? contributesMatch : true;
+    if (!visible) continue;
+    const isContext = parsed.task !== null && !selfMatch;
+    const loose = parsed.roughLoose && visibleCount > 0;
+    visibleCount += 1;
     const ikey = nextKey();
-    const body = task ? task.rest : content;
+    const body = parsed.task ? parsed.task.rest : parsed.content;
     const inline = parseInline(body, ikey);
-    if (task) {
-      const className = loose ? "md__task md__item--loose" : "md__task";
+    if (parsed.task) {
+      const classNames = ["md__task"];
+      if (loose) classNames.push("md__item--loose");
+      if (isContext) classNames.push("md__item--context");
       items.push(
-        <li key={ikey} className={className}>
+        <li key={ikey} className={classNames.join(" ")}>
           <label>
             <input
               type="checkbox"
-              checked={task.checked}
+              checked={parsed.task.checked}
               disabled={!onToggleTask}
-              onChange={(event) => onToggleTask?.(lineNo, event.target.checked)}
+              onChange={(event) => onToggleTask?.(parsed.lineNo, event.target.checked)}
             />
             <span>{inline}</span>
           </label>
-          {nested}
+          {parsed.nested?.node}
         </li>,
       );
     } else {
       items.push(
         <li key={ikey} className={loose ? "md__item--loose" : undefined}>
           {inline}
-          {nested}
+          {parsed.nested?.node}
         </li>,
       );
     }
   }
-  if (items.length === 0) return { node: null, next: index };
+  if (items.length === 0) return { node: null, next: index, hasMatch: listHasMatch };
   const node =
     kind === "ol" ? (
       <ol key={nextKey()} className="md__list">
@@ -203,7 +227,7 @@ function parseListBlock(
         {items}
       </ul>
     );
-  return { node, next: index };
+  return { node, next: index, hasMatch: listHasMatch };
 }
 
 function parseBlockLines(

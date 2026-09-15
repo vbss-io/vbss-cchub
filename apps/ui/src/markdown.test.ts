@@ -132,12 +132,51 @@ test("taskFilter=open hides checked tasks together with their nested subtree", (
   assert.doesNotMatch(html, />done task</);
 });
 
-test("taskFilter=done hides unchecked tasks together with their nested subtree", () => {
+test("taskFilter=done hides an unchecked task that has no matching descendant", () => {
+  const source = "- [ ] open task with no children\n- [x] done task";
+  const html = render({ text: source, taskFilter: "done" });
+  assert.doesNotMatch(html, /open task with no children/);
+  assert.match(html, />done task</);
+});
+
+test("taskFilter=done keeps a matching nested task visible with its non-matching parent shown as context", () => {
   const source = "- [ ] open task\n  - [x] nested done task\n- [x] done task";
   const html = render({ text: source, taskFilter: "done" });
-  assert.doesNotMatch(html, /open task/);
-  assert.doesNotMatch(html, /nested done task/);
+  assert.match(html, /nested done task/);
   assert.match(html, />done task</);
+  assert.match(html, /md__item--context/);
+  const openTaskIndex = html.indexOf("open task");
+  assert.ok(openTaskIndex >= 0);
+  const openTaskLiStart = html.lastIndexOf("<li", openTaskIndex);
+  assert.match(html.slice(openTaskLiStart, openTaskIndex), /md__item--context/);
+});
+
+test("open sub-task under a done parent stays visible with the parent as md__item--context", () => {
+  const source = "- [x] done parent\n  - [ ] open child\n- [x] unrelated done task";
+  const html = render({ text: source, taskFilter: "open" });
+  assert.match(html, /open child/);
+  assert.match(html, /done parent/);
+  const parentIndex = html.indexOf("done parent");
+  const parentLiStart = html.lastIndexOf("<li", parentIndex);
+  assert.match(html.slice(parentLiStart, parentIndex), /md__item--context/);
+  assert.doesNotMatch(html, /unrelated done task/);
+});
+
+test("done parent with open child under taskFilter=done shows the parent and hides the open child", () => {
+  const source = "- [x] done parent\n  - [ ] open child";
+  const html = render({ text: source, taskFilter: "done" });
+  assert.match(html, /done parent/);
+  assert.doesNotMatch(html, /open child/);
+  const parentIndex = html.indexOf("done parent");
+  const parentLiStart = html.lastIndexOf("<li", parentIndex);
+  assert.doesNotMatch(html.slice(parentLiStart, parentIndex), /md__item--context/);
+});
+
+test("the first visible item of a list is never loose when items before it were filtered out", () => {
+  const source = "- [x] done one\n\n- [ ] open two";
+  const html = render({ text: source, taskFilter: "open" });
+  assert.match(html, /open two/);
+  assert.doesNotMatch(html, /md__item--loose/);
 });
 
 test("countTasks counts open and done task lines, nested included", () => {
