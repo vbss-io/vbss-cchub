@@ -163,6 +163,13 @@ export interface HubEvents {
   onNavigate?: (hash: string) => void;
   onToast?: (card: ToastCard) => void;
   onClaims?: (claims: ClaimRecord[]) => void;
+  onDaily?: (event: DailyStreamEvent) => void;
+}
+
+export interface DailyStreamEvent {
+  date: string;
+  updatedAt: number | null;
+  source: "disk" | "hub";
 }
 
 export interface ToastCard {
@@ -205,6 +212,7 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("ui-navigate", (event) => handlers.onNavigate?.(data<{ hash: string }>(event).hash));
   source.addEventListener("toast", (event) => handlers.onToast?.(data<ToastCard>(event)));
   source.addEventListener("claims", (event) => handlers.onClaims?.(data<ClaimRecord[]>(event)));
+  source.addEventListener("daily", (event) => handlers.onDaily?.(data<DailyStreamEvent>(event)));
   return () => source.close();
 }
 
