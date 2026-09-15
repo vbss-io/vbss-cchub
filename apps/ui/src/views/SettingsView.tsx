@@ -165,6 +165,11 @@ export function SettingsView(props: Props) {
   const [dailyTemplate, setDailyTemplate] = useState(settings?.daily.template ?? "");
   const [dailyPrompt, setDailyPrompt] = useState(settings?.daily.prompt ?? "");
   const [dailyRunner, setDailyRunner] = useState<Runner>(settings?.daily.runner ?? "claude");
+  const [dailyHeadingFocus, setDailyHeadingFocus] = useState(settings?.daily.headings.focus ?? "Focus");
+  const [dailyHeadingMeetings, setDailyHeadingMeetings] = useState(settings?.daily.headings.meetings ?? "Meetings");
+  const [dailyHeadingSessions, setDailyHeadingSessions] = useState(settings?.daily.headings.sessions ?? "Sessions");
+  const [dailyClosedKey, setDailyClosedKey] = useState(settings?.daily.closedKey ?? "closed");
+  const [dailyWikilinks, setDailyWikilinks] = useState(settings?.daily.wikilinks ?? false);
   const [dailyBusy, setDailyBusy] = useState(false);
 
   useEffect(() => {
@@ -175,19 +180,41 @@ export function SettingsView(props: Props) {
     setDailyTemplate(settings?.daily.template ?? "");
     setDailyPrompt(settings?.daily.prompt ?? "");
     setDailyRunner(settings?.daily.runner ?? "claude");
+    setDailyHeadingFocus(settings?.daily.headings.focus ?? "Focus");
+    setDailyHeadingMeetings(settings?.daily.headings.meetings ?? "Meetings");
+    setDailyHeadingSessions(settings?.daily.headings.sessions ?? "Sessions");
+    setDailyClosedKey(settings?.daily.closedKey ?? "closed");
+    setDailyWikilinks(settings?.daily.wikilinks ?? false);
   }, [settings]);
 
   const dailyDirty =
     dailyDir.trim() !== (settings?.daily.dir ?? "") ||
     dailyTemplate.trim() !== (settings?.daily.template ?? "") ||
     dailyPrompt !== (settings?.daily.prompt ?? "") ||
-    dailyRunner !== (settings?.daily.runner ?? "claude");
+    dailyRunner !== (settings?.daily.runner ?? "claude") ||
+    dailyHeadingFocus.trim() !== (settings?.daily.headings.focus ?? "Focus") ||
+    dailyHeadingMeetings.trim() !== (settings?.daily.headings.meetings ?? "Meetings") ||
+    dailyHeadingSessions.trim() !== (settings?.daily.headings.sessions ?? "Sessions") ||
+    dailyClosedKey.trim() !== (settings?.daily.closedKey ?? "closed") ||
+    dailyWikilinks !== (settings?.daily.wikilinks ?? false);
 
   const saveDaily = async () => {
     setDailyBusy(true);
     try {
       await props.onSaveSettings({
-        daily: { dir: dailyDir.trim() || null, template: dailyTemplate.trim() || null, prompt: dailyPrompt.trim() || null, runner: dailyRunner },
+        daily: {
+          dir: dailyDir.trim() || null,
+          template: dailyTemplate.trim() || null,
+          prompt: dailyPrompt.trim() || null,
+          runner: dailyRunner,
+          headings: {
+            focus: dailyHeadingFocus.trim() || "Focus",
+            meetings: dailyHeadingMeetings.trim() || "Meetings",
+            sessions: dailyHeadingSessions.trim() || "Sessions",
+          },
+          closedKey: dailyClosedKey.trim() || "closed",
+          wikilinks: dailyWikilinks,
+        },
       });
     } finally {
       setDailyBusy(false);
@@ -584,6 +611,43 @@ export function SettingsView(props: Props) {
               />
               <small>Placeholders: <code>{"{{date}}"}</code> <code>{"{{file}}"}</code> <code>{"{{root}}"}</code> <code>{"{{template}}"}</code>{" "}
                 <code>{"{{focus}}"}</code> <code>{"{{sessions}}"}</code> <code>{"{{yesterday}}"}</code></small>
+            </label>
+            <div className="field">
+              <span>Headings</span>
+              <div className="frow frow--fields">
+                <label className="field">
+                  <span>Focus</span>
+                  <input className="in" value={dailyHeadingFocus} onChange={(event) => setDailyHeadingFocus(event.target.value)} disabled={!enabled} />
+                </label>
+                <label className="field">
+                  <span>Meetings</span>
+                  <input
+                    className="in"
+                    value={dailyHeadingMeetings}
+                    onChange={(event) => setDailyHeadingMeetings(event.target.value)}
+                    disabled={!enabled}
+                  />
+                </label>
+                <label className="field">
+                  <span>Sessions</span>
+                  <input
+                    className="in"
+                    value={dailyHeadingSessions}
+                    onChange={(event) => setDailyHeadingSessions(event.target.value)}
+                    disabled={!enabled}
+                  />
+                </label>
+              </div>
+              <small>Exact text after ## in your template.</small>
+            </div>
+            <label className="field">
+              <span>Closed key</span>
+              <input className="in" value={dailyClosedKey} onChange={(event) => setDailyClosedKey(event.target.value)} disabled={!enabled} />
+              <small>Frontmatter key written when yesterday is closed.</small>
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={dailyWikilinks} onChange={(event) => setDailyWikilinks(event.target.checked)} disabled={!enabled} />
+              Link projects as [[Project]] in focus items
             </label>
             <div className="actions">
               <button className="act" disabled={!enabled || dailyBusy} onClick={() => void resetDailyPrompt()}>

@@ -53,11 +53,20 @@ export interface WorkspaceRecord {
   error: string | null;
 }
 
+export interface DailyHeadings {
+  focus: string;
+  meetings: string;
+  sessions: string;
+}
+
 export interface DailySettings {
   dir: string | null;
   template: string | null;
   prompt: string | null;
   runner: Runner;
+  headings: DailyHeadings;
+  closedKey: string;
+  wikilinks: boolean;
 }
 
 export interface DelegationSettings {
@@ -197,7 +206,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily">> & {
   features?: Partial<DelegationSettings["features"]>;
-  daily?: Partial<DailySettings>;
+  daily?: Partial<Omit<DailySettings, "headings">> & { headings?: Partial<DailyHeadings> };
 };
 
 export const getSettings = (): Promise<DelegationSettings> => call("GET", "/settings");
@@ -464,7 +473,84 @@ export class DailyConflictError extends Error {
   }
 }
 
+export class DailyExistsError extends Error {
+  updatedAt: number | null;
+
+  constructor(message: string, updatedAt: number | null) {
+    super(message);
+    this.updatedAt = updatedAt;
+  }
+}
+
+export interface DailyYesterdayTask {
+  line: number;
+  depth: number;
+  checked: boolean;
+  text: string;
+  raw: string;
+  block?: unknown;
+}
+
+export interface DailyYesterday {
+  date: string;
+  path: string;
+  closed: boolean;
+  tasks: DailyYesterdayTask[];
+}
+
+export interface DailyPrepare {
+  date: string;
+  yesterday: DailyYesterday | null;
+  sessionsToday: DailySession[];
+  headings: DailyHeadings;
+  wikilinks: boolean;
+  templatePath: string | null;
+}
+
+export interface DailyCloseYesterdayInput {
+  yesterday: string;
+  tasks: { line: number; checked: boolean }[];
+}
+
+export interface DailyFocusItem {
+  project: string | null;
+  text: string;
+  block?: unknown;
+}
+
+export interface DailyComposeInput {
+  briefing?: string;
+  focus: DailyFocusItem[];
+  meetings: string[];
+  overwrite?: boolean;
+}
+
 export const getDaily = (): Promise<DailyOverview> => call("GET", "/daily");
+
+export const prepareDaily = (date: string): Promise<DailyPrepare> =>
+  call("GET", `/daily/${encodeURIComponent(date)}/prepare`);
+
+export const closeYesterday = (
+  date: string,
+  body: DailyCloseYesterdayInput,
+): Promise<{ date: string; updatedAt: number; closed: true }> =>
+  call("POST", `/daily/${encodeURIComponent(date)}/close-yesterday`, body);
+
+export async function composeDaily(date: string, body: DailyComposeInput): Promise<DailyEntry> {
+  const res = await fetch(`${base}/daily/${encodeURIComponent(date)}/compose`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  const json: unknown = text.length > 0 ? JSON.parse(text) : null;
+  if (res.status === 409) {
+    const errBody = json as { error?: string; updatedAt?: number | null } | null;
+    throw new DailyExistsError(errBody?.error ?? "diary exists", errBody?.updatedAt ?? null);
+  }
+  if (!res.ok) throw new Error((json as { error?: string } | null)?.error ?? `request failed (${res.status})`);
+  return json as DailyEntry;
+}
 
 export const getDailyEntry = (date: string): Promise<DailyEntry> => call("GET", `/daily/${encodeURIComponent(date)}`);
 
@@ -489,8 +575,11 @@ export async function saveDailyEntry(
   return json as { date: string; path: string; updatedAt: number };
 }
 
-export const generateDaily = (date: string, focus?: string): Promise<{ taskId: string }> =>
-  call("POST", `/daily/${encodeURIComponent(date)}/generate`, focus?.trim() ? { focus: focus.trim() } : {});
+export const generateDaily = (date: string, focus?: string, context?: string): Promise<{ taskId: string }> =>
+  call("POST", `/daily/${encodeURIComponent(date)}/generate`, {
+    ...(focus?.trim() ? { focus: focus.trim() } : {}),
+    ...(context?.trim() ? { context: context.trim() } : {}),
+  });
 
 export const listDailySessions = (date: string): Promise<DailySession[]> =>
   call("GET", `/daily/sessions?date=${encodeURIComponent(date)}`);
