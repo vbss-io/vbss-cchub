@@ -66,6 +66,10 @@ function parseInline(input: string, keyBase: string): ReactNode[] {
   return out;
 }
 
+export function renderInline(text: string, keyBase: string): ReactNode {
+  return parseInline(text, keyBase);
+}
+
 function CodeBlock({ code }: { code: string }): ReactNode {
   const copy = () => void navigator.clipboard?.writeText(code).catch(() => undefined);
   return (
