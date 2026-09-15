@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getDesktopNotifyStatus, sendToast, type DesktopNotifyStatus, type HooksStatus } from "../api";
 import { GroupManager } from "../components/GroupManager";
-import type { ConnectStatus, DelegationSettings, McpClient, ShellKind } from "../delegation";
+import type { ConnectStatus, DelegationSettings, McpClient, Runner, SettingsPatch, ShellKind } from "../delegation";
 import { COFFEE_URL, GITHUB_URL, notify, openExternal, playSound } from "../notify";
 import type { SessionClient } from "../types";
 import type { Autonomy, AutostartStatus, TunnelStatus } from "../delegation";
@@ -27,7 +27,18 @@ const NOTIF_STYLE_META: { key: NotifStyle; label: string; hint: string }[] = [
 
 export const NOTIF_CLIENTS: SessionClient[] = ["terminal", "vscode", "wsl", "claude-desktop", "headless", "hub", "share"];
 
-export type SettingsSection = "support" | "general" | "appearance" | "paths" | "hooks" | "connect" | "sharing" | "notifications" | "groups" | "about";
+export type SettingsSection =
+  | "support"
+  | "general"
+  | "appearance"
+  | "paths"
+  | "hooks"
+  | "connect"
+  | "sharing"
+  | "features"
+  | "notifications"
+  | "groups"
+  | "about";
 
 export type ThemeName = "dracula" | "midnight";
 
@@ -39,6 +50,7 @@ const SECTIONS: { key: SettingsSection; label: string }[] = [
   { key: "hooks", label: "Hooks" },
   { key: "connect", label: "Connections" },
   { key: "sharing", label: "Sharing" },
+  { key: "features", label: "Features" },
   { key: "notifications", label: "Notifications" },
   { key: "groups", label: "Groups" },
   { key: "about", label: "About" },
@@ -64,7 +76,7 @@ interface Props {
   notif: NotifSettings;
   groups: GroupRecord[];
   onToggleHooks: () => void;
-  onSaveSettings: (patch: Partial<DelegationSettings>) => Promise<void>;
+  onSaveSettings: (patch: SettingsPatch) => Promise<void>;
   onShell: (kind: ShellKind, action: "install" | "uninstall") => Promise<void>;
   onMcp: (client: McpClient, action: "install" | "uninstall") => Promise<void>;
   tunnel: TunnelStatus | null;
@@ -149,11 +161,48 @@ export function SettingsView(props: Props) {
   const [brain, setBrain] = useState(settings?.secondBrainRoot ?? "");
   const [busy, setBusy] = useState(false);
 
+  const [dailyDir, setDailyDir] = useState(settings?.daily.dir ?? "");
+  const [dailyTemplate, setDailyTemplate] = useState(settings?.daily.template ?? "");
+  const [dailyPrompt, setDailyPrompt] = useState(settings?.daily.prompt ?? "");
+  const [dailyRunner, setDailyRunner] = useState<Runner>(settings?.daily.runner ?? "claude");
+  const [dailyBusy, setDailyBusy] = useState(false);
+
   useEffect(() => {
     setRoot(settings?.workspacesRoot ?? "");
     setEditor(settings?.editorCommand ?? "code");
     setBrain(settings?.secondBrainRoot ?? "");
+    setDailyDir(settings?.daily.dir ?? "");
+    setDailyTemplate(settings?.daily.template ?? "");
+    setDailyPrompt(settings?.daily.prompt ?? "");
+    setDailyRunner(settings?.daily.runner ?? "claude");
   }, [settings]);
+
+  const dailyDirty =
+    dailyDir.trim() !== (settings?.daily.dir ?? "") ||
+    dailyTemplate.trim() !== (settings?.daily.template ?? "") ||
+    dailyPrompt !== (settings?.daily.prompt ?? "") ||
+    dailyRunner !== (settings?.daily.runner ?? "claude");
+
+  const saveDaily = async () => {
+    setDailyBusy(true);
+    try {
+      await props.onSaveSettings({
+        daily: { dir: dailyDir.trim() || null, template: dailyTemplate.trim() || null, prompt: dailyPrompt.trim() || null, runner: dailyRunner },
+      });
+    } finally {
+      setDailyBusy(false);
+    }
+  };
+
+  const resetDailyPrompt = async () => {
+    setDailyBusy(true);
+    try {
+      setDailyPrompt("");
+      await props.onSaveSettings({ daily: { prompt: null } });
+    } finally {
+      setDailyBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!section) return;
@@ -480,6 +529,72 @@ export function SettingsView(props: Props) {
             </button>
           </div>
         </div>
+      </section>
+
+      <section className="settings__section" id="settings-features">
+        <h2>Features</h2>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={settings?.features.daily ?? false}
+            disabled={!enabled}
+            onChange={(event) => void props.onSaveSettings({ features: { daily: event.target.checked } })}
+          />
+          Daily
+        </label>
+        <small className="muted">A Daily tab that generates and edits today's diary in your second brain; needs the Second brain path.</small>
+        {settings?.features.daily && (
+          <div className="form">
+            <label className="field">
+              <span>Folder</span>
+              <input
+                className="in"
+                placeholder={settings?.secondBrainRoot ? `${settings.secondBrainRoot}/diario` : "<second brain>/diario"}
+                value={dailyDir}
+                onChange={(event) => setDailyDir(event.target.value)}
+                disabled={!enabled}
+              />
+            </label>
+            <label className="field">
+              <span>Template</span>
+              <input
+                className="in"
+                placeholder="_templates/diario.md"
+                value={dailyTemplate}
+                onChange={(event) => setDailyTemplate(event.target.value)}
+                disabled={!enabled}
+              />
+            </label>
+            <label className="field">
+              <span>Runner</span>
+              <select className="in" value={dailyRunner} onChange={(event) => setDailyRunner(event.target.value as Runner)} disabled={!enabled}>
+                <option value="claude">Claude</option>
+                <option value="codex">Codex</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Prompt</span>
+              <textarea
+                className="in area"
+                rows={8}
+                placeholder="{{date}} {{file}} {{root}} {{template}} {{focus}} {{sessions}} {{yesterday}}"
+                value={dailyPrompt}
+                onChange={(event) => setDailyPrompt(event.target.value)}
+                disabled={!enabled}
+              />
+              <small>Placeholders: <code>{"{{date}}"}</code> <code>{"{{file}}"}</code> <code>{"{{root}}"}</code> <code>{"{{template}}"}</code>{" "}
+                <code>{"{{focus}}"}</code> <code>{"{{sessions}}"}</code> <code>{"{{yesterday}}"}</code></small>
+            </label>
+            <div className="actions">
+              <button className="act" disabled={!enabled || dailyBusy} onClick={() => void resetDailyPrompt()}>
+                Reset to default
+              </button>
+              <button className="act act--focus" disabled={!enabled || dailyBusy || !dailyDirty} onClick={() => void saveDaily()}>
+                Save
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="settings__section" id="settings-notifications">

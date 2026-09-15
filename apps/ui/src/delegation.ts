@@ -53,6 +53,13 @@ export interface WorkspaceRecord {
   error: string | null;
 }
 
+export interface DailySettings {
+  dir: string | null;
+  template: string | null;
+  prompt: string | null;
+  runner: Runner;
+}
+
 export interface DelegationSettings {
   workspacesRoot: string | null;
   editorCommand: string;
@@ -60,6 +67,8 @@ export interface DelegationSettings {
   autonomy: Autonomy;
   ownerName: string;
   runTimeoutMinutes: number;
+  features: { daily: boolean };
+  daily: DailySettings;
 }
 
 export interface TaskRecord {
@@ -186,10 +195,14 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T;
 }
 
+export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily">> & {
+  features?: Partial<DelegationSettings["features"]>;
+  daily?: Partial<DailySettings>;
+};
+
 export const getSettings = (): Promise<DelegationSettings> => call("GET", "/settings");
 
-export const updateSettings = (patch: Partial<DelegationSettings>): Promise<DelegationSettings> =>
-  call("PUT", "/settings", patch);
+export const updateSettings = (patch: SettingsPatch): Promise<DelegationSettings> => call("PUT", "/settings", patch);
 
 export const listWorkspaces = (): Promise<WorkspaceRecord[]> => call("GET", "/workspaces");
 
@@ -405,3 +418,78 @@ export const listShareFiles = (id: string): Promise<ShareFile[]> => call("GET", 
 
 export const shareFileUrl = (id: string, file: ShareFile): string =>
   `${base}/shares/${encodeURIComponent(id)}/files/${encodeURIComponent(file.name)}${file.direction === "in" ? "?direction=in" : ""}`;
+
+export interface DailyRunning {
+  taskId: string;
+  date: string;
+  startedAt: number;
+}
+
+export interface DailyOverview {
+  enabled: boolean;
+  root: string | null;
+  dir: string | null;
+  today: string;
+  dates: string[];
+  running: DailyRunning | null;
+  templatePath: string | null;
+}
+
+export interface DailyEntry {
+  date: string;
+  path: string;
+  exists: boolean;
+  content: string;
+  updatedAt: number | null;
+}
+
+export interface DailySession {
+  sessionId: string;
+  title: string | null;
+  client: string | null;
+  cwd: string | null;
+  status: string;
+  startedAt: number;
+  updatedAt: number;
+}
+
+export class DailyConflictError extends Error {
+  content: string;
+  updatedAt: number | null;
+
+  constructor(message: string, content: string, updatedAt: number | null) {
+    super(message);
+    this.content = content;
+    this.updatedAt = updatedAt;
+  }
+}
+
+export const getDaily = (): Promise<DailyOverview> => call("GET", "/daily");
+
+export const getDailyEntry = (date: string): Promise<DailyEntry> => call("GET", `/daily/${encodeURIComponent(date)}`);
+
+export async function saveDailyEntry(
+  date: string,
+  content: string,
+  baseUpdatedAt?: number | null,
+): Promise<{ date: string; path: string; updatedAt: number }> {
+  const res = await fetch(`${base}/daily/${encodeURIComponent(date)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(baseUpdatedAt === undefined ? { content } : { content, baseUpdatedAt }),
+  });
+  const text = await res.text();
+  const json: unknown = text.length > 0 ? JSON.parse(text) : null;
+  if (res.status === 409) {
+    const body = json as { error?: string; content?: string; updatedAt?: number | null } | null;
+    throw new DailyConflictError(body?.error ?? "changed on disk", body?.content ?? "", body?.updatedAt ?? null);
+  }
+  if (!res.ok) throw new Error((json as { error?: string } | null)?.error ?? `request failed (${res.status})`);
+  return json as { date: string; path: string; updatedAt: number };
+}
+
+export const generateDaily = (date: string, focus?: string): Promise<{ taskId: string }> =>
+  call("POST", `/daily/${encodeURIComponent(date)}/generate`, focus?.trim() ? { focus: focus.trim() } : {});
+
+export const listDailySessions = (date: string): Promise<DailySession[]> =>
+  call("GET", `/daily/sessions?date=${encodeURIComponent(date)}`);

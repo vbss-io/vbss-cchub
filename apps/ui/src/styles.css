@@ -3372,6 +3372,102 @@ h6.md__h {
   color: var(--brand);
 }
 
+.md__frontmatter {
+  align-self: flex-start;
+}
+
+.md__task {
+  list-style: none;
+  margin-left: -18px;
+}
+
+.md__task label {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  cursor: default;
+}
+
+.md__task input {
+  margin-top: 3px;
+}
+
+.md__wikilink {
+  color: var(--brand-2);
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.md__hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+/* ---------- daily ---------- */
+
+.daily {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .daily {
+    grid-template-columns: 1fr;
+  }
+}
+
+.daily__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.daily__main {
+  min-width: 0;
+}
+
+.daily__editor {
+  width: 100%;
+  min-height: 60vh;
+  resize: vertical;
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--panel-2);
+}
+
+.daily__editor:focus {
+  outline: none;
+  border-color: var(--brand);
+}
+
+.daily__status {
+  align-self: flex-end;
+}
+
+.daily__banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--pend);
+  background: rgba(241, 250, 140, 0.08);
+  border-radius: 6px;
+  color: var(--pend);
+  font-size: 13px;
+}
+
+.daily__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .flow__expander {
   cursor: pointer;
 }

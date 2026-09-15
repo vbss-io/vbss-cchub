@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type HooksStatus, type ShareStreamEvent } from "./api";
+import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type DailyStreamEvent, type HooksStatus, type ShareStreamEvent } from "./api";
 import { isHubRun } from "./clients";
 import { BrandMark, Wordmark } from "./components/BrandMark";
 import { CodexDrawer } from "./components/CodexDrawer";
 import { RuntimeBar } from "./components/RuntimeBar";
 import { SessionDrawer } from "./components/SessionDrawer";
 import { WhatsNew } from "./components/WhatsNew";
-import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, getTask, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
+import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, getTask, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
 import { IconClose, IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconWorkspaces } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { unlockAudio } from "./notify";
 import { DEFAULT_NOTIF_EVENTS, firedEvents, notifyEvent, resetFired, setNotifConfig } from "./notifications";
 import { isEmpty, isStale } from "./stale";
 import type { CodexSessionRecord, GroupRecord, RunEventMessage, RuntimeSnapshot, SessionRecord, SessionClient } from "./types";
+import { DailyView } from "./views/DailyView";
 import { FlowView } from "./views/FlowView";
 import { ReportsView } from "./views/ReportsView";
 import { SessionsView } from "./views/SessionsView";
@@ -22,7 +23,17 @@ import { TasksView } from "./views/TasksView";
 import { WorkspacesView } from "./views/WorkspacesView";
 import { workspaceOf } from "./wsmatch";
 
-type View = "sessions" | "flow" | "tasks" | "workspaces" | "reports" | "share" | "settings";
+type View = "sessions" | "daily" | "flow" | "tasks" | "workspaces" | "reports" | "share" | "settings";
+
+function IconDaily({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="5" width="18" height="15" rx="2" />
+      <path d="M3 9h18M8 3v4M16 3v4" />
+      <path d="m8.5 14 2 2 4-4" />
+    </svg>
+  );
+}
 
 interface Route {
   view: View;
@@ -31,6 +42,7 @@ interface Route {
 
 const VIEWS: { key: View; label: string; icon: ReactElement; subtitle: string }[] = [
   { key: "sessions", label: "Sessions", icon: <IconSessions />, subtitle: "Every Claude Code session on this machine, plus Codex threads" },
+  { key: "daily", label: "Daily", icon: <IconDaily />, subtitle: "Your day in the second brain: briefing, focus, meetings, sessions" },
   { key: "flow", label: "Flow", icon: <IconFlow />, subtitle: "Workspaces, sessions, subagents and delegated tasks as a live map" },
   { key: "tasks", label: "Delegated", icon: <IconTasks />, subtitle: "Work handed to the hub by agents: follow, steer, cancel" },
   { key: "workspaces", label: "Workspaces", icon: <IconWorkspaces />, subtitle: "The same registry your wk alias uses" },
@@ -117,6 +129,7 @@ export function App() {
   const notifRef = useRef(notifSettings);
   const runListeners = useRef(new Set<(event: RunEventMessage) => void>());
   const shareListeners = useRef(new Set<(event: ShareStreamEvent) => void>());
+  const dailyListeners = useRef(new Set<(event: DailyStreamEvent) => void>());
   const taskStatusRef = useRef(new Map<string, TaskStatus>());
 
   const navigate = useCallback((view: View, param?: string | null) => {
@@ -371,6 +384,9 @@ export function App() {
       onClaims: (list) => {
         if (mounted) setClaims(list);
       },
+      onDaily: (event) => {
+        for (const listener of dailyListeners.current) listener(event);
+      },
     });
     return () => {
       mounted = false;
@@ -396,6 +412,13 @@ export function App() {
     runListeners.current.add(listener);
     return () => {
       runListeners.current.delete(listener);
+    };
+  }, []);
+
+  const subscribeDaily = useCallback((listener: (event: DailyStreamEvent) => void) => {
+    dailyListeners.current.add(listener);
+    return () => {
+      dailyListeners.current.delete(listener);
     };
   }, []);
 
@@ -434,7 +457,7 @@ export function App() {
   const ok = useCallback((text: string) => pushToast("ok", text), [pushToast]);
   const fail = useCallback((text: string) => pushToast("error", text), [pushToast]);
 
-  const saveSettings = async (patch: Partial<DelegationSettings>) => {
+  const saveSettings = async (patch: SettingsPatch) => {
     try {
       setSettings(await updateSettings(patch));
       await loadHub();
@@ -479,7 +502,9 @@ export function App() {
     void reorderGroups(ids);
   };
 
-  const current = VIEWS.find((item) => item.key === route.view) ?? VIEWS[0]!;
+  const dailyEnabled = settings?.features.daily === true;
+  const effectiveView: View = route.view === "daily" && !dailyEnabled ? "sessions" : route.view;
+  const current = VIEWS.find((item) => item.key === effectiveView) ?? VIEWS[0]!;
   const drawerSession = drawer ? (sessions[drawer] ?? null) : null;
   const codexDrawerThread = codexDrawer ? (codexSessions.find((thread) => thread.id === codexDrawer) ?? null) : null;
   const headRef = useRef<HTMLElement | null>(null);
@@ -506,12 +531,12 @@ export function App() {
           </span>
         </div>
         <ul className="nav__list">
-          {VIEWS.map((item) => {
+          {VIEWS.filter((item) => item.key !== "daily" || dailyEnabled).map((item) => {
             const badge =
               item.key === "sessions" ? attention : item.key === "tasks" ? hubRunning + hubAttention : item.key === "reports" ? 0 : 0;
             return (
               <li key={item.key}>
-                <a className={`nav__item ${route.view === item.key ? "nav__item--on" : ""}`} href={`#/${item.key}`} title={item.label}>
+                <a className={`nav__item ${effectiveView === item.key ? "nav__item--on" : ""}`} href={`#/${item.key}`} title={item.label}>
                   <span className="nav__icon">{item.icon}</span>
                   <span className="nav__label">{item.label}</span>
                   {badge > 0 && <span className={`nav__badge ${item.key === "sessions" ? "nav__badge--attn" : ""}`}>{badge}</span>}
@@ -554,7 +579,7 @@ export function App() {
         </header>
 
         <div className="content">
-          {route.view === "sessions" && (
+          {effectiveView === "sessions" && (
             <SessionsView
               sessions={sessions}
               claims={claims}
@@ -583,7 +608,10 @@ export function App() {
               onDeleteCodex={(id) => void deleteCodexThread(id)}
             />
           )}
-          {route.view === "flow" && (
+          {effectiveView === "daily" && dailyEnabled && (
+            <DailyView settings={settings} onOpenSession={openSession} onOpenTask={(id) => navigate("tasks", id)} subscribeDaily={subscribeDaily} />
+          )}
+          {effectiveView === "flow" && (
             <FlowView
               sessions={sessions}
               codexSessions={codexSessions}
@@ -597,7 +625,7 @@ export function App() {
               onOpenWorkspace={(name) => void openWorkspace(name)}
             />
           )}
-          {route.view === "tasks" && (
+          {effectiveView === "tasks" && (
             <TasksView
               tasks={tasks}
               sessions={sessions}
@@ -612,7 +640,7 @@ export function App() {
               onError={fail}
             />
           )}
-          {route.view === "workspaces" && (
+          {effectiveView === "workspaces" && (
             <WorkspacesView
               workspaces={workspaces}
               settings={settings}
@@ -623,8 +651,8 @@ export function App() {
               onError={fail}
             />
           )}
-          {route.view === "reports" && <ReportsView reports={reports} enabled={hubEnabled} onOpenTask={(id) => navigate("tasks", id)} />}
-          {route.view === "share" && (
+          {effectiveView === "reports" && <ReportsView reports={reports} enabled={hubEnabled} onOpenTask={(id) => navigate("tasks", id)} />}
+          {effectiveView === "share" && (
             <ShareView
               enabled={hubEnabled}
               workspaces={workspaces}
@@ -641,7 +669,7 @@ export function App() {
               panelHost={slotEl}
             />
           )}
-          {route.view === "settings" && (
+          {effectiveView === "settings" && (
             <SettingsView
               enabled={hubEnabled}
               hubUrl={hubBase}
