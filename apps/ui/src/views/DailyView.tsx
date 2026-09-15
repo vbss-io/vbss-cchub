@@ -383,6 +383,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
   const [taskFilter, setTaskFilter] = useState<TaskFilter>(readStoredTaskFilter);
 
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardHydrated, setWizardHydrated] = useState(false);
   const [wizardStep, setWizardStep] = useState<WizardStep>(1);
   const [prepare, setPrepare] = useState<DailyPrepare | null>(null);
   const [prepareLoading, setPrepareLoading] = useState(false);
@@ -467,6 +468,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
       .then(setSessions)
       .catch(() => setSessions([]));
     setWizardOpen(false);
+    setWizardHydrated(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, date]);
 
@@ -577,9 +579,9 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
   }, [wizardOpen]);
 
   useEffect(() => {
-    if (!wizardOpen || !date) return;
+    if (!wizardOpen || !date || !wizardHydrated) return;
     writeDraft(date, { step: wizardStep, yesterdayDone, yesterdayCarry, yesterdayNotes, carriedItems, newItemsText, meetingsText });
-  }, [wizardOpen, date, wizardStep, yesterdayDone, yesterdayCarry, yesterdayNotes, carriedItems, newItemsText, meetingsText]);
+  }, [wizardOpen, date, wizardHydrated, wizardStep, yesterdayDone, yesterdayCarry, yesterdayNotes, carriedItems, newItemsText, meetingsText]);
 
   const reload = () => {
     if (!date) return;
@@ -632,29 +634,52 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
   const openWizard = () => {
     if (!date) return;
     setShowRefine(false);
+    setWizardHydrated(false);
     setWizardOpen(true);
     setPrepareError(null);
     setExistsConflict(null);
     setComposeError(null);
     setCloseError(null);
     setPrepareLoading(true);
+
+    // Restore first: a stored draft is applied synchronously, before prepare
+    // resolves and before the persist effect below can ever run, so it can
+    // never be clobbered by the initial empty state.
+    const draft = readDraft(date);
+    if (draft) {
+      setYesterdayDone(draft.yesterdayDone);
+      setYesterdayCarry(draft.yesterdayCarry);
+      setYesterdayNotes(draft.yesterdayNotes);
+      setCarriedItems(draft.carriedItems);
+      setNewItemsText(draft.newItemsText);
+      setMeetingsText(draft.meetingsText);
+      setWizardStep(draft.step);
+      setWizardHydrated(true);
+    } else {
+      setYesterdayDone({});
+      setYesterdayCarry({});
+      setYesterdayNotes("");
+      setCarriedItems([]);
+      setNewItemsText("");
+      setMeetingsText("");
+      setWizardStep(1);
+    }
+
     prepareDaily(date)
       .then((next) => {
         setPrepare(next);
-        const draft = readDraft(date);
-        const initialDone: Record<number, boolean> = {};
-        const initialCarry: Record<number, boolean> = {};
-        for (const task of next.yesterday?.tasks ?? []) {
-          initialDone[task.line] = task.checked;
-          initialCarry[task.line] = !task.checked;
+        if (!draft) {
+          const initialDone: Record<number, boolean> = {};
+          const initialCarry: Record<number, boolean> = {};
+          for (const task of next.yesterday?.tasks ?? []) {
+            initialDone[task.line] = task.checked;
+            initialCarry[task.line] = !task.checked;
+          }
+          setYesterdayDone(initialDone);
+          setYesterdayCarry(initialCarry);
+          setWizardStep(next.yesterday ? 1 : 2);
+          setWizardHydrated(true);
         }
-        setYesterdayDone(draft?.yesterdayDone ?? initialDone);
-        setYesterdayCarry(draft?.yesterdayCarry ?? initialCarry);
-        setYesterdayNotes(draft?.yesterdayNotes ?? "");
-        setCarriedItems(draft?.carriedItems ?? []);
-        setNewItemsText(draft?.newItemsText ?? "");
-        setMeetingsText(draft?.meetingsText ?? "");
-        setWizardStep(draft?.step ?? (next.yesterday ? 1 : 2));
       })
       .catch((err: unknown) => setPrepareError(err instanceof Error ? err.message : "could not load prepare"))
       .finally(() => setPrepareLoading(false));
@@ -662,11 +687,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
 
   const computeCarriedItems = (): DailyFocusDraftItem[] => {
     const tasks = prepare?.yesterday?.tasks ?? [];
-    const doneStatesForCarry: Record<number, boolean> = {};
-    for (const task of tasks) {
-      if (task.line in yesterdayCarry) doneStatesForCarry[task.line] = !yesterdayCarry[task.line];
-    }
-    return carryOverFromYesterday(tasks, doneStatesForCarry);
+    return carryOverFromYesterday(tasks, yesterdayDone, yesterdayCarry);
   };
 
   const skipYesterday = () => {
@@ -706,6 +727,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
       applyLoaded(nextEntry);
       setMode("preview");
       setWizardOpen(false);
+      setWizardHydrated(false);
       setExistsConflict(null);
       clearDraft(date);
       loadOverview();
@@ -847,8 +869,14 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
               onClose={() => setWizardOpen(false)}
               yesterdayDone={yesterdayDone}
               yesterdayCarry={yesterdayCarry}
-              onToggleDone={(line, value) => setYesterdayDone((prev) => ({ ...prev, [line]: value }))}
-              onToggleCarry={(line, value) => setYesterdayCarry((prev) => ({ ...prev, [line]: value }))}
+              onToggleDone={(line, value) => {
+                setYesterdayDone((prev) => ({ ...prev, [line]: value }));
+                if (value) setYesterdayCarry((prev) => ({ ...prev, [line]: false }));
+              }}
+              onToggleCarry={(line, value) => {
+                setYesterdayCarry((prev) => ({ ...prev, [line]: value }));
+                if (value) setYesterdayDone((prev) => ({ ...prev, [line]: false }));
+              }}
               yesterdayNotes={yesterdayNotes}
               onYesterdayNotesChange={setYesterdayNotes}
               onSkipYesterday={skipYesterday}

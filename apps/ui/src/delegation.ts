@@ -488,7 +488,7 @@ export interface DailyYesterdayTask {
   checked: boolean;
   text: string;
   raw: string;
-  block?: unknown;
+  block?: string;
 }
 
 export interface DailyYesterday {
@@ -515,7 +515,7 @@ export interface DailyCloseYesterdayInput {
 export interface DailyFocusItem {
   project: string | null;
   text: string;
-  block?: unknown;
+  block?: string;
 }
 
 export interface DailyComposeInput {
