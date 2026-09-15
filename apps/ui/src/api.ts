@@ -148,6 +148,7 @@ export const fetchClaims = (repoPath?: string): Promise<ClaimRecord[]> =>
 export const releaseClaim = (id: string): Promise<void> => send("DELETE", `/api/claims/${encodeURIComponent(id)}`);
 
 export interface HubEvents {
+  onOpen?: () => void;
   onSession: (session: SessionRecord) => void;
   onCodex?: (sessions: CodexSessionRecord[]) => void;
   onRemoved?: (sessionId: string) => void;
@@ -189,6 +190,7 @@ export const fetchSessionAsks = (sessionId: string): Promise<SessionAsks> => get
 export function subscribe(handlers: HubEvents): () => void {
   const source = new EventSource(`${base}/api/events`);
   const data = <T>(event: Event): T => JSON.parse((event as MessageEvent<string>).data) as T;
+  source.onopen = () => handlers.onOpen?.();
   source.addEventListener("session", (event) => handlers.onSession(data<SessionRecord>(event)));
   source.addEventListener("codex", (event) => handlers.onCodex?.(data<CodexSessionRecord[]>(event)));
   source.addEventListener("removed", (event) => handlers.onRemoved?.(data<{ sessionId: string }>(event).sessionId));

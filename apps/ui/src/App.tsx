@@ -270,16 +270,36 @@ export function App() {
       return;
     }
     let mounted = true;
-    void fetchSessions().then((list) => {
-      if (mounted) setSessions(Object.fromEntries(list.map((session) => [session.sessionId, session])));
-    });
-    void fetchGroups().then((list) => {
-      if (mounted) setGroups(list);
-    });
-    void fetchClaims().then((list) => {
-      if (mounted) setClaims(list);
-    });
+    const loadCore = () => {
+      void fetchSessions()
+        .then((list) => {
+          if (mounted) setSessions(Object.fromEntries(list.map((session) => [session.sessionId, session])));
+        })
+        .catch(() => undefined);
+      void fetchGroups()
+        .then((list) => {
+          if (mounted) setGroups(list);
+        })
+        .catch(() => undefined);
+      void fetchClaims()
+        .then((list) => {
+          if (mounted) setClaims(list);
+        })
+        .catch(() => undefined);
+    };
+    loadCore();
     const unsubscribe = subscribe({
+      onOpen: () => {
+        if (!mounted) return;
+        loadCore();
+        void loadHub();
+        void loadConnect();
+        void getHooks()
+          .then((next) => {
+            if (mounted) setHooksState(next);
+          })
+          .catch(() => undefined);
+      },
       onSession: (session) => {
         setSessions((prev) => {
           const before = prev[session.sessionId];
