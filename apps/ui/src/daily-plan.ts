@@ -3,7 +3,7 @@ import type { DailyYesterdayTask } from "./delegation";
 export interface DailyFocusDraftItem {
   project: string | null;
   text: string;
-  block?: unknown;
+  block?: string;
 }
 
 export function parseNewItems(text: string): DailyFocusDraftItem[] {
@@ -38,8 +38,12 @@ export function focusPreviewLines(items: DailyFocusDraftItem[], wikilinks: boole
 export function carryOverFromYesterday(
   tasks: DailyYesterdayTask[],
   doneStates: Record<number, boolean>,
+  carryStates: Record<number, boolean>,
 ): DailyFocusDraftItem[] {
   return tasks
-    .filter((task) => !(doneStates[task.line] ?? task.checked))
+    .filter((task) => {
+      if (task.line in carryStates) return carryStates[task.line] === true;
+      return !(doneStates[task.line] ?? task.checked);
+    })
     .map((task) => ({ project: null, text: task.text, block: task.block }));
 }
