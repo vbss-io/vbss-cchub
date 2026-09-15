@@ -276,8 +276,7 @@ describe("watcher", () => {
 
     events.length = 0;
     mkdirSync(join(root, "diario", "2026-08"), { recursive: true });
-    writeFileSync(join(root, "diario", "2026-08", "2026-08-20.md"), "# archived day
-");
+    writeFileSync(join(root, "diario", "2026-08", "2026-08-20.md"), "# archived day");
     await sleep(600);
     assert.equal(events.length, 1, "an external edit inside an archived month folder must broadcast");
     assert.equal(events[0]?.date, "2026-08-20");
