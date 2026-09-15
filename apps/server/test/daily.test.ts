@@ -274,6 +274,16 @@ describe("watcher", () => {
     await sleep(600);
     assert.equal(events.length, 0, "a non-daily-date filename must not produce a broadcast");
 
+    events.length = 0;
+    mkdirSync(join(root, "diario", "2026-08"), { recursive: true });
+    writeFileSync(join(root, "diario", "2026-08", "2026-08-20.md"), "# archived day
+");
+    await sleep(600);
+    assert.equal(events.length, 1, "an external edit inside an archived month folder must broadcast");
+    assert.equal(events[0]?.date, "2026-08-20");
+    assert.equal(events[0]?.source, "disk");
+    assert.equal(events[0]?.writeId, null);
+
     unsubscribe();
   });
 });

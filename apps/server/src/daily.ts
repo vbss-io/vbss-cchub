@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { listSessions } from "./db.js";
 import { BadRequestError, createInternalTask, startRun } from "./delegation-launch.js";
 import { activeDailyTask, getSettings } from "./delegation-store.js";
@@ -312,8 +312,8 @@ export function stopDailyWatch(): void {
 }
 
 function handleDailyFsEvent(dir: string, date: string): void {
-  const path = join(dir, `${date}.md`);
-  if (!existsSync(path)) return;
+  const path = findExistingDailyFile(dir, date);
+  if (!path) return;
   let content: string;
   let stat;
   try {
@@ -323,7 +323,7 @@ function handleDailyFsEvent(dir: string, date: string): void {
     return;
   }
   if (lastHubHash.get(path) === hashOf(content)) return;
-  broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "disk" });
+  broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "disk", writeId: null });
 }
 
 export function watchDaily(settings: DelegationSettings): void {
@@ -335,9 +335,9 @@ export function watchDaily(settings: DelegationSettings): void {
   if (currentWatchedDir === dir && currentWatcher) return;
   stopDailyWatch();
   try {
-    const watcher = watch(dir, (_event, filename) => {
+    const watcher = watch(dir, { recursive: true }, (_event, filename) => {
       if (!filename || !filename.endsWith(".md")) return;
-      const date = filename.slice(0, -3);
+      const date = basename(filename, ".md");
       if (!isValidDailyDate(date)) return;
       const existingTimer = debounceTimers.get(date);
       if (existingTimer) clearTimeout(existingTimer);
