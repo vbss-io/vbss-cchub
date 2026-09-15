@@ -102,6 +102,7 @@ for (const [name, type] of [
   ["base_branch", "TEXT"],
   ["merged_at", "INTEGER"],
   ["port_base", "INTEGER"],
+  ["daily_date", "TEXT"],
 ] as const) {
   if (!hubTaskColumns.has(name)) db.exec(`ALTER TABLE hub_tasks ADD COLUMN ${name} ${type}`);
 }
@@ -134,6 +135,7 @@ interface TaskRow {
   base_branch: string | null;
   merged_at: number | null;
   port_base: number | null;
+  daily_date: string | null;
   created_at: number;
   updated_at: number;
   last_error: string | null;
@@ -215,6 +217,7 @@ const toTask = (row: TaskRow): TaskRecord => ({
   baseBranch: row.base_branch,
   mergedAt: row.merged_at,
   portBase: row.port_base,
+  dailyDate: row.daily_date,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -288,6 +291,15 @@ export function getSettings(): DelegationSettings {
     autonomy: stored.get("autonomy") === "safe" ? "safe" : "full",
     ownerName: stored.get("ownerName") ?? defaultOwnerName(),
     runTimeoutMinutes: storedTimeout != null ? clampRunTimeout(Number(storedTimeout)) : RUN_TIMEOUT_DEFAULT,
+    features: {
+      daily: stored.get("features.daily") === "1",
+    },
+    daily: {
+      dir: stored.get("daily.dir") ?? null,
+      template: stored.get("daily.template") ?? null,
+      prompt: stored.get("daily.prompt") ?? null,
+      runner: stored.get("daily.runner") === "codex" ? "codex" : "claude",
+    },
   };
 }
 
@@ -300,7 +312,18 @@ export function setSetting(key: string, value: string | null): void {
   upsertSettingStmt.run(key, value);
 }
 
-export function updateSettings(patch: Partial<DelegationSettings>): DelegationSettings {
+export interface UpdateSettingsInput {
+  workspacesRoot?: string | null;
+  editorCommand?: string;
+  secondBrainRoot?: string | null;
+  autonomy?: DelegationSettings["autonomy"];
+  ownerName?: string;
+  runTimeoutMinutes?: number;
+  features?: Partial<DelegationSettings["features"]>;
+  daily?: Partial<DelegationSettings["daily"]>;
+}
+
+export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
   const apply = db.transaction(() => {
     if (patch.workspacesRoot !== undefined) upsertSettingStmt.run("workspacesRoot", patch.workspacesRoot);
     if (patch.editorCommand !== undefined) upsertSettingStmt.run("editorCommand", patch.editorCommand);
@@ -310,6 +333,11 @@ export function updateSettings(patch: Partial<DelegationSettings>): DelegationSe
     if (patch.runTimeoutMinutes !== undefined) {
       upsertSettingStmt.run("runTimeoutMinutes", String(clampRunTimeout(patch.runTimeoutMinutes)));
     }
+    if (patch.features?.daily !== undefined) upsertSettingStmt.run("features.daily", patch.features.daily ? "1" : "0");
+    if (patch.daily?.dir !== undefined) upsertSettingStmt.run("daily.dir", patch.daily.dir);
+    if (patch.daily?.template !== undefined) upsertSettingStmt.run("daily.template", patch.daily.template);
+    if (patch.daily?.prompt !== undefined) upsertSettingStmt.run("daily.prompt", patch.daily.prompt);
+    if (patch.daily?.runner !== undefined) upsertSettingStmt.run("daily.runner", patch.daily.runner);
   });
   apply();
   return getSettings();
@@ -324,9 +352,9 @@ const TASK_SELECT = `
 
 const insertTaskStmt = db.prepare(`
   INSERT INTO hub_tasks
-    (id, title, prompt, workspace, repo, cwd, add_dirs, runner, requested_model, permission_mode, sandbox, status, created_by, origin_session_id, origin_client, isolation, isolation_reason, worktree_path, branch, base_branch, port_base, created_at, updated_at)
+    (id, title, prompt, workspace, repo, cwd, add_dirs, runner, requested_model, permission_mode, sandbox, status, created_by, origin_session_id, origin_client, isolation, isolation_reason, worktree_path, branch, base_branch, port_base, daily_date, created_at, updated_at)
   VALUES
-    (@id, @title, @prompt, @workspace, @repo, @cwd, @addDirs, @runner, @requestedModel, @permissionMode, @sandbox, @status, @createdBy, @originSessionId, @originClient, @isolation, @isolationReason, @worktreePath, @branch, @baseBranch, @portBase, @now, @now)
+    (@id, @title, @prompt, @workspace, @repo, @cwd, @addDirs, @runner, @requestedModel, @permissionMode, @sandbox, @status, @createdBy, @originSessionId, @originClient, @isolation, @isolationReason, @worktreePath, @branch, @baseBranch, @portBase, @dailyDate, @now, @now)
 `);
 const getTaskStmt = db.prepare(`${TASK_SELECT} WHERE t.id = ?`);
 const listTasksStmt = db.prepare(`${TASK_SELECT} ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`);
@@ -342,6 +370,12 @@ const listTasksByStatusActiveStmt = db.prepare(
 const taskIdsByPrefixStmt = db.prepare(`SELECT id FROM hub_tasks WHERE id LIKE ? ESCAPE '\\' LIMIT 2`);
 const listTasksByOriginStmt = db.prepare(
   `${TASK_SELECT} WHERE t.origin_session_id = ? ORDER BY t.updated_at DESC, t.rowid DESC LIMIT ?`,
+);
+const activeDailyByDateStmt = db.prepare(
+  `${TASK_SELECT} WHERE t.daily_date = ? AND t.status IN ('running', 'pending') ORDER BY t.updated_at DESC, t.rowid DESC LIMIT 1`,
+);
+const activeDailyAnyStmt = db.prepare(
+  `${TASK_SELECT} WHERE t.daily_date IS NOT NULL AND t.status IN ('running', 'pending') ORDER BY t.updated_at DESC, t.rowid DESC LIMIT 1`,
 );
 const listRunsStmt = db.prepare(`SELECT * FROM hub_runs WHERE task_id = ? ORDER BY seq`);
 const getRunStmt = db.prepare(`SELECT * FROM hub_runs WHERE id = ?`);
@@ -417,6 +451,7 @@ export function createTask(input: {
   branch?: string | null;
   baseBranch?: string | null;
   portBase?: number | null;
+  dailyDate?: string | null;
 }): TaskRecord {
   const id = input.id ?? randomUUID();
   insertTaskStmt.run({
@@ -441,6 +476,7 @@ export function createTask(input: {
     branch: input.branch ?? null,
     baseBranch: input.baseBranch ?? null,
     portBase: input.portBase ?? null,
+    dailyDate: input.dailyDate ?? null,
     now: Date.now(),
   });
   return toTask(getTaskStmt.get(id) as TaskRow);
@@ -507,6 +543,11 @@ export function resolveTaskId(idOrPrefix: string): string | null {
 
 export function listTasksByOrigin(originSessionId: string, limit = 100): TaskRecord[] {
   return (listTasksByOriginStmt.all(originSessionId, Math.min(Math.max(limit, 1), 500)) as TaskRow[]).map(toTask);
+}
+
+export function activeDailyTask(date?: string): TaskRecord | null {
+  const row = date ? (activeDailyByDateStmt.get(date) as TaskRow | undefined) : (activeDailyAnyStmt.get() as TaskRow | undefined);
+  return row ? toTask(row) : null;
 }
 
 export function getTaskDetail(id: string): TaskDetail | null {

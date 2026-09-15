@@ -261,6 +261,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
       });
       const summary = outcome.status === "completed" ? (outcome.result ?? "").slice(0, 160) : (outcome.error ?? "");
       brainNote(`task ${outcome.status} · ${task.workspace} · ${task.title} (${task.runner}) — ${summary}`);
+      if (task.dailyDate) broadcast("daily", { date: task.dailyDate, updatedAt: Date.now(), source: "hub" });
       endRunSession(outcome.sessionId ?? run.sessionId, `run ${outcome.status}`);
       if (fromShare) {
         const ok = outcome.status === "completed" || outcome.status === "attention";
@@ -285,6 +286,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
       } catch (storeErr) {
         console.error(`run ${run.id} could not be finalized: ${String(storeErr)}`);
       }
+      if (task.dailyDate) broadcast("daily", { date: task.dailyDate, updatedAt: Date.now(), source: "hub" });
       endRunSession(run.sessionId, "run failed");
       if (fromShare) finishShareRequestByTask({ taskId: task.id, status: "failed", error: message, sessionId: null });
     })
@@ -294,6 +296,44 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
       activeRuns.delete(task.id);
       broadcast("delegation", { taskId: task.id });
     });
+}
+
+export interface InternalTaskInput {
+  title: string;
+  prompt: string;
+  workspace: string;
+  cwd: string;
+  addDirs: string[];
+  runner: Runner;
+  createdBy: string;
+  dailyDate?: string | null;
+}
+
+export function createInternalTask(input: InternalTaskInput): TaskRecord {
+  const activeTasks = listTasks({ limit: 500, includeArchived: true }).filter(
+    (existing) => existing.status === "running" || existing.status === "pending",
+  );
+  const usedPortBases = activeTasks.map((existing) => existing.portBase).filter((base): base is number => base != null);
+  const portBase = allocatePortBase(usedPortBases);
+  return createTask({
+    id: randomUUID(),
+    title: input.title,
+    prompt: input.prompt,
+    workspace: input.workspace,
+    repo: null,
+    cwd: input.cwd,
+    addDirs: input.addDirs,
+    runner: input.runner,
+    model: null,
+    permissionMode: null,
+    sandbox: null,
+    createdBy: input.createdBy,
+    originSessionId: null,
+    originClient: null,
+    isolation: "shared",
+    portBase,
+    dailyDate: input.dailyDate ?? null,
+  });
 }
 
 export interface DelegateInput {

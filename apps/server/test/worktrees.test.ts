@@ -52,6 +52,7 @@ function makeTask(over: Partial<TaskRecord>): TaskRecord {
     baseBranch: null,
     mergedAt: null,
     portBase: null,
+    dailyDate: null,
     createdAt: 0,
     updatedAt: 0,
     ...over,

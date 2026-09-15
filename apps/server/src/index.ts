@@ -43,7 +43,8 @@ import { runtimeSnapshot } from "./runtimes.js";
 import { ensureExtension } from "./ensure-extension.js";
 import { abortActiveRuns, delegationRouter } from "./delegation-routes.js";
 import { resolveWorkspaceTarget } from "./delegation-launch.js";
-import { markRunningAsInterrupted } from "./delegation-store.js";
+import { getSettings, markRunningAsInterrupted } from "./delegation-store.js";
+import { watchDaily } from "./daily.js";
 import { createShareApp } from "./share-server.js";
 import { deleteOrphanShareForks, limitOf, listAsksForSession, listForksForSession, markInterruptedShareRequests } from "./share-store.js";
 import { markShareEndpoint, stopTunnel } from "./tunnel.js";
@@ -531,6 +532,8 @@ app.listen(config.port, config.host, () => {
     const interrupted = markRunningAsInterrupted();
     if (interrupted > 0) console.log(`marked ${interrupted} delegation runs interrupted on restart`);
     console.log("delegation enabled (loopback callers only)");
+    const settings = getSettings();
+    if (settings.features.daily && settings.secondBrainRoot) watchDaily(settings);
   }
 });
 

@@ -304,6 +304,7 @@ Base: `http://127.0.0.1:<HUB_PORT>/delegation`
 | `POST /tasks/:id/continue` | `{ prompt, model?, permissionMode? }` | Resume the same session |
 | `POST /tasks/:id/cancel` | — | Abort; `202` |
 | `GET /reports?taskId=&limit=`, `POST /reports` | `{ text, kind?, taskId?, sessionId?, workspace?, source? }` | Reports |
+| `GET /daily`, `GET /daily/sessions?date=`, `GET /daily/:date`, `PUT /daily/:date`, `POST /daily/:date/generate` | see below | Daily diary |
 
 Also on the open API: `GET /api/runtimes`, `GET /api/codex/sessions`,
 `GET /api/sessions/:id/agents`, `GET /api/sessions/:id/live`. SSE events on `/api/events`:
@@ -312,6 +313,20 @@ Also on the open API: `GET /api/runtimes`, `GET /api/codex/sessions`,
 Statuses: `pending`, `running`, `completed`, `attention` (finished but a tool permission was
 auto-denied), `failed`, `interrupted` (hub restarted mid-run) and `cancelled`. A task whose launch
 never produced a session is relaunched with a fresh one on the next `continue`.
+
+## Daily
+
+Optional (`settings.features.daily`, off by default). Generates and edits a diary markdown file in
+the linked second brain (`settings.secondBrainRoot`) from the hub. Settings: `daily.dir` (default
+`<root>/diario`), `daily.template` (default `<root>/_templates/diario.md` when present),
+`daily.prompt` (default `DEFAULT_DAILY_PROMPT`) and `daily.runner` (`claude`/`codex`).
+Routes: `GET /daily` (state, dates, running task), `GET /daily/sessions?date=`, `GET|PUT
+/daily/:date` (`PUT` body `{ content, baseUpdatedAt? }`, `409 { error, content, updatedAt }` on a
+conflicting external edit), `POST /daily/:date/generate` (`{ focus? }`, `409` when already
+running) launches a headless run with `cwd` set to the vault root.
+Prompt placeholders: `{{date}}`, `{{file}}`, `{{root}}`, `{{template}}`, `{{focus}}`,
+`{{sessions}}`, `{{yesterday}}`. A watcher on `daily.dir` broadcasts SSE `daily { date, updatedAt,
+source: "hub" | "disk" }`, ignoring echoes of the hub's own writes, and restarts on settings change.
 
 ## Thin CLI
 
