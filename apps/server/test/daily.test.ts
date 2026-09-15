@@ -92,11 +92,49 @@ describe("dailyFile resolution", () => {
     assert.equal(daily.dailyFile(settings, "2026-09-20"), join(root, "custom-daily", "2026-09-20.md"));
   });
 
+  it("resolves an archived diary nested one level under a non-month-named subfolder", () => {
+    mkdirSync(join(root, "diario", "misc"), { recursive: true });
+    writeFileSync(join(root, "diario", "misc", "2026-07-04.md"), "# nested");
+    assert.equal(daily.dailyFile(fixtureSettings(root), "2026-07-04"), join(root, "diario", "misc", "2026-07-04.md"));
+  });
+
   it("resolves the template path with the built-in fallback", () => {
     assert.equal(daily.dailyTemplatePath(fixtureSettings(root)), null);
     mkdirSync(join(root, "_templates"), { recursive: true });
     writeFileSync(join(root, "_templates", "diario.md"), "# {{date}}");
     assert.equal(daily.dailyTemplatePath(fixtureSettings(root)), join(root, "_templates", "diario.md"));
+  });
+});
+
+describe("custom daily.dir (journal) resolution", () => {
+  const root = mkdtempSync(join(tmpdir(), "cch-daily-journal-"));
+  const settings = fixtureSettings(root, { daily: { dir: "journal", template: null, prompt: null, runner: "claude" } });
+
+  before(() => {
+    mkdirSync(join(root, "journal", "2026-08"), { recursive: true });
+    writeFileSync(join(root, "journal", "2026-08", "2026-08-30.md"), "# archived in journal");
+    writeFileSync(join(root, "journal", "2026-09-01.md"), "# journal today");
+  });
+
+  after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+
+  it("reads an existing diary from inside journal/", () => {
+    assert.equal(daily.dailyFile(settings, "2026-09-01"), join(root, "journal", "2026-09-01.md"));
+    const read = daily.readDaily(settings, "2026-09-01");
+    assert.equal(read.exists, true);
+    assert.equal(read.content, "# journal today");
+  });
+
+  it("resolves an archived diary nested one level inside journal/", () => {
+    assert.equal(daily.dailyFile(settings, "2026-08-30"), join(root, "journal", "2026-08", "2026-08-30.md"));
+  });
+
+  it("lists dates scanning journal/ and its immediate subfolders", () => {
+    assert.deepEqual(daily.listDiaryDates(settings), ["2026-09-01", "2026-08-30"]);
+  });
+
+  it("finds yesterday inside journal/", () => {
+    assert.equal(daily.findYesterday(settings, "2026-09-15"), "2026-09-01");
   });
 });
 
@@ -129,9 +167,10 @@ describe("template and prompt rendering", () => {
     mkdirSync(join(root, "diario", "2026-08"), { recursive: true });
     writeFileSync(join(root, "diario", "2026-08", "2026-08-30.md"), "#");
     writeFileSync(join(root, "diario", "2026-09-01.md"), "#");
-    assert.equal(daily.findYesterday(root, "2026-09-15"), "2026-09-01");
-    assert.equal(daily.findYesterday(root, "2026-08-31"), "2026-08-30");
-    assert.equal(daily.findYesterday(root, "2020-01-01"), null);
+    const settings = fixtureSettings(root);
+    assert.equal(daily.findYesterday(settings, "2026-09-15"), "2026-09-01");
+    assert.equal(daily.findYesterday(settings, "2026-08-31"), "2026-08-30");
+    assert.equal(daily.findYesterday(settings, "2020-01-01"), null);
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 });
@@ -203,9 +242,9 @@ describe("watcher", () => {
 
   it("broadcasts a disk-sourced daily event for an external write and suppresses echoes of the hub's own write", async () => {
     const settings = fixtureSettings(root);
-    const events: { date: string; updatedAt: number; source: string }[] = [];
+    const events: { date: string; updatedAt: number; source: string; writeId?: string | null }[] = [];
     const unsubscribe = sse.onBroadcast((event, data) => {
-      if (event === "daily") events.push(data as { date: string; updatedAt: number; source: string });
+      if (event === "daily") events.push(data as { date: string; updatedAt: number; source: string; writeId?: string | null });
     });
 
     daily.watchDaily(settings);
@@ -219,9 +258,21 @@ describe("watcher", () => {
     daily.writeDaily(settings, "2026-09-02", "written by hub");
     assert.equal(events.length, 1);
     assert.equal(events[0]?.source, "hub");
-
+    assert.equal(events[0]?.writeId, null);
     await sleep(600);
     assert.equal(events.length, 1, "echo of the hub's own write must not produce a second disk-sourced broadcast");
+
+    events.length = 0;
+    daily.writeDaily(settings, "2026-09-03", "written by hub with id", undefined, "client-write-1");
+    assert.equal(events.length, 1);
+    assert.equal(events[0]?.writeId, "client-write-1");
+    await sleep(600);
+    assert.equal(events.length, 1, "echo of a writeId'd hub write must not produce a second broadcast");
+
+    events.length = 0;
+    writeFileSync(join(root, "diario", "notes.md"), "not a daily date");
+    await sleep(600);
+    assert.equal(events.length, 0, "a non-daily-date filename must not produce a broadcast");
 
     unsubscribe();
   });
@@ -262,7 +313,7 @@ describe("daily HTTP routes", () => {
 
   it("rejects a malformed date on every daily route", async () => {
     assert.equal((await http("GET", "/delegation/daily/not-a-date")).status, 400);
-    assert.equal((await http("PUT", "/delegation/daily/2026-13-40", { content: "x" })).status, 400);
+    assert.equal((await http("PUT", "/delegation/daily/not-a-date", { content: "x" })).status, 400);
     assert.equal((await http("POST", "/delegation/daily/nope/generate", {})).status, 400);
   });
 
@@ -290,6 +341,21 @@ describe("daily HTTP routes", () => {
     assert.equal(read.status, 200);
     assert.equal((read.json as { content: string }).content, "# hi\n");
     assert.equal((read.json as { exists: boolean }).exists, true);
+  });
+
+  it("rejects calendar-invalid dates with a real root linked, and creates no file", async () => {
+    for (const date of ["2026-13-40", "9999-99-99"]) {
+      const get = await http("GET", `/delegation/daily/${date}`);
+      assert.equal(get.status, 400);
+      assert.deepEqual(get.json, { error: "date must be a valid YYYY-MM-DD" });
+
+      const put = await http("PUT", `/delegation/daily/${date}`, { content: "should not persist" });
+      assert.equal(put.status, 400);
+      assert.deepEqual(put.json, { error: "date must be a valid YYYY-MM-DD" });
+
+      assert.equal(existsSync(join(box.brain, "diario", `${date}.md`)), false);
+      assert.equal(existsSync(join(box.brain, "diario", `${date.slice(0, 7)}`, `${date}.md`)), false);
+    }
   });
 
   it("returns 400 for a malformed sessions date query", async () => {

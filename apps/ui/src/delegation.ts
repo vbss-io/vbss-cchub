@@ -471,12 +471,13 @@ export const getDailyEntry = (date: string): Promise<DailyEntry> => call("GET", 
 export async function saveDailyEntry(
   date: string,
   content: string,
-  baseUpdatedAt?: number | null,
+  baseUpdatedAt: number | null | undefined,
+  writeId: string,
 ): Promise<{ date: string; path: string; updatedAt: number }> {
   const res = await fetch(`${base}/daily/${encodeURIComponent(date)}`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(baseUpdatedAt === undefined ? { content } : { content, baseUpdatedAt }),
+    body: JSON.stringify(baseUpdatedAt === undefined ? { content, writeId } : { content, baseUpdatedAt, writeId }),
   });
   const text = await res.text();
   const json: unknown = text.length > 0 ? JSON.parse(text) : null;

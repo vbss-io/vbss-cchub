@@ -325,8 +325,10 @@ Routes: `GET /daily` (state, dates, running task), `GET /daily/sessions?date=`, 
 conflicting external edit), `POST /daily/:date/generate` (`{ focus? }`, `409` when already
 running) launches a headless run with `cwd` set to the vault root.
 Prompt placeholders: `{{date}}`, `{{file}}`, `{{root}}`, `{{template}}`, `{{focus}}`,
-`{{sessions}}`, `{{yesterday}}`. A watcher on `daily.dir` broadcasts SSE `daily { date, updatedAt,
-source: "hub" | "disk" }`, ignoring echoes of the hub's own writes, and restarts on settings change.
+`{{sessions}}`, `{{yesterday}}`. `PUT /daily/:date` also accepts an optional `writeId` (≤ 64 chars)
+echoed back on its own broadcast. A watcher on `daily.dir` broadcasts SSE `daily { date, updatedAt,
+source: "hub" | "disk", writeId: string | null }`, ignoring echoes of the hub's own writes, and
+restarts on settings change.
 
 ## Thin CLI
 

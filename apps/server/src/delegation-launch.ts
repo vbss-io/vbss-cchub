@@ -261,7 +261,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
       });
       const summary = outcome.status === "completed" ? (outcome.result ?? "").slice(0, 160) : (outcome.error ?? "");
       brainNote(`task ${outcome.status} · ${task.workspace} · ${task.title} (${task.runner}) — ${summary}`);
-      if (task.dailyDate) broadcast("daily", { date: task.dailyDate, updatedAt: Date.now(), source: "hub" });
+      if (task.dailyDate) broadcast("daily", { date: task.dailyDate, updatedAt: Date.now(), source: "hub", writeId: null });
       endRunSession(outcome.sessionId ?? run.sessionId, `run ${outcome.status}`);
       if (fromShare) {
         const ok = outcome.status === "completed" || outcome.status === "attention";
@@ -286,7 +286,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
       } catch (storeErr) {
         console.error(`run ${run.id} could not be finalized: ${String(storeErr)}`);
       }
-      if (task.dailyDate) broadcast("daily", { date: task.dailyDate, updatedAt: Date.now(), source: "hub" });
+      if (task.dailyDate) broadcast("daily", { date: task.dailyDate, updatedAt: Date.now(), source: "hub", writeId: null });
       endRunSession(run.sessionId, "run failed");
       if (fromShare) finishShareRequestByTask({ taskId: task.id, status: "failed", error: message, sessionId: null });
     })

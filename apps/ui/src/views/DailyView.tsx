@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { DailyStreamEvent } from "../api";
+import { decideDailyEvent, generateWriteId, rememberWriteId } from "../daily-sync";
 import {
   DailyConflictError,
   generateDaily,
@@ -70,8 +71,17 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [generateBusy, setGenerateBusy] = useState(false);
 
+  const ownWriteIdsRef = useRef<Set<string>>(new Set());
+  const ownWriteOrderRef = useRef<string[]>([]);
+  const pendingEventRef = useRef<DailyStreamEvent | null>(null);
+  const textRef = useRef(text);
+
   const enabled = settings?.features.daily === true;
   const dirty = text !== savedText;
+
+  useEffect(() => {
+    textRef.current = text;
+  }, [text]);
 
   const loadOverview = () => {
     getDaily()
@@ -110,6 +120,12 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
       .finally(() => setEntryLoading(false));
   };
 
+  const refreshSessions = (target: string) => {
+    void listDailySessions(target)
+      .then(setSessions)
+      .catch(() => undefined);
+  };
+
   useEffect(() => {
     if (!enabled || !date) return;
     void loadEntry(date);
@@ -121,19 +137,59 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
 
   useEffect(() => {
     if (!enabled || !date) return;
-    const id = window.setInterval(() => {
-      void listDailySessions(date)
-        .then(setSessions)
-        .catch(() => undefined);
-    }, 30_000);
+    const id = window.setInterval(() => refreshSessions(date), 30_000);
     return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, date]);
 
-  const save = async (next: string) => {
+  useEffect(() => {
+    if (!enabled || !date) return;
+    const onFocusChange = () => {
+      if (document.visibilityState === "visible") refreshSessions(date);
+    };
+    window.addEventListener("focus", onFocusChange);
+    document.addEventListener("visibilitychange", onFocusChange);
+    return () => {
+      window.removeEventListener("focus", onFocusChange);
+      document.removeEventListener("visibilitychange", onFocusChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, date]);
+
+  const resolvePendingEvent = (settledText: string) => {
+    const pending = pendingEventRef.current;
+    if (!pending) return;
+    pendingEventRef.current = null;
+    applyDailyDecision(
+      pending,
+      decideDailyEvent(pending, { ownWriteIds: ownWriteIdsRef.current, dirty: textRef.current !== settledText, saving: false }),
+    );
+  };
+
+  const applyDailyDecision = (event: DailyStreamEvent, decision: ReturnType<typeof decideDailyEvent>) => {
+    if (decision === "ignore") {
+      if (event.updatedAt !== null) setBaseUpdatedAt(event.updatedAt);
+      return;
+    }
+    if (decision === "defer") {
+      pendingEventRef.current = event;
+      return;
+    }
+    if (decision === "reload") {
+      void loadEntry(event.date);
+      return;
+    }
+    setConflict({ content: null, updatedAt: event.updatedAt });
+  };
+
+  const save = async (next: string, overrideBase?: number | null) => {
     if (!date) return;
+    const base = overrideBase !== undefined ? overrideBase : baseUpdatedAt;
+    const writeId = generateWriteId();
+    rememberWriteId(ownWriteIdsRef.current, ownWriteOrderRef.current, writeId);
     setSaveStatus("saving");
     try {
-      const result = await saveDailyEntry(date, next, baseUpdatedAt);
+      const result = await saveDailyEntry(date, next, base, writeId);
       setSavedText(next);
       setBaseUpdatedAt(result.updatedAt);
       setEntry((current) => (current ? { ...current, exists: true, content: next, updatedAt: result.updatedAt, path: result.path } : current));
@@ -143,10 +199,14 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
       if (err instanceof DailyConflictError) {
         setConflict({ content: err.content, updatedAt: err.updatedAt });
         setSaveStatus("unsaved");
+        pendingEventRef.current = null;
         return;
       }
       setSaveStatus("unsaved");
+      resolvePendingEvent(next);
+      return;
     }
+    resolvePendingEvent(next);
   };
 
   useEffect(() => {
@@ -160,15 +220,17 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
     if (!enabled) return;
     return subscribeDaily((event) => {
       loadOverview();
+      if (event.date === date) refreshSessions(event.date);
       if (event.date !== date) return;
-      if (!dirty) {
-        void loadEntry(event.date);
-        return;
-      }
-      setConflict({ content: null, updatedAt: event.updatedAt });
+      const decision = decideDailyEvent(event, {
+        ownWriteIds: ownWriteIdsRef.current,
+        dirty,
+        saving: saveStatus === "saving",
+      });
+      applyDailyDecision(event, decision);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, date, dirty]);
+  }, [enabled, date, dirty, saveStatus]);
 
   const reload = () => {
     if (!date) return;
@@ -180,8 +242,10 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
   };
 
   const keepMine = () => {
-    if (conflict) setBaseUpdatedAt(conflict.updatedAt);
+    if (!conflict) return;
+    const freshBase = conflict.updatedAt;
     setConflict(null);
+    void save(text, freshBase);
   };
 
   const handleToggle = (lineIndex: number, checked: boolean) => {
@@ -230,7 +294,20 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
     );
   }
 
-  if (overviewFailed === "error" || !overview || !date) {
+  if (overviewFailed === "error") {
+    return (
+      <div className="view">
+        <div className="daily__banner">
+          <span>Could not load Daily.</span>
+          <button className="act" onClick={loadOverview}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!overview || !date) {
     return (
       <div className="view">
         <p className="muted">Loading…</p>
@@ -349,14 +426,20 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
           {sessions.length === 0 && <p className="muted small">none yet</p>}
           {sessions.length > 0 && (
             <ul className="plainlist">
-              {sessions.map((session) => (
-                <li key={session.sessionId}>
-                  <button className="linklike" onClick={() => onOpenSession(session.sessionId)}>
-                    {session.title ?? session.sessionId.slice(0, 8)}
-                  </button>{" "}
-                  {session.client && <span className="chip">{session.client}</span>} <span className="chip">{session.status}</span>
-                </li>
-              ))}
+              {sessions.map((session) => {
+                const title = session.title ?? session.sessionId.slice(0, 8);
+                return (
+                  <li key={session.sessionId} className="daily__session-row">
+                    <button className="linklike daily__session-title" title={title} onClick={() => onOpenSession(session.sessionId)}>
+                      {title}
+                    </button>
+                    <span className="daily__session-chips">
+                      {session.client && <span className="chip">{session.client}</span>}
+                      <span className="chip">{session.status}</span>
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
