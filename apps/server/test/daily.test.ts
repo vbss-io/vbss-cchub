@@ -68,23 +68,23 @@ describe("dailyFile resolution", () => {
   const root = mkdtempSync(join(tmpdir(), "cch-daily-file-"));
 
   before(() => {
-    mkdirSync(join(root, "diario", "2026-08"), { recursive: true });
-    writeFileSync(join(root, "diario", "2026-08", "2026-08-27.md"), "# archived");
-    writeFileSync(join(root, "diario", "2026-09-15.md"), "# today");
+    mkdirSync(join(root, "daily", "2026-08"), { recursive: true });
+    writeFileSync(join(root, "daily", "2026-08", "2026-08-27.md"), "# archived");
+    writeFileSync(join(root, "daily", "2026-09-15.md"), "# today");
   });
 
   after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
 
   it("resolves an existing root-level diary", () => {
-    assert.equal(daily.dailyFile(fixtureSettings(root), "2026-09-15"), join(root, "diario", "2026-09-15.md"));
+    assert.equal(daily.dailyFile(fixtureSettings(root), "2026-09-15"), join(root, "daily", "2026-09-15.md"));
   });
 
   it("resolves an archived diary through the recursive lookup", () => {
-    assert.equal(daily.dailyFile(fixtureSettings(root), "2026-08-27"), join(root, "diario", "2026-08", "2026-08-27.md"));
+    assert.equal(daily.dailyFile(fixtureSettings(root), "2026-08-27"), join(root, "daily", "2026-08", "2026-08-27.md"));
   });
 
   it("falls back to the daily dir for a date with no diary yet", () => {
-    assert.equal(daily.dailyFile(fixtureSettings(root), "2026-09-20"), join(root, "diario", "2026-09-20.md"));
+    assert.equal(daily.dailyFile(fixtureSettings(root), "2026-09-20"), join(root, "daily", "2026-09-20.md"));
   });
 
   it("honors a custom daily.dir, relative to root", () => {
@@ -93,16 +93,16 @@ describe("dailyFile resolution", () => {
   });
 
   it("resolves an archived diary nested one level under a non-month-named subfolder", () => {
-    mkdirSync(join(root, "diario", "misc"), { recursive: true });
-    writeFileSync(join(root, "diario", "misc", "2026-07-04.md"), "# nested");
-    assert.equal(daily.dailyFile(fixtureSettings(root), "2026-07-04"), join(root, "diario", "misc", "2026-07-04.md"));
+    mkdirSync(join(root, "daily", "misc"), { recursive: true });
+    writeFileSync(join(root, "daily", "misc", "2026-07-04.md"), "# nested");
+    assert.equal(daily.dailyFile(fixtureSettings(root), "2026-07-04"), join(root, "daily", "misc", "2026-07-04.md"));
   });
 
   it("resolves the template path with the built-in fallback", () => {
     assert.equal(daily.dailyTemplatePath(fixtureSettings(root)), null);
     mkdirSync(join(root, "_templates"), { recursive: true });
-    writeFileSync(join(root, "_templates", "diario.md"), "# {{date}}");
-    assert.equal(daily.dailyTemplatePath(fixtureSettings(root)), join(root, "_templates", "diario.md"));
+    writeFileSync(join(root, "_templates", "daily.md"), "# {{date}}");
+    assert.equal(daily.dailyTemplatePath(fixtureSettings(root)), join(root, "_templates", "daily.md"));
   });
 });
 
@@ -149,7 +149,7 @@ describe("template and prompt rendering", () => {
   it("renders every placeholder of the default prompt", () => {
     const rendered = daily.renderDailyPrompt(daily.DEFAULT_DAILY_PROMPT, {
       date: "2026-09-15",
-      file: "/vault/diario/2026-09-15.md",
+      file: "/vault/daily/2026-09-15.md",
       root: "/vault",
       template: "none",
       focus: "ship the daily tab",
@@ -164,9 +164,9 @@ describe("template and prompt rendering", () => {
 
   it("finds the most recent diary before a date through the recursive lookup", () => {
     const root = mkdtempSync(join(tmpdir(), "cch-daily-yday-"));
-    mkdirSync(join(root, "diario", "2026-08"), { recursive: true });
-    writeFileSync(join(root, "diario", "2026-08", "2026-08-30.md"), "#");
-    writeFileSync(join(root, "diario", "2026-09-01.md"), "#");
+    mkdirSync(join(root, "daily", "2026-08"), { recursive: true });
+    writeFileSync(join(root, "daily", "2026-08", "2026-08-30.md"), "#");
+    writeFileSync(join(root, "daily", "2026-09-01.md"), "#");
     const settings = fixtureSettings(root);
     assert.equal(daily.findYesterday(settings, "2026-09-15"), "2026-09-01");
     assert.equal(daily.findYesterday(settings, "2026-08-31"), "2026-08-30");
@@ -195,7 +195,7 @@ describe("read/write round-trip", () => {
     assert.equal(missing.updatedAt, null);
 
     const written = daily.writeDaily(settings, "2026-09-15", "# hello\n");
-    assert.equal(written.path, join(root, "diario", "2026-09-15.md"));
+    assert.equal(written.path, join(root, "daily", "2026-09-15.md"));
     assert.ok(existsSync(written.path));
     assert.equal(readFileSync(written.path, "utf8"), "# hello\n");
 
@@ -217,7 +217,7 @@ describe("read/write round-trip", () => {
     const settings = fixtureSettings(root);
     const initial = daily.writeDaily(settings, "2026-09-16", "hub v1");
     await sleep(20);
-    writeFileSync(join(root, "diario", "2026-09-16.md"), "edited outside the hub");
+    writeFileSync(join(root, "daily", "2026-09-16.md"), "edited outside the hub");
     assert.throws(
       () => daily.writeDaily(settings, "2026-09-16", "hub v2", initial.updatedAt),
       (err: unknown) => {
@@ -226,14 +226,14 @@ describe("read/write round-trip", () => {
         return true;
       },
     );
-    assert.equal(readFileSync(join(root, "diario", "2026-09-16.md"), "utf8"), "edited outside the hub");
+    assert.equal(readFileSync(join(root, "daily", "2026-09-16.md"), "utf8"), "edited outside the hub");
   });
 });
 
 describe("watcher", () => {
   const root = mkdtempSync(join(tmpdir(), "cch-daily-watch-"));
 
-  before(() => mkdirSync(join(root, "diario"), { recursive: true }));
+  before(() => mkdirSync(join(root, "daily"), { recursive: true }));
 
   after(() => {
     daily.stopDailyWatch();
@@ -248,7 +248,7 @@ describe("watcher", () => {
     });
 
     daily.watchDaily(settings);
-    writeFileSync(join(root, "diario", "2026-09-01.md"), "external content");
+    writeFileSync(join(root, "daily", "2026-09-01.md"), "external content");
 
     const seen = await waitFor(async () => (events.length > 0 ? events[0] : null), 5000);
     assert.equal(seen.date, "2026-09-01");
@@ -270,13 +270,13 @@ describe("watcher", () => {
     assert.equal(events.length, 1, "echo of a writeId'd hub write must not produce a second broadcast");
 
     events.length = 0;
-    writeFileSync(join(root, "diario", "notes.md"), "not a daily date");
+    writeFileSync(join(root, "daily", "notes.md"), "not a daily date");
     await sleep(600);
     assert.equal(events.length, 0, "a non-daily-date filename must not produce a broadcast");
 
     events.length = 0;
-    mkdirSync(join(root, "diario", "2026-08"), { recursive: true });
-    writeFileSync(join(root, "diario", "2026-08", "2026-08-20.md"), "# archived day");
+    mkdirSync(join(root, "daily", "2026-08"), { recursive: true });
+    writeFileSync(join(root, "daily", "2026-08", "2026-08-20.md"), "# archived day");
     await sleep(600);
     assert.equal(events.length, 1, "an external edit inside an archived month folder must broadcast");
     assert.equal(events[0]?.date, "2026-08-20");
@@ -362,8 +362,8 @@ describe("daily HTTP routes", () => {
       assert.equal(put.status, 400);
       assert.deepEqual(put.json, { error: "date must be a valid YYYY-MM-DD" });
 
-      assert.equal(existsSync(join(box.brain, "diario", `${date}.md`)), false);
-      assert.equal(existsSync(join(box.brain, "diario", `${date.slice(0, 7)}`, `${date}.md`)), false);
+      assert.equal(existsSync(join(box.brain, "daily", `${date}.md`)), false);
+      assert.equal(existsSync(join(box.brain, "daily", `${date.slice(0, 7)}`, `${date}.md`)), false);
     }
   });
 

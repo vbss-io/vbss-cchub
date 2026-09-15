@@ -43,7 +43,7 @@ function shiftDate(date: string, days: number): string {
 }
 
 function buildTemplate(date: string): string {
-  return ["---", "type: diario", `date: ${date}`, "---", `# ${date}`, "", "## Briefing", "", "## Focus", "", "## Meetings", "", "## Sessions", ""].join(
+  return ["---", "type: daily", `date: ${date}`, "---", `# ${date}`, "", "## Briefing", "", "## Focus", "", "## Meetings", "", "## Sessions", ""].join(
     "\n",
   );
 }
