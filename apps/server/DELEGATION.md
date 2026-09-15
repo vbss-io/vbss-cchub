@@ -325,10 +325,21 @@ Routes: `GET /daily` (state, dates, running task), `GET /daily/sessions?date=`, 
 conflicting external edit), `POST /daily/:date/generate` (`{ focus? }`, `409` when already
 running) launches a headless run with `cwd` set to the vault root.
 Prompt placeholders: `{{date}}`, `{{file}}`, `{{root}}`, `{{template}}`, `{{focus}}`,
-`{{sessions}}`, `{{yesterday}}`. `PUT /daily/:date` also accepts an optional `writeId` (≤ 64 chars)
-echoed back on its own broadcast. A watcher on `daily.dir` broadcasts SSE `daily { date, updatedAt,
+`{{sessions}}`, `{{yesterday}}`. `POST /daily/:date/generate` also accepts an optional `context`,
+appended to `{{focus}}`. `PUT /daily/:date` also accepts an optional `writeId` (≤ 64 chars) echoed
+back on its own broadcast. A watcher on `daily.dir` broadcasts SSE `daily { date, updatedAt,
 source: "hub" | "disk", writeId: string | null }`, ignoring echoes of the hub's own writes, and
 restarts on settings change.
+
+Guided flow (deterministic, no assistant required): `daily.headings` (`focus`/`meetings`/`sessions`,
+defaults `Focus`/`Meetings`/`Sessions`), `daily.closedKey` (default `closed`) and `daily.wikilinks`
+(default `false`) settings. `GET /daily/:date/prepare` returns yesterday's top-level tasks (with a
+carry-over `block`), today's sessions, headings and wikilinks. `POST /daily/:date/close-yesterday`
+(`{ yesterday, tasks: [{ line, checked }], summary? }`) flips checkboxes and stamps
+`closedKey: <date>` in yesterday's frontmatter; `409` while a generation runs for that date.
+`POST /daily/:date/compose` (`{ briefing?, focus: [{ project, text, block? }], meetings, overwrite? }`)
+builds today's diary from the template deterministically; `409 { error: "diary exists", updatedAt }`
+unless `overwrite: true`.
 
 ## Thin CLI
 

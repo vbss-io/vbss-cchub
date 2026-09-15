@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join } from "node:path";
 import { listSessions } from "./db.js";
 import { BadRequestError, createInternalTask, startRun } from "./delegation-launch.js";
 import { activeDailyTask, getSettings } from "./delegation-store.js";
-import type { DelegationSettings, TaskRecord } from "./delegation-types.js";
+import type { DailyHeadings, DelegationSettings, TaskRecord } from "./delegation-types.js";
 import { localDate } from "./second-brain.js";
 import { broadcast } from "./sse.js";
 import type { SessionStatus } from "./types.js";
@@ -59,6 +59,252 @@ export function renderTemplate(text: string, date: string): string {
   return text.split("{{date}}").join(date);
 }
 
+const LINE_SPLIT_RE = /\r\n|\n/;
+const TASK_LINE_RE = /^(\s*)[-*]\s+\[([ xX])\]\s?(.*)$/;
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function indentDepth(raw: string): number {
+  let spaces = 0;
+  for (const ch of raw) {
+    if (ch === "\t") spaces += 4;
+    else if (ch === " ") spaces += 1;
+    else break;
+  }
+  return Math.floor(spaces / 2);
+}
+
+export interface TaskLine {
+  line: number;
+  depth: number;
+  checked: boolean;
+  text: string;
+  raw: string;
+}
+
+export function parseTaskLines(markdown: string): TaskLine[] {
+  const lines = markdown.split(LINE_SPLIT_RE);
+  const tasks: TaskLine[] = [];
+  lines.forEach((raw, index) => {
+    const match = raw.match(TASK_LINE_RE);
+    if (!match) return;
+    tasks.push({
+      line: index,
+      depth: indentDepth(raw),
+      checked: match[2]!.toLowerCase() === "x",
+      text: match[3] ?? "",
+      raw,
+    });
+  });
+  return tasks;
+}
+
+export function taskBlock(markdown: string, line: number): string {
+  const lines = markdown.split(LINE_SPLIT_RE);
+  const start = lines[line];
+  if (start === undefined) return "";
+  const baseDepth = indentDepth(start);
+  const collected = [start];
+  let pendingBlank: string[] = [];
+  let index = line + 1;
+  while (index < lines.length) {
+    const current = lines[index]!;
+    if (current.trim() === "") {
+      pendingBlank.push(current);
+      index += 1;
+      continue;
+    }
+    if (indentDepth(current) > baseDepth) {
+      collected.push(...pendingBlank, current);
+      pendingBlank = [];
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return collected.join("\n");
+}
+
+export function setTaskChecked(markdown: string, line: number, checked: boolean): string {
+  const parts = markdown.split(/(\r\n|\n)/);
+  let counter = 0;
+  for (let i = 0; i < parts.length; i += 2) {
+    if (counter === line) {
+      parts[i] = (parts[i] ?? "").replace(/\[[ xX]\]/, checked ? "[x]" : "[ ]");
+      break;
+    }
+    counter += 1;
+  }
+  return parts.join("");
+}
+
+export function readFrontmatterKey(markdown: string, key: string): string | null {
+  const lines = markdown.split(LINE_SPLIT_RE);
+  if ((lines[0] ?? "").trim() !== "---") return null;
+  let end = -1;
+  for (let i = 1; i < lines.length; i += 1) {
+    if ((lines[i] ?? "").trim() === "---") {
+      end = i;
+      break;
+    }
+  }
+  if (end === -1) return null;
+  const re = new RegExp(`^${escapeRegExp(key)}:\\s*(.*)$`);
+  for (let i = 1; i < end; i += 1) {
+    const match = (lines[i] ?? "").match(re);
+    if (match) return (match[1] ?? "").trim();
+  }
+  return null;
+}
+
+export function setFrontmatterKey(markdown: string, key: string, value: string): string {
+  const parts = markdown.split(/(\r\n|\n)/);
+  const lineAt = (i: number): string => parts[i * 2] ?? "";
+  const totalLines = Math.ceil(parts.length / 2);
+  const eol = parts[1] ?? "\n";
+  if (lineAt(0).trim() !== "---") {
+    return `---${eol}${key}: ${value}${eol}---${eol}${eol}${markdown}`;
+  }
+  let end = -1;
+  for (let i = 1; i < totalLines; i += 1) {
+    if (lineAt(i).trim() === "---") {
+      end = i;
+      break;
+    }
+  }
+  if (end === -1) {
+    return `---${eol}${key}: ${value}${eol}---${eol}${eol}${markdown}`;
+  }
+  const re = new RegExp(`^${escapeRegExp(key)}:\\s*(.*)$`);
+  for (let i = 1; i < end; i += 1) {
+    if (re.test(lineAt(i))) {
+      parts[i * 2] = `${key}: ${value}`;
+      return parts.join("");
+    }
+  }
+  parts.splice(end * 2, 0, `${key}: ${value}`, eol);
+  return parts.join("");
+}
+
+export interface ComposeFocusItem {
+  project: string | null;
+  text: string;
+  block?: string;
+}
+
+export interface ComposeInput {
+  briefing?: string;
+  focus: ComposeFocusItem[];
+  meetings: string[];
+  sessions: DailySessionSummary[];
+}
+
+export interface ComposeOptions {
+  date: string;
+  headings: DailyHeadings;
+  wikilinks: boolean;
+}
+
+function isPlaceholderLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed === "-" || trimmed === "- [ ]";
+}
+
+function findHeadingIndex(lines: string[], heading: string): number {
+  const target = heading.trim().toLowerCase();
+  return lines.findIndex((entry) => {
+    const match = entry.match(/^##\s+(.*)$/);
+    return match ? match[1]!.trim().toLowerCase() === target : false;
+  });
+}
+
+function insertSection(lines: string[], heading: string, content: string[]): string[] {
+  const idx = findHeadingIndex(lines, heading);
+  if (idx === -1) {
+    const out = [...lines];
+    while (out.length > 0 && out[out.length - 1]!.trim() === "") out.pop();
+    out.push("", `## ${heading}`, ...content);
+    return out;
+  }
+  let boundary = lines.length;
+  for (let i = idx + 1; i < lines.length; i += 1) {
+    if (/^##\s+/.test(lines[i]!)) {
+      boundary = i;
+      break;
+    }
+  }
+  let placeholderIndex = -1;
+  for (let i = idx + 1; i < boundary; i += 1) {
+    if (isPlaceholderLine(lines[i]!)) {
+      placeholderIndex = i;
+      break;
+    }
+  }
+  const out = [...lines];
+  if (placeholderIndex !== -1) {
+    out.splice(placeholderIndex, 1, ...content);
+  } else {
+    out.splice(idx + 1, 0, ...content);
+  }
+  return out;
+}
+
+function renderProjectLabel(project: string | null, wikilinks: boolean): string | null {
+  if (project === null) return null;
+  return wikilinks ? `[[${project}]]` : project;
+}
+
+function renderFocusItem(item: ComposeFocusItem, wikilinks: boolean): string[] {
+  if (item.block) {
+    const blockLines = item.block.split(LINE_SPLIT_RE);
+    blockLines[0] = (blockLines[0] ?? "").replace(/\[[ xX]\]/, "[ ]");
+    return blockLines;
+  }
+  const label = renderProjectLabel(item.project, wikilinks);
+  return [label ? `- [ ] ${label} - ${item.text}` : `- [ ] ${item.text}`];
+}
+
+function renderFocusLines(items: ComposeFocusItem[], wikilinks: boolean): string[] {
+  const out: string[] = [];
+  let prevProject: string | null | undefined;
+  items.forEach((item, index) => {
+    if (index > 0 && item.project !== prevProject) out.push("");
+    out.push(...renderFocusItem(item, wikilinks));
+    prevProject = item.project;
+  });
+  return out;
+}
+
+export function composeDaily(template: string, input: ComposeInput, opts: ComposeOptions): string {
+  let lines = renderTemplate(template, opts.date).split(LINE_SPLIT_RE);
+  const briefing = (input.briefing ?? "").trim();
+  if (briefing) {
+    const headingIndex = lines.findIndex((entry) => /^#\s+/.test(entry));
+    if (headingIndex !== -1) {
+      let skipTo = headingIndex + 1;
+      while (skipTo < lines.length && lines[skipTo]!.trim() === "") skipTo += 1;
+      const summaryLines = briefing
+        .split(LINE_SPLIT_RE)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+      const block = ["", "> **Briefing:**", ">", ...summaryLines.map((entry) => `> ${entry}`), ""];
+      lines.splice(headingIndex + 1, skipTo - (headingIndex + 1), ...block);
+    }
+  }
+  const focusContent = input.focus.length > 0 ? renderFocusLines(input.focus, opts.wikilinks) : ["- [ ]"];
+  const meetingsContent = input.meetings.length > 0 ? input.meetings.map((entry) => `- ${entry}`) : ["-"];
+  const sessionsContent =
+    input.sessions.length > 0
+      ? input.sessions.map((session) => `- ${session.title ?? "untitled"} · ${session.client ?? "unknown"}`)
+      : ["-"];
+  lines = insertSection(lines, opts.headings.focus, focusContent);
+  lines = insertSection(lines, opts.headings.meetings, meetingsContent);
+  lines = insertSection(lines, opts.headings.sessions, sessionsContent);
+  return lines.join("\n");
+}
+
 export interface DailyPromptVars {
   date: string;
   file: string;
@@ -107,6 +353,12 @@ export function dailyTemplatePath(settings: DelegationSettings): string | null {
   if (settings.daily.template) return resolveAgainstRoot(root, settings.daily.template);
   const builtin = join(root, "_templates", "daily.md");
   return existsSync(builtin) ? builtin : null;
+}
+
+export function dailyTemplateText(settings: DelegationSettings): string {
+  const path = dailyTemplatePath(settings);
+  if (path && existsSync(path)) return readFileSync(path, "utf8");
+  return BUILT_IN_TEMPLATE;
 }
 
 function findExistingDailyFile(dir: string, date: string): string | null {
@@ -262,7 +514,14 @@ export class DailyBusyError extends Error {
   }
 }
 
-export function generateDaily(date: string, focus: string | null): { taskId: string } {
+function combineFocus(focus: string | null, context: string | null): string {
+  const parts: string[] = [];
+  if (focus && focus.trim()) parts.push(focus.trim());
+  if (context && context.trim()) parts.push(context.trim());
+  return parts.length > 0 ? parts.join("\n\n") : "not provided";
+}
+
+export function generateDaily(date: string, focus: string | null, context?: string | null): { taskId: string } {
   const settings = getSettings();
   if (!settings.features.daily) throw new BadRequestError("the daily feature is disabled");
   const root = dailyRoot(settings);
@@ -278,7 +537,7 @@ export function generateDaily(date: string, focus: string | null): { taskId: str
     file,
     root,
     template: templatePath ?? "none",
-    focus: focus && focus.trim() ? focus.trim() : "not provided",
+    focus: combineFocus(focus, context ?? null),
     sessions: dailySessionsMarkdown(date),
     yesterday: yesterday ?? "unknown",
   });

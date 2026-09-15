@@ -26,6 +26,16 @@ before(async () => {
   sse = await import("../src/sse.js");
 });
 
+const defaultDaily: DelegationSettings["daily"] = {
+  dir: null,
+  template: null,
+  prompt: null,
+  runner: "claude",
+  headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" },
+  closedKey: "closed",
+  wikilinks: false,
+};
+
 function fixtureSettings(root: string, overrides: Partial<DelegationSettings> = {}): DelegationSettings {
   return {
     workspacesRoot: null,
@@ -35,22 +45,100 @@ function fixtureSettings(root: string, overrides: Partial<DelegationSettings> = 
     ownerName: "tester",
     runTimeoutMinutes: 60,
     features: { daily: true },
-    daily: { dir: null, template: null, prompt: null, runner: "claude" },
+    daily: defaultDaily,
     ...overrides,
   };
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+const REFERENCE_DIARY = `---
+type: diario
+created: 2026-09-14
+updated: 2026-09-14
+tags: [diario]
+---
+
+# 2026-09-14
+
+> **Briefing (do trail de 11→14/09):**
+>
+> **Últimos dias (o que andou):**
+>
+> - **11/09 (Job):** Acme resource-limits em prod + rollout 100% (dev/qa/prd), OOMKill qa resolvido, 9 zumbis no \`default\` limpos (a1b2c3d), TLS DH1024 paliativo na feedback-api; Globex console 1.6.3/1.6.4 (reset-on-load + dedup), Bot reply de annotation (11/13) + batch IQ 92.6%; Platform fix de evidence (e4f5a6b7).
+> - **12–13/09 (VBSS, fim de semana):** faxina de disco (~44 GB liberados, nexus removido, \`.aws/.azure/.kube\` migrados pros workspaces), CC Hub build #75 (worktree/claim/portas/ngrok/Codex), **sideapp** entregue via foreman (server Express + web React, 317 testes verdes, mock Hooli) — falta E2E com \`.env\` real.
+> - **14/09 (manhã):** AWS Globex acessível via profile \`globex-bedrock\` (isolado no workspace).
+>
+> **Aberto que importa:**
+>
+> - Acme — **contagens do Alex (13/09):** 57 KBs veiados, 227 ECRs, Inference Profiles por IA provisionada → revisar
+> - Acme — GeoServer **prod** (config/check) + feedbacks do Sam; app-path editável prd rollout ainda não confirmado
+> - Globex — Nova: annotation da Kim + batch IQ 134 (não tocada desde 08/09)
+> - Umbrella — acesso ao **banco ERP** do cliente novo (jump RDP, credencial pendente Drew)
+> - sideapp — E2E com \`.env\` real (mock Hooli já validado)
+>
+> **Reuniões:** 09:30 Today (Alex) · 10:00 Dra. Morgan — subir assistente na Meta (Lee).
+>
+> **Teams:** Alex (ACME-PLATFORM, 13/09): "revisar 57 kb veiados na plataforma", "227 ecr", "inference profiles criados para cada ia provisionada".
+>
+> **Board:** 0 cards teus, nada travado. **Inbox:** 10. **Revisão:** 52 dias sem weekly-review — roda hoje?
+
+## Foco de hoje
+
+- [x] [[Acme]] - Config/Check GeoServer Produção + ajustes feedbacks do Sam
+  - Aguardar devolutiva se é necessário mais updates
+  - Entender o erro de rede que comprometeu a resolução de secrets pros deployments
+    - IPs internos pinados, durante uma rotação a VM do gitlab parou de resolver os ips de plataforma, sem conseguir resolver secrets e sem dar o callback de deploy concluído
+- [x] [[acme|Acme]] - Analisar contagens de recursos: 57 KBs, 227 ECRs e Inference Profiles
+  - [ ] Migração e limpeza de projetos que não utilizam IA/KB, migrando pro on-demmand e removendo AI/Vision/KB - **Continuar amanhã**
+- [x] [[acme|Acme]] - Excluir apps ACME Vendorly/PAM - Portal de Agendamentos
+- [x] [[acme|Acme]] - Call de Suporte Jordan/Taylor sobre integração de um backend em projetos com front-ends existentes
+- [x] [[acme|Acme]] - View de secrets para membros, read-only sem o valor
+- [x] [[acme|Acme]] - Descer permissão de import de grupos Entra de admin para operador
+- [x] [[acme|Acme]] - Cobrar Chris ACME usuários Robin/Casey
+  - Sinalizou que já tinah pedido, que ia ver, mas não retornou sobre o assunto
+
+- [x] [[globex|Globex]] - Diagnóstico de erro Cadastro Incorporado - Pat Morgan
+  - Sem conclusões definitivas sobre o erro, a suposição é que o número do WhatsApp possa estar atrelado a um WABA de terceiros sem acesso do cliente.
+- [x] [[globex|Globex]] - Check de exports XLSX + número de usuários por assistente
+  - Report/Tokens/Assistant Tokens alinhados com valores corretos
+- [x] [[globex|Globex]] - Check de custos AWS × valor registrado no Console
+  - Valores corretos, melhorias de cache performance para AWS pra tentar minimizar os custos
+- [x] [[globex|Globex]] - Implementação de echoes do cadastro incorporado em coexistence
+  - Console/Inbox renderiza mensagens enviadas direto do app do WhatsApp com badge de app e acionando IH
+
+- [x] [[clientes|Globex]] - Analisar/Implementar Fit Co / Rocket Gym
+  - Seguir com inicio da implementação amanhã
+
+- [ ] [[initech|Initech]] - Evoluir auth da aplicação analisando Docs
+
+## Reuniões
+
+- 09:30 - Today (Alex)
+- 10:00 - Dra. Morgan — subir a assistente na Meta (Lee)
+
+## Capturas do dia
+
+-
+
+## Promovido (keeper)
+
+-
+
+## Sessões
+
+-
+`;
+
 describe("daily settings", () => {
   it("defaults features.daily off and merges nested daily patches", () => {
     const defaults = store.getSettings();
     assert.deepEqual(defaults.features, { daily: false });
-    assert.deepEqual(defaults.daily, { dir: null, template: null, prompt: null, runner: "claude" });
+    assert.deepEqual(defaults.daily, defaultDaily);
 
     const afterFeature = store.updateSettings({ features: { daily: true } });
     assert.equal(afterFeature.features.daily, true);
-    assert.deepEqual(afterFeature.daily, { dir: null, template: null, prompt: null, runner: "claude" });
+    assert.deepEqual(afterFeature.daily, defaultDaily);
 
     const afterPrompt = store.updateSettings({ daily: { prompt: "custom prompt" } });
     assert.equal(afterPrompt.daily.prompt, "custom prompt");
@@ -61,6 +149,21 @@ describe("daily settings", () => {
     assert.equal(afterRest.daily.runner, "codex");
     assert.equal(afterRest.daily.dir, "diario2");
     assert.equal(afterRest.daily.prompt, "custom prompt");
+  });
+
+  it("merges headings, closedKey and wikilinks individually and defaults old rows", () => {
+    const before = store.updateSettings({ daily: { headings: { focus: "Foco de hoje" } } });
+    assert.equal(before.daily.headings.focus, "Foco de hoje");
+    assert.equal(before.daily.headings.meetings, "Meetings");
+    assert.equal(before.daily.headings.sessions, "Sessions");
+    assert.equal(before.daily.closedKey, "closed");
+    assert.equal(before.daily.wikilinks, false);
+
+    const after = store.updateSettings({ daily: { headings: { meetings: "Reuniões" }, closedKey: "fechado", wikilinks: true } });
+    assert.equal(after.daily.headings.focus, "Foco de hoje");
+    assert.equal(after.daily.headings.meetings, "Reuniões");
+    assert.equal(after.daily.closedKey, "fechado");
+    assert.equal(after.daily.wikilinks, true);
   });
 });
 
@@ -88,7 +191,7 @@ describe("dailyFile resolution", () => {
   });
 
   it("honors a custom daily.dir, relative to root", () => {
-    const settings = fixtureSettings(root, { daily: { dir: "custom-daily", template: null, prompt: null, runner: "claude" } });
+    const settings = fixtureSettings(root, { daily: { ...defaultDaily, dir: "custom-daily" } });
     assert.equal(daily.dailyFile(settings, "2026-09-20"), join(root, "custom-daily", "2026-09-20.md"));
   });
 
@@ -108,7 +211,7 @@ describe("dailyFile resolution", () => {
 
 describe("custom daily.dir (journal) resolution", () => {
   const root = mkdtempSync(join(tmpdir(), "cch-daily-journal-"));
-  const settings = fixtureSettings(root, { daily: { dir: "journal", template: null, prompt: null, runner: "claude" } });
+  const settings = fixtureSettings(root, { daily: { ...defaultDaily, dir: "journal" } });
 
   before(() => {
     mkdirSync(join(root, "journal", "2026-08"), { recursive: true });
@@ -172,6 +275,274 @@ describe("template and prompt rendering", () => {
     assert.equal(daily.findYesterday(settings, "2026-08-31"), "2026-08-30");
     assert.equal(daily.findYesterday(settings, "2020-01-01"), null);
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+});
+
+describe("parseTaskLines", () => {
+  it("finds every checkbox item at any depth in the reference diary", () => {
+    const tasks = daily.parseTaskLines(REFERENCE_DIARY);
+    assert.equal(tasks.length, 14);
+    assert.equal(tasks.filter((task) => task.depth === 0).length, 13);
+  });
+
+  it("reports depth and raw checkbox-stripped text for a top-level and a nested item", () => {
+    const tasks = daily.parseTaskLines(REFERENCE_DIARY);
+    const top = tasks.find((task) => task.line === 33)!;
+    assert.equal(top.depth, 0);
+    assert.equal(top.checked, true);
+    assert.equal(top.text, "[[Acme]] - Config/Check GeoServer Produção + ajustes feedbacks do Sam");
+    assert.equal(top.raw, "- [x] [[Acme]] - Config/Check GeoServer Produção + ajustes feedbacks do Sam");
+
+    const nested = tasks.find((task) => task.line === 38)!;
+    assert.equal(nested.depth, 1);
+    assert.equal(nested.checked, false);
+    assert.equal(nested.text, "Migração e limpeza de projetos que não utilizam IA/KB, migrando pro on-demmand e removendo AI/Vision/KB - **Continuar amanhã**");
+  });
+
+  it("treats tabs as 4 spaces and 2 spaces as one depth level", () => {
+    const tasks = daily.parseTaskLines("- [ ] top\n  - [ ] two spaces\n\t- [ ] one tab\n\t\t- [ ] two tabs");
+    assert.deepEqual(
+      tasks.map((task) => task.depth),
+      [0, 1, 2, 4],
+    );
+  });
+});
+
+describe("taskBlock", () => {
+  it("returns a task with nested sub-bullets, stopping at the next depth-0 sibling", () => {
+    const block = daily.taskBlock(REFERENCE_DIARY, 33);
+    assert.equal(
+      block,
+      "- [x] [[Acme]] - Config/Check GeoServer Produção + ajustes feedbacks do Sam\n" +
+        "  - Aguardar devolutiva se é necessário mais updates\n" +
+        "  - Entender o erro de rede que comprometeu a resolução de secrets pros deployments\n" +
+        "    - IPs internos pinados, durante uma rotação a VM do gitlab parou de resolver os ips de plataforma, sem conseguir resolver secrets e sem dar o callback de deploy concluído",
+    );
+  });
+
+  it("stops before a blank line followed by the next sibling, dropping trailing blanks", () => {
+    const block = daily.taskBlock(REFERENCE_DIARY, 43);
+    assert.equal(
+      block,
+      "- [x] [[acme|Acme]] - Cobrar Chris ACME usuários Robin/Casey\n" +
+        "  - Sinalizou que já tinah pedido, que ia ver, mas não retornou sobre o assunto",
+    );
+  });
+
+  it("returns just the line for a task with no nested content", () => {
+    const block = daily.taskBlock(REFERENCE_DIARY, 39);
+    assert.equal(block, "- [x] [[acme|Acme]] - Excluir apps ACME Vendorly/PAM - Portal de Agendamentos");
+  });
+});
+
+describe("setTaskChecked", () => {
+  it("flips only the target line and keeps everything else, LF", () => {
+    const source = "- [ ] a\n- [ ] b\n- [ ] c";
+    const next = daily.setTaskChecked(source, 1, true);
+    assert.equal(next, "- [ ] a\n- [x] b\n- [ ] c");
+  });
+
+  it("preserves CRLF line endings elsewhere in the file", () => {
+    const source = "# title\r\n- [ ] a\r\n- [ ] b\r\n- [ ] c";
+    const next = daily.setTaskChecked(source, 3, true);
+    assert.equal(next, "# title\r\n- [ ] a\r\n- [ ] b\r\n- [x] c");
+  });
+
+  it("leaves the source unchanged for an out-of-range index", () => {
+    const source = "- [ ] a\n- [ ] b";
+    assert.equal(daily.setTaskChecked(source, 9, true), source);
+  });
+});
+
+describe("readFrontmatterKey / setFrontmatterKey", () => {
+  it("reads an existing key and returns null for one that is absent", () => {
+    assert.equal(daily.readFrontmatterKey(REFERENCE_DIARY, "type"), "diario");
+    assert.equal(daily.readFrontmatterKey(REFERENCE_DIARY, "closed"), null);
+  });
+
+  it("adds a missing key before the closing marker and preserves the rest, LF", () => {
+    const next = daily.setFrontmatterKey(REFERENCE_DIARY, "closed", "2026-09-15");
+    assert.equal(daily.readFrontmatterKey(next, "closed"), "2026-09-15");
+    assert.equal(daily.readFrontmatterKey(next, "type"), "diario");
+    assert.match(next, /## Foco de hoje/);
+    assert.match(next, /^---\ntype: diario\ncreated: 2026-09-14\nupdated: 2026-09-14\ntags: \[diario\]\nclosed: 2026-09-15\n---\n/);
+  });
+
+  it("replaces an existing key in place", () => {
+    const withKey = daily.setFrontmatterKey(REFERENCE_DIARY, "type", "journal");
+    assert.equal(daily.readFrontmatterKey(withKey, "type"), "journal");
+  });
+
+  it("creates the frontmatter block when absent, preserving CRLF", () => {
+    const source = "# title\r\nbody";
+    const next = daily.setFrontmatterKey(source, "closed", "2026-09-15");
+    assert.equal(next, "---\r\nclosed: 2026-09-15\r\n---\r\n\r\n# title\r\nbody");
+    assert.equal(daily.readFrontmatterKey(next, "closed"), "2026-09-15");
+  });
+});
+
+const PT_DIARY_TEMPLATE =
+  "---\ntype: diario\ncreated: {{date}}\nupdated: {{date}}\ntags: [diario]\n---\n\n# {{date}}\n\n" +
+  "## Foco de hoje\n\n- [ ] \n\n## Reuniões\n\n-\n\n## Capturas do dia\n\n-\n\n## Promovido (keeper)\n\n-\n\n## Sessões\n\n-\n";
+
+describe("composeDaily", () => {
+  const headings: DelegationSettings["daily"]["headings"] = { focus: "Focus", meetings: "Meetings", sessions: "Sessions" };
+
+  it("preserves every template blank line and replaces placeholders in place against the Portuguese template", () => {
+    const ptHeadings: DelegationSettings["daily"]["headings"] = { focus: "Foco de hoje", meetings: "Reuniões", sessions: "Sessões" };
+    const content = daily.composeDaily(
+      PT_DIARY_TEMPLATE,
+      {
+        briefing: "line one\nline two",
+        focus: [
+          { project: "initech", text: "Evoluir auth" },
+          { project: "Acme", text: "item" },
+        ],
+        meetings: ["09:30 - Today (Alex)"],
+        sessions: [],
+      },
+      { date: "2026-09-15", headings: ptHeadings, wikilinks: true },
+    );
+    assert.equal(
+      content,
+      "---\ntype: diario\ncreated: 2026-09-15\nupdated: 2026-09-15\ntags: [diario]\n---\n\n" +
+        "# 2026-09-15\n\n> **Briefing:**\n>\n> line one\n> line two\n\n" +
+        "## Foco de hoje\n\n- [ ] [[initech]] - Evoluir auth\n\n- [ ] [[Acme]] - item\n\n" +
+        "## Reuniões\n\n- 09:30 - Today (Alex)\n\n" +
+        "## Capturas do dia\n\n-\n\n## Promovido (keeper)\n\n-\n\n## Sessões\n\n-\n",
+    );
+  });
+
+  it("keeps a single '-' placeholder for sessions, never duplicating it, when there are no sessions", () => {
+    const ptHeadings: DelegationSettings["daily"]["headings"] = { focus: "Foco de hoje", meetings: "Reuniões", sessions: "Sessões" };
+    const content = daily.composeDaily(
+      PT_DIARY_TEMPLATE,
+      { focus: [{ project: null, text: "x" }], meetings: [], sessions: [] },
+      { date: "2026-09-15", headings: ptHeadings, wikilinks: false },
+    );
+    assert.match(content, /## Sessões\n\n-\n$/);
+    assert.doesNotMatch(content, /## Sessões\n\n-\n\n-/);
+  });
+
+  it("renders focus, meetings and sessions into the built-in template", () => {
+    const content = daily.composeDaily(
+      daily.BUILT_IN_TEMPLATE,
+      {
+        focus: [{ project: "acme", text: "ship the daily tab" }],
+        meetings: ["09:30 Today (Alex)"],
+        sessions: [{ sessionId: "s1", title: "task a", client: "claude-code", cwd: "/repo", status: "completed", startedAt: 0, updatedAt: 0 }],
+      },
+      { date: "2026-09-15", headings, wikilinks: false },
+    );
+    assert.match(content, /# 2026-09-15/);
+    assert.match(content, /## Focus\n- \[ \] acme - ship the daily tab/);
+    assert.match(content, /## Meetings\n- 09:30 Today \(Alex\)/);
+    assert.match(content, /## Sessions\n- task a · claude-code/);
+  });
+
+  it("wraps project labels as wikilinks when enabled, and omits them entirely when null", () => {
+    const withWikilinks = daily.composeDaily(
+      daily.BUILT_IN_TEMPLATE,
+      { focus: [{ project: "acme", text: "item a" }], meetings: [], sessions: [] },
+      { date: "2026-09-15", headings, wikilinks: true },
+    );
+    assert.match(withWikilinks, /- \[ \] \[\[acme\]\] - item a/);
+
+    const withoutProject = daily.composeDaily(
+      daily.BUILT_IN_TEMPLATE,
+      { focus: [{ project: null, text: "item b" }], meetings: [], sessions: [] },
+      { date: "2026-09-15", headings, wikilinks: true },
+    );
+    assert.match(withoutProject, /## Focus\n- \[ \] item b/);
+  });
+
+  it("keeps the placeholders when meetings and sessions are empty", () => {
+    const content = daily.composeDaily(
+      daily.BUILT_IN_TEMPLATE,
+      { focus: [{ project: null, text: "solo item" }], meetings: [], sessions: [] },
+      { date: "2026-09-15", headings, wikilinks: false },
+    );
+    assert.match(content, /## Meetings\n-\n/);
+    assert.match(content, /## Sessions\n-\n/);
+  });
+
+  it("groups consecutive focus items by project with a blank line between groups", () => {
+    const content = daily.composeDaily(
+      daily.BUILT_IN_TEMPLATE,
+      {
+        focus: [
+          { project: "acme", text: "item a" },
+          { project: "acme", text: "item b" },
+          { project: "globex", text: "item c" },
+        ],
+        meetings: [],
+        sessions: [],
+      },
+      { date: "2026-09-15", headings, wikilinks: false },
+    );
+    assert.match(
+      content,
+      /## Focus\n- \[ \] acme - item a\n- \[ \] acme - item b\n\n- \[ \] globex - item c/,
+    );
+  });
+
+  it("uses a carry-over block verbatim, forcing the checkbox open", () => {
+    const block = daily.taskBlock(REFERENCE_DIARY, 33);
+    const content = daily.composeDaily(
+      daily.BUILT_IN_TEMPLATE,
+      { focus: [{ project: "acme", text: "ignored when block is set", block }], meetings: [], sessions: [] },
+      { date: "2026-09-15", headings, wikilinks: false },
+    );
+    assert.match(content, /## Focus\n- \[ \] \[\[Acme\]\] - Config\/Check GeoServer Produção/);
+    assert.match(content, /ips de plataforma, sem conseguir resolver secrets/);
+  });
+
+  it("inserts a briefing blockquote right after the H1, and skips it entirely when empty", () => {
+    const withBriefing = daily.composeDaily(
+      daily.BUILT_IN_TEMPLATE,
+      { briefing: "line one\nline two", focus: [{ project: null, text: "x" }], meetings: [], sessions: [] },
+      { date: "2026-09-15", headings, wikilinks: false },
+    );
+    assert.match(withBriefing, /# 2026-09-15\n\n> \*\*Briefing:\*\*\n>\n> line one\n> line two\n\n## Focus/);
+
+    const withoutBriefing = daily.composeDaily(
+      daily.BUILT_IN_TEMPLATE,
+      { briefing: "   ", focus: [{ project: null, text: "x" }], meetings: [], sessions: [] },
+      { date: "2026-09-15", headings, wikilinks: false },
+    );
+    assert.doesNotMatch(withoutBriefing, /Briefing/);
+  });
+
+  it("matches headings case-insensitively against a Portuguese template", () => {
+    const ptTemplate = `# {{date}}
+
+## foco de hoje
+-
+
+## reuniões
+-
+
+## sessões
+-
+`;
+    const ptHeadings: DelegationSettings["daily"]["headings"] = { focus: "Foco de hoje", meetings: "Reuniões", sessions: "Sessões" };
+    const content = daily.composeDaily(
+      ptTemplate,
+      { focus: [{ project: "acme", text: "item a" }], meetings: ["09:30 Today"], sessions: [] },
+      { date: "2026-09-15", headings: ptHeadings, wikilinks: false },
+    );
+    assert.match(content, /## foco de hoje\n- \[ \] acme - item a/);
+    assert.match(content, /## reuniões\n- 09:30 Today/);
+    assert.match(content, /## sessões\n-\n/);
+  });
+
+  it("appends a section at the end when its heading is missing from the template", () => {
+    const content = daily.composeDaily(
+      `# {{date}}\n\n## Focus\n-\n`,
+      { focus: [], meetings: ["09:30 Today"], sessions: [] },
+      { date: "2026-09-15", headings, wikilinks: false },
+    );
+    assert.match(content, /## Meetings\n- 09:30 Today/);
   });
 });
 
@@ -399,5 +770,118 @@ describe("daily HTTP routes", () => {
 
     const overview = await http("GET", "/delegation/daily");
     assert.equal((overview.json as { running: unknown }).running, null);
+  });
+
+  const YESTERDAY_FIXTURE =
+    "---\ntype: daily\ncreated: 2026-09-13\n---\n\n# 2026-09-13\n\n## Focus\n" +
+    "- [x] acme - task one\n  - note one\n- [ ] globex - task two\n\n## Meetings\n-\n";
+
+  it("prepare returns yesterday's top-level tasks with carry-over blocks, headings and wikilinks", async () => {
+    const put = await http("PUT", "/delegation/daily/2026-09-13", { content: YESTERDAY_FIXTURE });
+    assert.equal(put.status, 200);
+
+    const res = await http("GET", "/delegation/daily/2026-09-14/prepare");
+    assert.equal(res.status, 200);
+    const body = res.json as {
+      date: string;
+      yesterday: { date: string; closed: boolean; tasks: { line: number; checked: boolean; text: string; block: string }[] } | null;
+      sessionsToday: unknown[];
+      headings: { focus: string; meetings: string; sessions: string };
+      wikilinks: boolean;
+      templatePath: string | null;
+    };
+    assert.equal(body.date, "2026-09-14");
+    assert.ok(body.yesterday);
+    assert.equal(body.yesterday!.date, "2026-09-13");
+    assert.equal(body.yesterday!.closed, false);
+    assert.equal(body.yesterday!.tasks.length, 2);
+    assert.equal(body.yesterday!.tasks[0]!.text, "acme - task one");
+    assert.equal(body.yesterday!.tasks[0]!.block, "- [x] acme - task one\n  - note one");
+    assert.equal(body.yesterday!.tasks[1]!.text, "globex - task two");
+    assert.equal(body.yesterday!.tasks[1]!.block, "- [ ] globex - task two");
+    assert.ok(Array.isArray(body.sessionsToday));
+    assert.deepEqual(body.headings, { focus: "Focus", meetings: "Meetings", sessions: "Sessions" });
+    assert.equal(body.wikilinks, false);
+  });
+
+  it("close-yesterday flips checkboxes on disk, stamps closed in frontmatter, and 400s on bad input", async () => {
+    const closeBad = await http("POST", "/delegation/daily/not-a-date/close-yesterday", { yesterday: "2026-09-13", tasks: [] });
+    assert.equal(closeBad.status, 400);
+
+    const missingFile = await http("POST", "/delegation/daily/2026-09-14/close-yesterday", { yesterday: "2020-01-01", tasks: [] });
+    assert.equal(missingFile.status, 400);
+
+    const res = await http("POST", "/delegation/daily/2026-09-14/close-yesterday", {
+      yesterday: "2026-09-13",
+      tasks: [{ line: 10, checked: true }],
+      summary: "ignored by design",
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.json, { date: "2026-09-13", updatedAt: (res.json as { updatedAt: number }).updatedAt, closed: true });
+
+    const onDisk = readFileSync(join(box.brain, "daily", "2026-09-13.md"), "utf8");
+    assert.match(onDisk, /- \[x\] globex - task two/);
+    assert.match(onDisk, /closed: 2026-09-14/);
+    assert.doesNotMatch(onDisk, /ignored by design/);
+  });
+
+  it("flips the right task by content even when a frontmatter insert shifts every line below it", async () => {
+    const settingsPut = await http("PUT", "/delegation/settings", { daily: { closedKey: "fechado" } });
+    assert.equal(settingsPut.status, 200);
+    assert.equal((settingsPut.json as { daily: { closedKey: string } }).daily.closedKey, "fechado");
+
+    const write = await http("PUT", "/delegation/daily/2026-09-22", { content: REFERENCE_DIARY });
+    assert.equal(write.status, 200);
+
+    const prepare = await http("GET", "/delegation/daily/2026-09-23/prepare");
+    assert.equal(prepare.status, 200);
+    const yesterday = (prepare.json as { yesterday: { date: string; tasks: { line: number; text: string; checked: boolean }[] } }).yesterday!;
+    assert.equal(yesterday.date, "2026-09-22");
+    const initech = yesterday.tasks.find((task) => task.text.includes("initech"))!;
+    assert.equal(initech.checked, false);
+    const alreadyDone = yesterday.tasks.find((task) => task.text.includes("Excluir apps ACME"))!;
+    assert.equal(alreadyDone.checked, true);
+
+    const close = await http("POST", "/delegation/daily/2026-09-23/close-yesterday", {
+      yesterday: "2026-09-22",
+      tasks: [{ line: initech.line, checked: true }],
+    });
+    assert.equal(close.status, 200);
+    assert.equal((close.json as { closed: boolean }).closed, true);
+
+    const onDisk = readFileSync(join(box.brain, "daily", "2026-09-22.md"), "utf8");
+    assert.match(onDisk, /fechado: 2026-09-23/);
+    assert.match(onDisk, /- \[x\] \[\[initech\|Initech\]\] - Evoluir auth da aplicação analisando Docs/);
+    assert.match(onDisk, /- \[x\] \[\[acme\|Acme\]\] - Excluir apps ACME Vendorly\/PAM - Portal de Agendamentos/);
+    assert.match(onDisk, /- \[ \] Migração e limpeza de projetos/);
+
+    const restore = await http("PUT", "/delegation/settings", { daily: { closedKey: "closed" } });
+    assert.equal(restore.status, 200);
+  });
+
+  it("compose builds today's diary from the template, 409s when it exists, and overwrites on request", async () => {
+    const first = await http("POST", "/delegation/daily/2026-09-21/compose", {
+      briefing: "trail summary",
+      focus: [{ project: "acme", text: "ship the daily tab" }],
+      meetings: ["09:30 Today"],
+    });
+    assert.equal(first.status, 200);
+    const firstContent = (first.json as { content: string }).content;
+    assert.match(firstContent, /# 2026-09-21/);
+    assert.match(firstContent, /> \*\*Briefing:\*\*/);
+    assert.match(firstContent, /## Focus\n- \[ \] acme - ship the daily tab/);
+    assert.match(firstContent, /## Meetings\n- 09:30 Today/);
+
+    const conflict = await http("POST", "/delegation/daily/2026-09-21/compose", { focus: [], meetings: [] });
+    assert.equal(conflict.status, 409);
+    assert.equal((conflict.json as { error: string }).error, "diary exists");
+
+    const overwritten = await http("POST", "/delegation/daily/2026-09-21/compose", {
+      focus: [{ project: null, text: "replaced" }],
+      meetings: [],
+      overwrite: true,
+    });
+    assert.equal(overwritten.status, 200);
+    assert.match((overwritten.json as { content: string }).content, /## Focus\n- \[ \] replaced/);
   });
 });

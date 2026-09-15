@@ -29,18 +29,28 @@ import {
 import { delegationGuard } from "./delegation-security.js";
 import { abortRun, BadRequestError, NotFoundError, brainNote, delegateTask, startRun, repoPathOf } from "./delegation-launch.js";
 import {
+  composeDaily,
   DailyBusyError,
   DailyConflictError,
   dailyRoot,
   dailyDir,
   dailySessionsForDate,
   dailyTemplatePath,
+  dailyTemplateText,
+  findYesterday,
   generateDaily,
   isValidDailyDate,
   listDiaryDates,
+  parseTaskLines,
   readDaily,
+  readFrontmatterKey,
+  setFrontmatterKey,
+  setTaskChecked,
+  taskBlock,
   watchDaily,
   writeDaily,
+  type ComposeFocusItem,
+  type TaskLine,
 } from "./daily.js";
 import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus, WorktreeError } from "./worktrees.js";
 import { portRangeOf } from "./task-ports.js";
@@ -218,6 +228,50 @@ export function delegationRouter(): Router {
           return;
         }
         dailyPatch.runner = runner as Runner;
+      }
+      if ("closedKey" in dailyBody) {
+        const closedKey = asString(dailyBody.closedKey);
+        if (!closedKey) {
+          res.status(400).json({ error: "daily.closedKey required" });
+          return;
+        }
+        dailyPatch.closedKey = closedKey;
+      }
+      if ("wikilinks" in dailyBody) {
+        if (typeof dailyBody.wikilinks !== "boolean") {
+          res.status(400).json({ error: "daily.wikilinks must be a boolean" });
+          return;
+        }
+        dailyPatch.wikilinks = dailyBody.wikilinks;
+      }
+      const headingsBody = dailyBody.headings as Record<string, unknown> | undefined;
+      if (headingsBody && typeof headingsBody === "object") {
+        const headingsPatch: NonNullable<UpdateSettingsInput["daily"]>["headings"] = {};
+        if ("focus" in headingsBody) {
+          const focus = asString(headingsBody.focus);
+          if (!focus) {
+            res.status(400).json({ error: "daily.headings.focus required" });
+            return;
+          }
+          headingsPatch.focus = focus;
+        }
+        if ("meetings" in headingsBody) {
+          const meetings = asString(headingsBody.meetings);
+          if (!meetings) {
+            res.status(400).json({ error: "daily.headings.meetings required" });
+            return;
+          }
+          headingsPatch.meetings = meetings;
+        }
+        if ("sessions" in headingsBody) {
+          const sessions = asString(headingsBody.sessions);
+          if (!sessions) {
+            res.status(400).json({ error: "daily.headings.sessions required" });
+            return;
+          }
+          headingsPatch.sessions = sessions;
+        }
+        dailyPatch.headings = headingsPatch;
       }
       patch.daily = dailyPatch;
     }
@@ -513,13 +567,148 @@ export function delegationRouter(): Router {
     }
     const body = req.body as Record<string, unknown>;
     const focus = asString(body.focus);
+    const context = asString(body.context);
     try {
-      res.status(201).json(generateDaily(req.params.date, focus));
+      res.status(201).json(generateDaily(req.params.date, focus, context));
     } catch (err) {
       if (err instanceof DailyBusyError) {
         res.status(409).json({ error: err.message, taskId: err.taskId });
         return;
       }
+      sendError(res, err);
+    }
+  });
+
+  router.get("/daily/:date/prepare", (req, res) => {
+    if (!isValidDailyDate(req.params.date)) {
+      res.status(400).json({ error: "date must be a valid YYYY-MM-DD" });
+      return;
+    }
+    try {
+      const settings = getSettings();
+      const date = req.params.date;
+      const yesterdayDate = findYesterday(settings, date);
+      let yesterday: { date: string; path: string; closed: boolean; tasks: (TaskLine & { block: string })[] } | null = null;
+      if (yesterdayDate) {
+        const read = readDaily(settings, yesterdayDate);
+        const closed = readFrontmatterKey(read.content, settings.daily.closedKey) !== null;
+        const tasks = parseTaskLines(read.content)
+          .filter((task) => task.depth === 0)
+          .map((task) => ({ ...task, block: taskBlock(read.content, task.line) }));
+        yesterday = { date: yesterdayDate, path: read.path, closed, tasks };
+      }
+      res.json({
+        date,
+        yesterday,
+        sessionsToday: dailySessionsForDate(date),
+        headings: settings.daily.headings,
+        wikilinks: settings.daily.wikilinks,
+        templatePath: dailyTemplatePath(settings),
+      });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.post("/daily/:date/close-yesterday", (req, res) => {
+    if (!isValidDailyDate(req.params.date)) {
+      res.status(400).json({ error: "date must be a valid YYYY-MM-DD" });
+      return;
+    }
+    const body = req.body as Record<string, unknown>;
+    const yesterday = typeof body.yesterday === "string" ? body.yesterday : "";
+    if (!isValidDailyDate(yesterday)) {
+      res.status(400).json({ error: "yesterday must be a valid YYYY-MM-DD" });
+      return;
+    }
+    if (body.summary !== undefined && typeof body.summary !== "string") {
+      res.status(400).json({ error: "summary must be a string" });
+      return;
+    }
+    const tasksBody = Array.isArray(body.tasks) ? body.tasks : [];
+    const tasks: { line: number; checked: boolean }[] = [];
+    for (const item of tasksBody) {
+      if (!item || typeof item !== "object") {
+        res.status(400).json({ error: "tasks[] entries must be objects" });
+        return;
+      }
+      const rec = item as Record<string, unknown>;
+      if (typeof rec.line !== "number" || typeof rec.checked !== "boolean") {
+        res.status(400).json({ error: "tasks[].line and tasks[].checked required" });
+        return;
+      }
+      tasks.push({ line: rec.line, checked: rec.checked });
+    }
+    const busy = activeDailyTask(yesterday);
+    if (busy) {
+      res.status(409).json({ error: "a daily generation is already running for this date" });
+      return;
+    }
+    try {
+      const settings = getSettings();
+      const existing = readDaily(settings, yesterday);
+      if (!existing.exists) {
+        res.status(400).json({ error: "yesterday diary not found" });
+        return;
+      }
+      let content = existing.content;
+      for (const task of tasks) content = setTaskChecked(content, task.line, task.checked);
+      content = setFrontmatterKey(content, settings.daily.closedKey, req.params.date);
+      const written = writeDaily(settings, yesterday, content);
+      res.json({ date: yesterday, updatedAt: written.updatedAt, closed: true });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.post("/daily/:date/compose", (req, res) => {
+    if (!isValidDailyDate(req.params.date)) {
+      res.status(400).json({ error: "date must be a valid YYYY-MM-DD" });
+      return;
+    }
+    const body = req.body as Record<string, unknown>;
+    if (!Array.isArray(body.focus)) {
+      res.status(400).json({ error: "focus must be an array" });
+      return;
+    }
+    const focus: ComposeFocusItem[] = [];
+    for (const item of body.focus) {
+      if (!item || typeof item !== "object") {
+        res.status(400).json({ error: "focus[] entries must be objects" });
+        return;
+      }
+      const rec = item as Record<string, unknown>;
+      if (typeof rec.text !== "string") {
+        res.status(400).json({ error: "focus[].text required" });
+        return;
+      }
+      const project = typeof rec.project === "string" ? rec.project : null;
+      const block = typeof rec.block === "string" ? rec.block : undefined;
+      focus.push({ project, text: rec.text, block });
+    }
+    if (!Array.isArray(body.meetings)) {
+      res.status(400).json({ error: "meetings must be an array" });
+      return;
+    }
+    const meetings = asStringArray(body.meetings);
+    const briefing = typeof body.briefing === "string" ? body.briefing : undefined;
+    const overwrite = body.overwrite === true;
+    try {
+      const settings = getSettings();
+      const date = req.params.date;
+      const existing = readDaily(settings, date);
+      if (existing.exists && !overwrite) {
+        res.status(409).json({ error: "diary exists", updatedAt: existing.updatedAt });
+        return;
+      }
+      const content = composeDaily(
+        dailyTemplateText(settings),
+        { briefing, focus, meetings, sessions: dailySessionsForDate(date) },
+        { date, headings: settings.daily.headings, wikilinks: settings.daily.wikilinks },
+      );
+      writeDaily(settings, date, content);
+      res.json(readDaily(settings, date));
+    } catch (err) {
       sendError(res, err);
     }
   });

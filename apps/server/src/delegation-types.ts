@@ -80,11 +80,20 @@ export interface DelegationFeatures {
   daily: boolean;
 }
 
+export interface DailyHeadings {
+  focus: string;
+  meetings: string;
+  sessions: string;
+}
+
 export interface DailyFeatureSettings {
   dir: string | null;
   template: string | null;
   prompt: string | null;
   runner: Runner;
+  headings: DailyHeadings;
+  closedKey: string;
+  wikilinks: boolean;
 }
 
 export interface DelegationSettings {
