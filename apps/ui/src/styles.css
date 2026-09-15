@@ -3401,6 +3401,10 @@ h6.md__h {
   margin-left: 1.4rem;
 }
 
+.md__item--context {
+  opacity: 0.7;
+}
+
 .md__wikilink {
   color: var(--brand-2);
   text-decoration: underline dotted;

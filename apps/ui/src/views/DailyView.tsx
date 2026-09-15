@@ -420,14 +420,26 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
           )}
           {entry && entry.exists && mode === "preview" && (
             <>
-              <div className="row daily__taskfilter" role="tablist" aria-label="Task filter">
-                <button className={`pill ${taskFilter === "all" ? "pill--on" : ""}`} onClick={() => setTaskFilter("all")}>
+              <div className="row daily__taskfilter" aria-label="Task filter">
+                <button
+                  className={`pill ${taskFilter === "all" ? "pill--on" : ""}`}
+                  aria-pressed={taskFilter === "all"}
+                  onClick={() => setTaskFilter("all")}
+                >
                   All
                 </button>
-                <button className={`pill ${taskFilter === "open" ? "pill--on" : ""}`} onClick={() => setTaskFilter("open")}>
+                <button
+                  className={`pill ${taskFilter === "open" ? "pill--on" : ""}`}
+                  aria-pressed={taskFilter === "open"}
+                  onClick={() => setTaskFilter("open")}
+                >
                   Open <span className="pill__count">{taskCounts.open}</span>
                 </button>
-                <button className={`pill ${taskFilter === "done" ? "pill--on" : ""}`} onClick={() => setTaskFilter("done")}>
+                <button
+                  className={`pill ${taskFilter === "done" ? "pill--on" : ""}`}
+                  aria-pressed={taskFilter === "done"}
+                  onClick={() => setTaskFilter("done")}
+                >
                   Done <span className="pill__count">{taskCounts.done}</span>
                 </button>
               </div>
