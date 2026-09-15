@@ -549,7 +549,7 @@ export function SettingsView(props: Props) {
               <span>Folder</span>
               <input
                 className="in"
-                placeholder={settings?.secondBrainRoot ? `${settings.secondBrainRoot}/diario` : "<second brain>/diario"}
+                placeholder={settings?.secondBrainRoot ? `${settings.secondBrainRoot}/daily` : "<second brain>/daily"}
                 value={dailyDir}
                 onChange={(event) => setDailyDir(event.target.value)}
                 disabled={!enabled}
@@ -559,7 +559,7 @@ export function SettingsView(props: Props) {
               <span>Template</span>
               <input
                 className="in"
-                placeholder="_templates/diario.md"
+                placeholder="_templates/daily.md"
                 value={dailyTemplate}
                 onChange={(event) => setDailyTemplate(event.target.value)}
                 disabled={!enabled}

@@ -318,7 +318,7 @@ never produced a session is relaunched with a fresh one on the next `continue`.
 
 Optional (`settings.features.daily`, off by default). Generates and edits a diary markdown file in
 the linked second brain (`settings.secondBrainRoot`) from the hub. Settings: `daily.dir` (default
-`<root>/diario`), `daily.template` (default `<root>/_templates/diario.md` when present),
+`<root>/daily`), `daily.template` (default `<root>/_templates/daily.md` when present),
 `daily.prompt` (default `DEFAULT_DAILY_PROMPT`) and `daily.runner` (`claude`/`codex`).
 Routes: `GET /daily` (state, dates, running task), `GET /daily/sessions?date=`, `GET|PUT
 /daily/:date` (`PUT` body `{ content, baseUpdatedAt? }`, `409 { error, content, updatedAt }` on a

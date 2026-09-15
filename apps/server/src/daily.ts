@@ -26,32 +26,31 @@ export function isValidDailyDate(text: string): boolean {
 }
 
 export const BUILT_IN_TEMPLATE = `---
-type: diario
+type: daily
 created: {{date}}
 updated: {{date}}
-tags: [diario]
+tags: [daily]
 ---
 
 # {{date}}
 
-## Foco de hoje
+## Focus
 - [ ]
 
-## Reuniões
+## Meetings
 -
 
-## Capturas do dia
+## Captures
 -
 
-## Sessões
+## Sessions
 -
 `;
 
 export const DEFAULT_DAILY_PROMPT =
   "You are working inside the second brain at {{root}}. Today is {{date}}. Create or refresh the daily diary {{file}}: " +
   "when {{template}} is a file, start from it; when the diary already exists, keep everything the user wrote. Fill in: " +
-  "a briefing of what happened on {{yesterday}} in at most 3 lines (read fontes/sessions/{{yesterday}}.md and " +
-  "fontes/hub/{{yesterday}}.md when they exist); today's focus as task items in the form `- [ ] Project - item`, " +
+  "a briefing of what happened on {{yesterday}} in at most 3 lines (read the previous diary and any notes of that day you can find in the vault); today's focus as task items in the form `- [ ] Project - item`, " +
   "taken from this input: {{focus}}, plus open items touched in the last two days; meetings when you can find them; " +
   "an empty captures section; and a sessions section listing today's sessions so far: {{sessions}}. Write the file, " +
   "do not ask questions, do not create or edit any other file, then stop.";
@@ -99,14 +98,14 @@ export function dailyRoot(settings: DelegationSettings): string | null {
 export function dailyDir(settings: DelegationSettings): string | null {
   const root = dailyRoot(settings);
   if (!root) return null;
-  return settings.daily.dir ? resolveAgainstRoot(root, settings.daily.dir) : join(root, "diario");
+  return settings.daily.dir ? resolveAgainstRoot(root, settings.daily.dir) : join(root, "daily");
 }
 
 export function dailyTemplatePath(settings: DelegationSettings): string | null {
   const root = dailyRoot(settings);
   if (!root) return null;
   if (settings.daily.template) return resolveAgainstRoot(root, settings.daily.template);
-  const builtin = join(root, "_templates", "diario.md");
+  const builtin = join(root, "_templates", "daily.md");
   return existsSync(builtin) ? builtin : null;
 }
 
@@ -127,7 +126,7 @@ function findExistingDailyFile(dir: string, date: string): string | null {
 export function dailyFile(settings: DelegationSettings, date: string): string | null {
   const root = dailyRoot(settings);
   if (!root) return null;
-  const dir = dailyDir(settings) ?? join(root, "diario");
+  const dir = dailyDir(settings) ?? join(root, "daily");
   return findExistingDailyFile(dir, date) ?? join(dir, `${date}.md`);
 }
 
