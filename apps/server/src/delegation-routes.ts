@@ -429,7 +429,6 @@ export function delegationRouter(): Router {
     res.json(brainToday(root));
   });
 
-  const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
   router.get("/daily", (_req, res) => {
     const settings = getSettings();
