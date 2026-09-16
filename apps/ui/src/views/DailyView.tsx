@@ -1,6 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { DailyStreamEvent } from "../api";
-import { carryOverFromYesterday, focusPreviewLines, parseMeetings, parseNewItems, type DailyFocusDraftItem } from "../daily-plan";
+import {
+  carryOverFromYesterday,
+  focusPreviewLines,
+  parseMeetings,
+  parseNewItems,
+  shouldPersistWizardDraft,
+  type DailyFocusDraftItem,
+} from "../daily-plan";
 import { decideDailyEvent, generateWriteId, rememberWriteId } from "../daily-sync";
 import {
   closeYesterday,
@@ -383,6 +390,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
   const [taskFilter, setTaskFilter] = useState<TaskFilter>(readStoredTaskFilter);
 
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardDate, setWizardDate] = useState<string | null>(null);
   const [wizardHydrated, setWizardHydrated] = useState(false);
   const [wizardStep, setWizardStep] = useState<WizardStep>(1);
   const [prepare, setPrepare] = useState<DailyPrepare | null>(null);
@@ -468,6 +476,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
       .then(setSessions)
       .catch(() => setSessions([]));
     setWizardOpen(false);
+    setWizardDate(null);
     setWizardHydrated(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, date]);
@@ -572,16 +581,19 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
   useEffect(() => {
     if (!wizardOpen) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setWizardOpen(false);
+      if (event.key === "Escape") {
+        setWizardOpen(false);
+        setWizardDate(null);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [wizardOpen]);
 
   useEffect(() => {
-    if (!wizardOpen || !date || !wizardHydrated) return;
-    writeDraft(date, { step: wizardStep, yesterdayDone, yesterdayCarry, yesterdayNotes, carriedItems, newItemsText, meetingsText });
-  }, [wizardOpen, date, wizardHydrated, wizardStep, yesterdayDone, yesterdayCarry, yesterdayNotes, carriedItems, newItemsText, meetingsText]);
+    if (!wizardOpen || !shouldPersistWizardDraft(wizardDate, date, wizardHydrated)) return;
+    writeDraft(wizardDate, { step: wizardStep, yesterdayDone, yesterdayCarry, yesterdayNotes, carriedItems, newItemsText, meetingsText });
+  }, [wizardOpen, wizardDate, date, wizardHydrated, wizardStep, yesterdayDone, yesterdayCarry, yesterdayNotes, carriedItems, newItemsText, meetingsText]);
 
   const reload = () => {
     if (!date) return;
@@ -635,6 +647,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
     if (!date) return;
     setShowRefine(false);
     setWizardHydrated(false);
+    setWizardDate(date);
     setWizardOpen(true);
     setPrepareError(null);
     setExistsConflict(null);
@@ -642,9 +655,6 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
     setCloseError(null);
     setPrepareLoading(true);
 
-    // Restore first: a stored draft is applied synchronously, before prepare
-    // resolves and before the persist effect below can ever run, so it can
-    // never be clobbered by the initial empty state.
     const draft = readDraft(date);
     if (draft) {
       setYesterdayDone(draft.yesterdayDone);
@@ -681,7 +691,10 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
           setWizardHydrated(true);
         }
       })
-      .catch((err: unknown) => setPrepareError(err instanceof Error ? err.message : "could not load prepare"))
+      .catch((err: unknown) => {
+        setPrepareError(err instanceof Error ? err.message : "could not load prepare");
+        setWizardHydrated(true);
+      })
       .finally(() => setPrepareLoading(false));
   };
 
@@ -727,6 +740,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
       applyLoaded(nextEntry);
       setMode("preview");
       setWizardOpen(false);
+      setWizardDate(null);
       setWizardHydrated(false);
       setExistsConflict(null);
       clearDraft(date);
@@ -866,7 +880,10 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
               prepareLoading={prepareLoading}
               prepareError={prepareError}
               onRetryPrepare={openWizard}
-              onClose={() => setWizardOpen(false)}
+              onClose={() => {
+                setWizardOpen(false);
+                setWizardDate(null);
+              }}
               yesterdayDone={yesterdayDone}
               yesterdayCarry={yesterdayCarry}
               onToggleDone={(line, value) => {

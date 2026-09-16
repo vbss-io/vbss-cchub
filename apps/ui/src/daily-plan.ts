@@ -6,6 +6,10 @@ export interface DailyFocusDraftItem {
   block?: string;
 }
 
+export function shouldPersistWizardDraft(wizardDate: string | null, currentDate: string | null, hydrated: boolean): wizardDate is string {
+  return wizardDate !== null && wizardDate === currentDate && hydrated;
+}
+
 export function parseNewItems(text: string): DailyFocusDraftItem[] {
   return text
     .split("\n")
