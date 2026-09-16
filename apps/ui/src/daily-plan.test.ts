@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { carryOverFromYesterday, focusPreviewLines, parseMeetings, parseNewItems } from "./daily-plan";
+import { carryOverFromYesterday, focusPreviewLines, parseMeetings, parseNewItems, shouldPersistWizardDraft } from "./daily-plan";
 import type { DailyYesterdayTask } from "./delegation";
 
 test("parseNewItems splits project from text on the first ' - '", () => {
@@ -82,4 +82,21 @@ test("carryOverFromYesterday returns an empty list when everything is done", () 
     { line: 1, depth: 0, checked: true, text: "Done thing", raw: "- [x] Done thing", block: "b1" },
   ];
   assert.deepEqual(carryOverFromYesterday(tasks, {}, {}), []);
+});
+
+test("shouldPersistWizardDraft is true only for the wizard's own date once hydrated", () => {
+  assert.equal(shouldPersistWizardDraft("2026-09-15", "2026-09-15", true), true);
+});
+
+test("shouldPersistWizardDraft is false right after the date picker moves to a different day", () => {
+  assert.equal(shouldPersistWizardDraft("2026-09-15", "2026-09-16", true), false);
+});
+
+test("shouldPersistWizardDraft is false before hydration completes", () => {
+  assert.equal(shouldPersistWizardDraft("2026-09-15", "2026-09-15", false), false);
+});
+
+test("shouldPersistWizardDraft is false when no wizard date is set", () => {
+  assert.equal(shouldPersistWizardDraft(null, "2026-09-15", true), false);
+  assert.equal(shouldPersistWizardDraft(null, null, true), false);
 });
