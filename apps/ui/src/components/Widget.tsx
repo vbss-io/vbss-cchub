@@ -212,12 +212,12 @@ async function currentMonitorLike(): Promise<MonitorLike | null> {
   return (await currentMonitor()) as unknown as MonitorLike | null;
 }
 
-async function applyDock(edge: WidgetEdge, collapsed: boolean, showNow: boolean): Promise<string> {
+async function applyDock(edge: WidgetEdge, collapsed: boolean, showNow: boolean, rings: number): Promise<string> {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const { LogicalPosition, LogicalSize } = await import("@tauri-apps/api/dpi");
   const win = getCurrentWindow();
   const monitor = await currentMonitorLike();
-  const rect = dockRect(edge, collapsed, workAreaOf(monitor), readOffset(edge));
+  const rect = dockRect(edge, collapsed, workAreaOf(monitor), readOffset(edge), rings);
   const attempt = async (step: () => Promise<unknown>): Promise<void> => {
     try {
       await step();
@@ -425,6 +425,10 @@ export function Widget() {
   const dragApi = useRef<(() => void) | null>(null);
   const configRef = useRef(config);
   configRef.current = config;
+  const ringCount = (config.rings.claude && limits?.claude?.sevenDay ? 1 : 0) + (config.rings.codex && limits?.codex?.secondary ? 1 : 0);
+  const ringsRef = useRef(ringCount);
+  ringsRef.current = ringCount;
+  const dockedRings = useRef(ringCount);
 
   const tab: WidgetPanel = tabPref ?? config.panel;
   const now = Date.now();
@@ -448,7 +452,8 @@ export function Widget() {
     applying.current = true;
     try {
       const first = !shown.current;
-      lastMonitor.current = await applyDock(configRef.current.edge, collapsed, first && configRef.current.autostart);
+      dockedRings.current = ringsRef.current;
+      lastMonitor.current = await applyDock(configRef.current.edge, collapsed, first && configRef.current.autostart, ringsRef.current);
       shown.current = true;
     } catch (err) {
       logWidget("dock", err);
@@ -528,6 +533,11 @@ export function Widget() {
   }, [loaded, config.edge, dock]);
 
   useEffect(() => {
+    if (!loaded || openRef.current || dockedRings.current === ringCount) return;
+    void dock(true);
+  }, [loaded, ringCount, dock]);
+
+  useEffect(() => {
     if (!inTauri() || !loaded) return;
     const id = window.setInterval(() => {
       void currentMonitorLike()
@@ -560,7 +570,7 @@ export function Widget() {
           void currentMonitorLike()
             .then(async (monitor) => {
               const scale = monitor?.scaleFactor ?? 1;
-              const offset = offsetFromPosition(edge, workAreaOf(monitor), { x: payload.x / scale, y: payload.y / scale });
+              const offset = offsetFromPosition(edge, workAreaOf(monitor), { x: payload.x / scale, y: payload.y / scale }, ringsRef.current);
               writeOffset(edge, offset);
               await dock(true);
             })

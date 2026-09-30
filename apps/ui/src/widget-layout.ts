@@ -10,7 +10,12 @@ export interface Rect {
 export type Tone = "go" | "pend" | "hold" | "muted";
 
 export const TAB_THICKNESS = 56;
-export const TAB_LENGTH = 264;
+export const TAB_BORDER = 1;
+export const TAB_END_PADDING = 8;
+export const TAB_GAP = 10;
+export const TAB_ARROW = 22;
+export const TAB_PIP_SLOT = 20;
+export const TAB_RING = 36;
 export const PANEL_LONG = 620;
 export const PANEL_SHORT = 440;
 
@@ -18,24 +23,32 @@ const clamp = (value: number, min: number, max: number): number => Math.min(Math
 
 const isVertical = (edge: WidgetEdge): boolean => edge !== "top";
 
-const collapsedSize = (edge: WidgetEdge): { width: number; height: number } =>
-  isVertical(edge) ? { width: TAB_THICKNESS, height: TAB_LENGTH } : { width: TAB_LENGTH, height: TAB_THICKNESS };
+export function collapsedLength(rings: number): number {
+  const count = Math.max(0, Math.floor(Number.isFinite(rings) ? rings : 0));
+  const content = TAB_ARROW + TAB_GAP + TAB_PIP_SLOT + count * (TAB_GAP + TAB_RING);
+  return content + 2 * TAB_END_PADDING + 2 * TAB_BORDER;
+}
+
+const collapsedSize = (edge: WidgetEdge, rings: number): { width: number; height: number } => {
+  const length = collapsedLength(rings);
+  return isVertical(edge) ? { width: TAB_THICKNESS, height: length } : { width: length, height: TAB_THICKNESS };
+};
 
 const expandedSize = (edge: WidgetEdge, area: Rect): { width: number; height: number } =>
   isVertical(edge)
     ? { width: Math.min(PANEL_SHORT, area.width), height: Math.min(PANEL_LONG, area.height) }
     : { width: Math.min(PANEL_LONG, area.width), height: Math.min(PANEL_SHORT, area.height) };
 
-export function clampOffset(edge: WidgetEdge, area: Rect, offset: number): number {
-  const size = collapsedSize(edge);
+export function clampOffset(edge: WidgetEdge, area: Rect, offset: number, rings = 0): number {
+  const size = collapsedSize(edge, rings);
   const slack = isVertical(edge) ? area.height - size.height : area.width - size.width;
   const half = Math.floor(Math.max(0, slack) / 2);
   return Math.round(clamp(offset, -half, half));
 }
 
-export function dockRect(edge: WidgetEdge, collapsed: boolean, area: Rect, offset: number): Rect {
-  const size = collapsed ? collapsedSize(edge) : expandedSize(edge, area);
-  const shift = collapsed ? clampOffset(edge, area, offset) : 0;
+export function dockRect(edge: WidgetEdge, collapsed: boolean, area: Rect, offset: number, rings = 0): Rect {
+  const size = collapsed ? collapsedSize(edge, rings) : expandedSize(edge, area);
+  const shift = collapsed ? clampOffset(edge, area, offset, rings) : 0;
   if (edge === "top") {
     return {
       x: Math.round(area.x + (area.width - size.width) / 2 + shift),
@@ -52,10 +65,10 @@ export function dockRect(edge: WidgetEdge, collapsed: boolean, area: Rect, offse
   };
 }
 
-export function offsetFromPosition(edge: WidgetEdge, area: Rect, position: { x: number; y: number }): number {
-  const centered = dockRect(edge, true, area, 0);
+export function offsetFromPosition(edge: WidgetEdge, area: Rect, position: { x: number; y: number }, rings = 0): number {
+  const centered = dockRect(edge, true, area, 0, rings);
   const raw = isVertical(edge) ? position.y - centered.y : position.x - centered.x;
-  return clampOffset(edge, area, raw);
+  return clampOffset(edge, area, raw, rings);
 }
 
 export function ringTone(utilization: number): Exclude<Tone, "muted"> {

@@ -42,10 +42,10 @@ html.widget-window #root {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 18px;
+  gap: 10px;
   width: 56px;
-  height: 264px;
-  padding: 0;
+  height: 100%;
+  padding: 8px 0;
   cursor: pointer;
   user-select: none;
   background: var(--panel);
@@ -54,8 +54,9 @@ html.widget-window #root {
 
 .wgd[data-edge="top"] .wgd-tab {
   flex-direction: row;
-  width: 264px;
+  width: 100%;
   height: 56px;
+  padding: 0 8px;
 }
 
 .wgd-tab:hover {
@@ -82,6 +83,7 @@ html.widget-window #root {
 
 .wgd-arrow {
   display: flex;
+  flex: none;
   color: var(--muted);
   pointer-events: none;
 }
@@ -94,12 +96,14 @@ html.widget-window #root {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex: none;
   width: 12px;
   height: 12px;
+  margin: 4px;
   border-radius: 999px;
   background: var(--ended);
   color: #1b1c26;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -115,8 +119,9 @@ html.widget-window #root {
 
 .wgd-pip--hold {
   background: var(--hold);
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
+  margin: 0;
 }
 
 .wgd-rings {
@@ -124,6 +129,7 @@ html.widget-window #root {
   flex-direction: column;
   align-items: center;
   gap: 10px;
+  flex: none;
 }
 
 .wgd[data-edge="top"] .wgd-rings {
