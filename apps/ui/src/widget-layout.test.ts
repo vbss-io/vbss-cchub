@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   clampOffset,
+  collapsedLength,
   dockRect,
   formatTokens,
   offsetFromPosition,
@@ -15,15 +16,15 @@ const area: Rect = { x: 0, y: 0, width: 1920, height: 1040 };
 
 describe("dockRect", () => {
   it("docks the collapsed tab centered on the left edge", () => {
-    assert.deepEqual(dockRect("left", true, area, 0), { x: 0, y: 388, width: 56, height: 264 });
+    assert.deepEqual(dockRect("left", true, area, 0, 2), { x: 0, y: 439, width: 56, height: 162 });
   });
 
   it("docks the collapsed tab centered on the right edge", () => {
-    assert.deepEqual(dockRect("right", true, area, 0), { x: 1864, y: 388, width: 56, height: 264 });
+    assert.deepEqual(dockRect("right", true, area, 0, 2), { x: 1864, y: 439, width: 56, height: 162 });
   });
 
   it("docks the collapsed tab centered on the top edge", () => {
-    assert.deepEqual(dockRect("top", true, area, 0), { x: 828, y: 0, width: 264, height: 56 });
+    assert.deepEqual(dockRect("top", true, area, 0, 2), { x: 879, y: 0, width: 162, height: 56 });
   });
 
   it("anchors the expanded panel to the left edge, vertically centered", () => {
@@ -40,16 +41,16 @@ describe("dockRect", () => {
 
   it("respects a work area that does not start at the origin and excludes the taskbar", () => {
     const offsetArea: Rect = { x: 1920, y: 40, width: 1600, height: 900 };
-    assert.deepEqual(dockRect("right", true, offsetArea, 0), { x: 3464, y: 358, width: 56, height: 264 });
+    assert.deepEqual(dockRect("right", true, offsetArea, 0, 2), { x: 3464, y: 409, width: 56, height: 162 });
     assert.deepEqual(dockRect("top", false, offsetArea, 0), { x: 2410, y: 40, width: 620, height: 440 });
   });
 
   it("shifts the collapsed tab along the edge and clamps it inside the work area", () => {
-    assert.equal(dockRect("left", true, area, 100).y, 488);
-    assert.equal(dockRect("left", true, area, 9999).y, 1040 - 264);
-    assert.equal(dockRect("left", true, area, -9999).y, 0);
-    assert.equal(dockRect("top", true, area, -200).x, 628);
-    assert.equal(dockRect("top", true, area, 99999).x, 1920 - 264);
+    assert.equal(dockRect("left", true, area, 100, 2).y, 539);
+    assert.equal(dockRect("left", true, area, 9999, 2).y, 1040 - 162);
+    assert.equal(dockRect("left", true, area, -9999, 2).y, 0);
+    assert.equal(dockRect("top", true, area, -200, 2).x, 679);
+    assert.equal(dockRect("top", true, area, 99999, 2).x, 1920 - 162);
   });
 
   it("keeps the expanded panel centered regardless of the offset", () => {
@@ -62,31 +63,55 @@ describe("dockRect", () => {
   });
 });
 
+describe("collapsed tab length", () => {
+  it("grows with the number of rings", () => {
+    assert.equal(collapsedLength(0), 70);
+    assert.equal(collapsedLength(1), 116);
+    assert.equal(collapsedLength(2), 162);
+  });
+
+  it("ignores a negative or non-finite ring count", () => {
+    assert.equal(collapsedLength(-3), 70);
+    assert.equal(collapsedLength(Number.NaN), 70);
+  });
+
+  it("shrinks the docked window to the tab for every ring count", () => {
+    assert.deepEqual(dockRect("right", true, area, 0, 0), { x: 1864, y: 485, width: 56, height: 70 });
+    assert.deepEqual(dockRect("right", true, area, 0, 1), { x: 1864, y: 462, width: 56, height: 116 });
+    assert.deepEqual(dockRect("top", true, area, 0, 1), { x: 902, y: 0, width: 116, height: 56 });
+    assert.deepEqual(dockRect("left", true, area, 0, 0), { x: 0, y: 485, width: 56, height: 70 });
+  });
+
+  it("keeps the expanded panel independent of the ring count", () => {
+    assert.deepEqual(dockRect("right", false, area, 0, 0), dockRect("right", false, area, 0, 2));
+  });
+});
+
 describe("offsets", () => {
   it("clamps offsets to half the slack along the edge", () => {
-    assert.equal(clampOffset("right", area, 1000), 388);
-    assert.equal(clampOffset("right", area, -1000), -388);
-    assert.equal(clampOffset("top", area, 50.4), 50);
+    assert.equal(clampOffset("right", area, 1000, 2), 439);
+    assert.equal(clampOffset("right", area, -1000, 2), -439);
+    assert.equal(clampOffset("top", area, 50.4, 2), 50);
   });
 
   it("never lets the tab cross the work area edge when the slack is odd", () => {
     const odd: Rect = { x: 0, y: 30, width: 1919, height: 1039 };
-    assert.equal(clampOffset("left", odd, 9999), 387);
-    assert.equal(clampOffset("left", odd, -9999), -387);
+    assert.equal(clampOffset("left", odd, 9999, 2), 438);
+    assert.equal(clampOffset("left", odd, -9999, 2), -438);
     for (const offset of [-9999, -1, 0, 1, 9999]) {
-      const side = dockRect("left", true, odd, offset);
+      const side = dockRect("left", true, odd, offset, 2);
       assert.ok(side.y >= odd.y && side.y + side.height <= odd.y + odd.height);
-      const top = dockRect("top", true, odd, offset);
+      const top = dockRect("top", true, odd, offset, 2);
       assert.ok(top.x >= odd.x && top.x + top.width <= odd.x + odd.width);
     }
   });
 
   it("recovers the offset from a dropped window position", () => {
-    const dropped = dockRect("right", true, area, 120);
-    assert.equal(offsetFromPosition("right", area, { x: dropped.x - 400, y: dropped.y }), 120);
-    const top = dockRect("top", true, area, -300);
-    assert.equal(offsetFromPosition("top", area, { x: top.x, y: 250 }), -300);
-    assert.equal(offsetFromPosition("left", area, { x: 0, y: 5000 }), 388);
+    const dropped = dockRect("right", true, area, 120, 2);
+    assert.equal(offsetFromPosition("right", area, { x: dropped.x - 400, y: dropped.y }, 2), 120);
+    const top = dockRect("top", true, area, -300, 2);
+    assert.equal(offsetFromPosition("top", area, { x: top.x, y: 250 }, 2), -300);
+    assert.equal(offsetFromPosition("left", area, { x: 0, y: 5000 }, 2), 439);
   });
 });
 
