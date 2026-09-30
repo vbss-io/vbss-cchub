@@ -44,8 +44,9 @@ function fixtureSettings(root: string, overrides: Partial<DelegationSettings> = 
     autonomy: "full",
     ownerName: "tester",
     runTimeoutMinutes: 60,
-    features: { daily: true },
+    features: { daily: true, trail: false },
     daily: defaultDaily,
+    trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true },
     ...overrides,
   };
 }
@@ -133,7 +134,7 @@ tags: [diario]
 describe("daily settings", () => {
   it("defaults features.daily off and merges nested daily patches", () => {
     const defaults = store.getSettings();
-    assert.deepEqual(defaults.features, { daily: false });
+    assert.deepEqual(defaults.features, { daily: false, trail: false });
     assert.deepEqual(defaults.daily, defaultDaily);
 
     const afterFeature = store.updateSettings({ features: { daily: true } });
@@ -430,7 +431,7 @@ describe("composeDaily", () => {
       {
         focus: [{ project: "equatorial", text: "ship the daily tab" }],
         meetings: ["09:30 Today (Murilo)"],
-        sessions: [{ sessionId: "s1", title: "task a", client: "claude-code", cwd: "/repo", status: "completed", startedAt: 0, updatedAt: 0 }],
+        sessions: [{ sessionId: "s1", title: "task a", client: "claude-code", cwd: "/repo", status: "ended", startedAt: 0, updatedAt: 0 }],
       },
       { date: "2026-09-15", headings, wikilinks: false },
     );
@@ -622,6 +623,7 @@ describe("watcher", () => {
     writeFileSync(join(root, "daily", "2026-09-01.md"), "external content");
 
     const seen = await waitFor(async () => (events.length > 0 ? events[0] : null), 5000);
+    assert.ok(seen);
     assert.equal(seen.date, "2026-09-01");
     assert.equal(seen.source, "disk");
 
@@ -802,6 +804,45 @@ describe("daily HTTP routes", () => {
     assert.ok(Array.isArray(body.sessionsToday));
     assert.deepEqual(body.headings, { focus: "Focus", meetings: "Meetings", sessions: "Sessions" });
     assert.equal(body.wikilinks, false);
+  });
+
+  const trailBlock = (id: string, bullets: string[]): string =>
+    [`<!-- session:${id} START -->`, "", `## \`${id.slice(0, 8)}\` · 09:00 → 10:00 · 12 turns`, "", "`/repo`", "", ...bullets.map((bullet) => `- ${bullet}`), "", `<!-- session:${id} END -->`].join("\n");
+
+  it("prepare returns yesterdayTrail from the legacy sessions file, then from the trail dir once the feature is on", async () => {
+    const empty = await http("GET", "/delegation/daily/2026-09-14/prepare");
+    assert.equal((empty.json as { yesterdayTrail: unknown }).yesterdayTrail, null);
+
+    const legacyDir = join(box.brain, "fontes", "sessions");
+    mkdirSync(legacyDir, { recursive: true });
+    const legacyFile = join(legacyDir, "2026-09-13.md");
+    writeFileSync(
+      legacyFile,
+      `---\ntype: fonte\n---\n\n# Sessions — 2026-09-13\n\n${trailBlock("aaaaaaaa-1", ["fixed the login redirect", "deployed the api"])}\n\n${trailBlock("bbbbbbbb-2", ["decided to drop the cache"])}\n`,
+    );
+    const legacy = await http("GET", "/delegation/daily/2026-09-14/prepare");
+    assert.deepEqual((legacy.json as { yesterdayTrail: unknown }).yesterdayTrail, {
+      path: legacyFile,
+      bullets: ["fixed the login redirect", "deployed the api", "decided to drop the cache"],
+    });
+
+    const trailDir = join(box.brain, "trail");
+    mkdirSync(trailDir, { recursive: true });
+    const trailFile = join(trailDir, "2026-09-13.md");
+    const many = Array.from({ length: 30 }, (_, index) => `bullet ${index}`);
+    writeFileSync(trailFile, `# Sessions — 2026-09-13\n\n${trailBlock("cccccccc-3", many)}\n\n${trailBlock("dddddddd-4", many)}\n\n## Hub\n\n- 09:00 · not a session bullet\n`);
+    assert.equal((await http("PUT", "/delegation/settings", { features: { trail: true } })).status, 200);
+    const trail = await http("GET", "/delegation/daily/2026-09-14/prepare");
+    const body = (trail.json as { yesterdayTrail: { path: string; bullets: string[] } }).yesterdayTrail;
+    assert.equal(body.path, trailFile);
+    assert.equal(body.bullets.length, 40);
+    assert.equal(body.bullets[0], "bullet 0");
+    assert.equal(body.bullets[30], "bullet 0");
+    assert.ok(!body.bullets.includes("not a session bullet"));
+
+    assert.equal((await http("PUT", "/delegation/settings", { features: { trail: false } })).status, 200);
+    rmSync(legacyFile);
+    rmSync(trailFile);
   });
 
   it("close-yesterday flips checkboxes on disk, stamps closed in frontmatter, and 400s on bad input", async () => {

@@ -305,6 +305,7 @@ Base: `http://127.0.0.1:<HUB_PORT>/delegation`
 | `POST /tasks/:id/cancel` | — | Abort; `202` |
 | `GET /reports?taskId=&limit=`, `POST /reports` | `{ text, kind?, taskId?, sessionId?, workspace?, source? }` | Reports |
 | `GET /daily`, `GET /daily/sessions?date=`, `GET /daily/:date`, `PUT /daily/:date`, `POST /daily/:date/generate` | see below | Daily diary |
+| `GET /trail`, `POST /trail/flush` | `{ sessionId? }` | Session trail status; force a summary now |
 
 Also on the open API: `GET /api/runtimes`, `GET /api/codex/sessions`,
 `GET /api/sessions/:id/agents`, `GET /api/sessions/:id/live`. SSE events on `/api/events`:
@@ -340,6 +341,23 @@ carry-over `block`), today's sessions, headings and wikilinks. `POST /daily/:dat
 `POST /daily/:date/compose` (`{ briefing?, focus: [{ project, text, block? }], meetings, overwrite? }`)
 builds today's diary from the template deterministically; `409 { error: "diary exists", updatedAt }`
 unless `overwrite: true`.
+
+## Session trail
+
+Optional (`settings.features.trail`, off by default). After each Claude Code `stop` and at `session_end`,
+a small model summarizes the new turns into bullets in one file per day, `<trail.dir>/<date>.md` (default
+`<root>/trail`), one `<!-- session:<id> START/END -->` block per session, same format as the old diary hook.
+Hub runs and share forks are skipped. `trail.detail`: `light` (120-turn windows, 30 min or 20 turns, 1 bullet
+per window, at most 5 per session and day, rewritten when the cap is hit), `medium` (80 turns, 10 min or 5
+turns, 1-3 bullets) or `high` (60 turns, every stop, 3-6 bullets with files and commands). `trail.model`
+(default `haiku`, `null` for the CLI default), `trail.prompt` (replaces the level prompt), `trail.hubEvents`
+(default `true`): delegations, reports and share asks go to a trailing `## Hub` section of the same file
+instead of `fontes/hub/<date>.md`, and `GET /brain/today` serves the file as `sessions` and that section as
+`hub`. One serial worker runs the model through `HUB_CLAUDE_BIN` (secrets redacted, failed windows retried
+from the checkpoint in `trail_state`). `GET /trail` returns `{ enabled, dir, detail, model, hubEvents, today:
+{ path, exists, sessions, hubLines }, queue, running, lastError }`; `POST /trail/flush` (`{ sessionId? }`)
+returns `{ scheduled }`; SSE `trail { date, sessionId, bullets }`. `GET /daily/:date/prepare` adds
+`yesterdayTrail: { path, bullets[] } | null`.
 
 ## Thin CLI
 
