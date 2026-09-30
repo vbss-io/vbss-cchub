@@ -40,7 +40,7 @@ const newTask = (title: string, runner: "claude" | "codex" = "claude") =>
 
 describe("settings", () => {
   it("falls back to environment defaults and persists updates", () => {
-    const dailyDefaults = { features: { daily: false, trail: false }, daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false }, trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true } };
+    const dailyDefaults = { features: { daily: false, trail: false, usage: false, limits: false }, daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false }, trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true }, widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions", autostart: true }, limits: { claude: false, codex: false, refreshMinutes: 5 }, usage: { days: 7 } };
     assert.deepEqual(store.getSettings(), { workspacesRoot: null, editorCommand: "code", secondBrainRoot: null, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60, ...dailyDefaults });
     const updated = store.updateSettings({ workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir });
     assert.deepEqual(updated, { workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60, ...dailyDefaults });
@@ -56,6 +56,54 @@ describe("settings", () => {
     assert.equal(store.updateSettings({ runTimeoutMinutes: 1 }).runTimeoutMinutes, 5);
     assert.equal(store.updateSettings({ runTimeoutMinutes: 5000 }).runTimeoutMinutes, 720);
     store.updateSettings({ runTimeoutMinutes: 60 });
+  });
+});
+
+describe("widget, limits and usage settings", () => {
+  it("merges nested patches and clamps numeric ranges", () => {
+    const before = store.getSettings();
+    const edge = store.updateSettings({ widget: { edge: "top" } });
+    assert.equal(edge.widget.edge, "top");
+    assert.deepEqual(edge.widget.rings, { claude: false, codex: false });
+    assert.equal(edge.widget.autostart, true);
+    const rings = store.updateSettings({ widget: { rings: { codex: true } } });
+    assert.deepEqual(rings.widget.rings, { claude: false, codex: true });
+    assert.equal(rings.widget.edge, "top");
+    const panel = store.updateSettings({ widget: { panel: "usage", autostart: false }, features: { usage: true } });
+    assert.equal(panel.widget.panel, "usage");
+    assert.equal(panel.widget.autostart, false);
+    assert.deepEqual(panel.features, { daily: false, trail: false, usage: true, limits: false });
+    const limits = store.updateSettings({ limits: { claude: true }, features: { limits: true } });
+    assert.deepEqual(limits.limits, { claude: true, codex: false, refreshMinutes: 5 });
+    assert.equal(limits.features.limits, true);
+    assert.equal(store.updateSettings({ limits: { refreshMinutes: 0 } }).limits.refreshMinutes, 1);
+    assert.equal(store.updateSettings({ limits: { refreshMinutes: 500 } }).limits.refreshMinutes, 60);
+    assert.equal(store.updateSettings({ limits: { refreshMinutes: 15 } }).limits.refreshMinutes, 15);
+    assert.equal(store.updateSettings({ usage: { days: 90 } }).usage.days, 30);
+    assert.equal(store.updateSettings({ usage: { days: 14 } }).usage.days, 14);
+    store.updateSettings({
+      widget: { edge: before.widget.edge, panel: before.widget.panel, autostart: before.widget.autostart, rings: before.widget.rings },
+      limits: before.limits,
+      usage: before.usage,
+      features: before.features,
+    });
+    assert.deepEqual(store.getSettings().widget, before.widget);
+    assert.deepEqual(store.getSettings().limits, before.limits);
+  });
+
+  it("falls back to defaults for unknown stored values", () => {
+    store.setSetting("widget.edge", "bottom");
+    store.setSetting("widget.panel", "nope");
+    store.setSetting("limits.refreshMinutes", "abc");
+    store.setSetting("usage.days", "999");
+    const settings = store.getSettings();
+    assert.equal(settings.widget.edge, "right");
+    assert.equal(settings.widget.panel, "sessions");
+    assert.equal(settings.limits.refreshMinutes, 5);
+    assert.equal(settings.usage.days, 30);
+    for (const key of ["widget.edge", "widget.panel", "limits.refreshMinutes", "usage.days"]) store.setSetting(key, null);
+    assert.equal(store.getSettings().widget.edge, "right");
+    assert.equal(store.getSettings().usage.days, 7);
   });
 });
 

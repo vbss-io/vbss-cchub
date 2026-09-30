@@ -22,15 +22,16 @@
         "label": "widget",
         "title": "VBSS CCHUB Widget",
         "url": "index.html?widget=1",
-        "width": 320,
-        "height": 440,
-        "minWidth": 240,
-        "minHeight": 36,
-        "resizable": true,
+        "width": 28,
+        "height": 132,
+        "resizable": false,
         "decorations": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "visible": false
+        "focus": false,
+        "visible": false,
+        "shadow": false,
+        "transparent": true
       },
       {
         "label": "toast",

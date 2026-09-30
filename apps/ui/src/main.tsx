@@ -14,6 +14,7 @@ const isWidget = params.get("widget") === "1";
 const isToast = params.get("toast") === "1";
 void reportUiDiag({ window: isToast ? "toast" : isWidget ? "widget" : "main", loaded: true, href: location.href, tauri: "__TAURI_INTERNALS__" in window, visibility: document.visibilityState });
 if (isToast) document.documentElement.classList.add("toast-window");
+if (isWidget) document.documentElement.classList.add("widget-window");
 const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(

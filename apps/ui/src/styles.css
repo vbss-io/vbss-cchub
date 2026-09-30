@@ -4040,3 +4040,38 @@ h6.md__h {
 .trail__status-error {
   color: var(--pend);
 }
+
+.seg {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 2px;
+  gap: 2px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.seg__opt {
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 14px;
+  cursor: pointer;
+}
+
+.seg__opt:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.seg__opt[aria-checked="true"] {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.seg__opt:disabled {
+  cursor: default;
+  opacity: 0.5;
+}

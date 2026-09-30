@@ -83,7 +83,41 @@ export type TrailDetail = (typeof TRAIL_DETAILS)[number];
 export interface DelegationFeatures {
   daily: boolean;
   trail: boolean;
+  usage: boolean;
+  limits: boolean;
 }
+
+export const WIDGET_EDGES = ["left", "right", "top"] as const;
+
+export type WidgetEdge = (typeof WIDGET_EDGES)[number];
+
+export const WIDGET_PANELS = ["sessions", "usage"] as const;
+
+export type WidgetPanel = (typeof WIDGET_PANELS)[number];
+
+export interface WidgetSettings {
+  edge: WidgetEdge;
+  rings: { claude: boolean; codex: boolean };
+  panel: WidgetPanel;
+  autostart: boolean;
+}
+
+export interface LimitsSettings {
+  claude: boolean;
+  codex: boolean;
+  refreshMinutes: number;
+}
+
+export interface UsageSettings {
+  days: number;
+}
+
+export const LIMITS_REFRESH_MIN = 1;
+export const LIMITS_REFRESH_MAX = 60;
+export const LIMITS_REFRESH_DEFAULT = 5;
+export const USAGE_DAYS_MIN = 1;
+export const USAGE_DAYS_MAX = 30;
+export const USAGE_DAYS_DEFAULT = 7;
 
 export interface TrailFeatureSettings {
   dir: string | null;
@@ -119,6 +153,9 @@ export interface DelegationSettings {
   features: DelegationFeatures;
   daily: DailyFeatureSettings;
   trail: TrailFeatureSettings;
+  widget: WidgetSettings;
+  limits: LimitsSettings;
+  usage: UsageSettings;
 }
 
 export const RUN_TIMEOUT_MIN = 5;

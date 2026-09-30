@@ -79,6 +79,27 @@ export interface TrailSettings {
   hubEvents: boolean;
 }
 
+export type WidgetEdge = "left" | "right" | "top";
+
+export type WidgetPanel = "sessions" | "usage";
+
+export interface WidgetSettings {
+  edge: WidgetEdge;
+  rings: { claude: boolean; codex: boolean };
+  panel: WidgetPanel;
+  autostart: boolean;
+}
+
+export interface LimitsSettings {
+  claude: boolean;
+  codex: boolean;
+  refreshMinutes: number;
+}
+
+export interface UsageSettings {
+  days: number;
+}
+
 export interface DelegationSettings {
   workspacesRoot: string | null;
   editorCommand: string;
@@ -86,9 +107,12 @@ export interface DelegationSettings {
   autonomy: Autonomy;
   ownerName: string;
   runTimeoutMinutes: number;
-  features: { daily: boolean; trail: boolean };
+  features: { daily: boolean; trail: boolean; usage: boolean; limits: boolean };
   daily: DailySettings;
   trail: TrailSettings;
+  widget: WidgetSettings;
+  limits: LimitsSettings;
+  usage: UsageSettings;
 }
 
 export interface TaskRecord {
@@ -215,11 +239,66 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T;
 }
 
-export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily" | "trail">> & {
+export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily" | "trail" | "widget" | "limits" | "usage">> & {
   features?: Partial<DelegationSettings["features"]>;
   daily?: Partial<Omit<DailySettings, "headings">> & { headings?: Partial<DailyHeadings> };
   trail?: Partial<TrailSettings>;
+  widget?: Partial<Omit<WidgetSettings, "rings">> & { rings?: Partial<WidgetSettings["rings"]> };
+  limits?: Partial<LimitsSettings>;
+  usage?: Partial<UsageSettings>;
 };
+
+export interface ClaudeLimitWindow {
+  utilization: number;
+  resetsAt: number | null;
+}
+
+export interface CodexLimitWindow {
+  usedPercent: number;
+  resetsAt: number | null;
+}
+
+export interface LimitsSnapshot {
+  updatedAt: number | null;
+  claude: {
+    fiveHour: ClaudeLimitWindow;
+    sevenDay: ClaudeLimitWindow;
+    models: { name: string; utilization: number; resetsAt: number | null }[];
+  } | null;
+  codex: {
+    primary: CodexLimitWindow;
+    secondary: CodexLimitWindow;
+  } | null;
+}
+
+export interface TokenTotals {
+  read: number;
+  output: number;
+}
+
+export interface ProviderUsage {
+  today: TokenTotals & { messages: number };
+  week: TokenTotals;
+}
+
+export interface UsageSummary {
+  days: number;
+  providers: { claude: ProviderUsage | null; codex: ProviderUsage | null };
+}
+
+async function optionalJson<T>(path: string): Promise<T | null> {
+  try {
+    const res = await fetch(`${base}${path}`);
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+export const fetchLimits = (): Promise<LimitsSnapshot | null> => optionalJson("/limits");
+
+export const fetchUsageSummary = (): Promise<UsageSummary | null> => optionalJson("/usage/summary");
 
 export const getSettings = (): Promise<DelegationSettings> => call("GET", "/settings");
 

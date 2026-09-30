@@ -287,7 +287,7 @@ Base: `http://127.0.0.1:<HUB_PORT>/delegation`
 
 | Method and path | Body | Notes |
 | --- | --- | --- |
-| `GET /settings`, `PUT /settings` | `{ workspacesRoot?, editorCommand?, secondBrainRoot? }` | Roots must be existing directories; `null` clears |
+| `GET /settings`, `PUT /settings` | `{ workspacesRoot?, editorCommand?, secondBrainRoot?, features?, widget?, limits?, usage? }` | Roots must be existing directories; `null` clears. Nested blocks merge: `features.{daily,trail,usage,limits}` (booleans, default off), `widget.{edge: left/right/top, rings.{claude,codex}, panel: sessions/usage, autostart}` (defaults right, off/off, sessions, on), `limits.{claude,codex,refreshMinutes 1-60}` (default off/off, 5), `usage.days` (1-30, default 7); bad enum or range is a 400. A successful `PUT` broadcasts SSE `settings` with the full object |
 | `GET /workspaces` | — | Discovered workspaces |
 | `POST /workspaces` | `{ name, repos[] }` | Writes the `.code-workspace` and seeds `<name>/CLAUDE.md` |
 | `PUT /workspaces/:name` | `{ repos[] }` | Replaces the repo list, keeps settings |
@@ -358,6 +358,16 @@ from the checkpoint in `trail_state`). `GET /trail` returns `{ enabled, dir, det
 { path, exists, sessions, hubLines }, queue, running, lastError }`; `POST /trail/flush` (`{ sessionId? }`)
 returns `{ scheduled }`; SSE `trail { date, sessionId, bullets }`. `GET /daily/:date/prepare` adds
 `yesterdayTrail: { path, bullets[] } | null`.
+
+## Usage
+
+Local token analytics for this machine (Claude Code and Codex), behind the same loopback guard as the rest of `/delegation`.
+
+- `GET /delegation/usage?days=7` (1..30): totals, `byProvider`, `byDay`, `byModel`, `byProject` (top 12), `bySession` (top 15, with title), `context` (avg, p50, p90, max, `over300k`, `over600k`) and `sidechainShare` (share of read tokens from subagents). `costs` is `null` (no price table).
+- `GET /delegation/usage/summary`: `{ days: 7, providers: { claude, codex } }` with today and week `read`/`output`; a provider with no data in the window is `null`.
+- `POST /delegation/usage/rescan`: drops the file cache, rescans and answers `{ files }`; broadcasts SSE `usage { at }`. Responses are cached 60 s per `days`; `?fresh=1` bypasses.
+- Sources: `~/.claude/projects` (override `HUB_CLAUDE_PROJECTS_DIR`, subagent transcripts included) and `config.codexSessionsDir`. Files are streamed once, cached by path, size and mtime (appended files resume from the last newline), and files older than the window are not read.
+- Claude counts each `message.id` once (last streaming chunk); `read` = input + cache read + cache write. Codex uses `last_token_usage` per `token_count` (events repeating the previous `total_tokens` are dropped, so the deltas sum to the final total); `read` = `input_tokens`, which already includes cached input.
 
 ## Thin CLI
 

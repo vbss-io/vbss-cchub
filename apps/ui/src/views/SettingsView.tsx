@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getDesktopNotifyStatus, sendToast, subscribe, type DesktopNotifyStatus, type HooksStatus } from "../api";
 import { GroupManager } from "../components/GroupManager";
 import { flushTrail, getTrail } from "../delegation";
-import type { ConnectStatus, DelegationSettings, McpClient, Runner, SettingsPatch, ShellKind, TrailDetail, TrailStatus } from "../delegation";
+import type { ConnectStatus, DelegationSettings, McpClient, Runner, SettingsPatch, ShellKind, TrailDetail, TrailStatus, WidgetEdge, WidgetPanel } from "../delegation";
 import { COFFEE_URL, GITHUB_URL, notify, openExternal, playSound } from "../notify";
 import type { SessionClient } from "../types";
 import type { Autonomy, AutostartStatus, TunnelStatus } from "../delegation";
@@ -45,6 +45,7 @@ export type SettingsSection =
   | "connect"
   | "sharing"
   | "features"
+  | "widget"
   | "notifications"
   | "groups"
   | "about";
@@ -60,9 +61,21 @@ const SECTIONS: { key: SettingsSection; label: string }[] = [
   { key: "connect", label: "Connections" },
   { key: "sharing", label: "Sharing" },
   { key: "features", label: "Features" },
+  { key: "widget", label: "Widget" },
   { key: "notifications", label: "Notifications" },
   { key: "groups", label: "Groups" },
   { key: "about", label: "About" },
+];
+
+const WIDGET_EDGE_OPTIONS: { key: WidgetEdge; label: string }[] = [
+  { key: "left", label: "Left" },
+  { key: "right", label: "Right" },
+  { key: "top", label: "Top" },
+];
+
+const WIDGET_PANEL_OPTIONS: { key: WidgetPanel; label: string }[] = [
+  { key: "sessions", label: "Sessions" },
+  { key: "usage", label: "Usage" },
 ];
 
 const MCP_LABEL: Record<McpClient, string> = {
@@ -836,6 +849,101 @@ export function SettingsView(props: Props) {
             </div>
           </div>
         )}
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={settings?.features.usage ?? false}
+            disabled={!enabled}
+            onChange={(event) => void props.onSaveSettings({ features: { usage: event.target.checked } })}
+          />
+          Usage
+        </label>
+        <small className="muted">Token usage per Claude and Codex, shown in the widget Usage tab and the Usage view.</small>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={settings?.features.limits ?? false}
+            disabled={!enabled}
+            onChange={(event) => void props.onSaveSettings({ features: { limits: event.target.checked } })}
+          />
+          Limits
+        </label>
+        <small className="muted">Quota windows (5 h and 7 d) for Claude and Codex, and the weekly rings on the widget.</small>
+      </section>
+
+      <section className="settings__section" id="settings-widget">
+        <h2>Widget</h2>
+        <p className="hint">A small tab docked to a screen edge; click it to open the panel with your sessions and usage.</p>
+        <div className="form">
+          <div className="field">
+            <span>Edge</span>
+            <div className="seg" role="radiogroup" aria-label="Widget edge">
+              {WIDGET_EDGE_OPTIONS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={(settings?.widget?.edge ?? "right") === option.key}
+                  className="seg__opt"
+                  disabled={!enabled}
+                  onClick={() => void props.onSaveSettings({ widget: { edge: option.key } })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <small>The bottom edge is not offered so the widget never sits over the taskbar.</small>
+          </div>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={settings?.widget?.autostart ?? true}
+              disabled={!enabled}
+              onChange={(event) => void props.onSaveSettings({ widget: { autostart: event.target.checked } })}
+            />
+            Show at startup
+          </label>
+          <div className="field">
+            <span>Weekly rings on the tab</span>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings?.widget?.rings?.claude ?? false}
+                disabled={!enabled}
+                onChange={(event) => void props.onSaveSettings({ widget: { rings: { claude: event.target.checked } } })}
+              />
+              Claude
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings?.widget?.rings?.codex ?? false}
+                disabled={!enabled}
+                onChange={(event) => void props.onSaveSettings({ widget: { rings: { codex: event.target.checked } } })}
+              />
+              Codex
+            </label>
+            <small>{settings?.features.limits ? "A ring fills with the 7-day utilization." : "Needs the Limits feature (turn it on under Features)."}</small>
+          </div>
+          <div className="field">
+            <span>Default panel</span>
+            <div className="seg" role="radiogroup" aria-label="Default widget panel">
+              {WIDGET_PANEL_OPTIONS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={(settings?.widget?.panel ?? "sessions") === option.key}
+                  className="seg__opt"
+                  disabled={!enabled}
+                  onClick={() => void props.onSaveSettings({ widget: { panel: option.key } })}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="settings__section" id="settings-notifications">
