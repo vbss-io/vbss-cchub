@@ -64,6 +64,8 @@ import {
   AUTONOMY_LEVELS,
   CODEX_SANDBOXES,
   ISOLATION_MODES,
+  LIMITS_REFRESH_MAX,
+  LIMITS_REFRESH_MIN,
   ORIGIN_CLIENTS,
   PERMISSION_MODES,
   REPORT_KINDS,
@@ -72,6 +74,10 @@ import {
   RUNNERS,
   TASK_STATUSES,
   TRAIL_DETAILS,
+  USAGE_DAYS_MAX,
+  USAGE_DAYS_MIN,
+  WIDGET_EDGES,
+  WIDGET_PANELS,
   type Autonomy,
   type CodexSandbox,
   type Isolation,
@@ -83,6 +89,8 @@ import {
   type TaskRecord,
   type TaskStatus,
   type TrailDetail,
+  type WidgetEdge,
+  type WidgetPanel,
 } from "./delegation-types.js";
 import {
   configureMcp,
@@ -215,7 +223,7 @@ export function delegationRouter(): Router {
     const featuresBody = body.features as Record<string, unknown> | undefined;
     if (featuresBody && typeof featuresBody === "object") {
       const featuresPatch: NonNullable<UpdateSettingsInput["features"]> = {};
-      for (const key of ["daily", "trail"] as const) {
+      for (const key of ["daily", "trail", "usage", "limits"] as const) {
         if (!(key in featuresBody)) continue;
         const flag = featuresBody[key];
         if (typeof flag !== "boolean") {
@@ -316,8 +324,86 @@ export function delegationRouter(): Router {
       }
       patch.trail = trailPatch;
     }
+    const widgetBody = body.widget as Record<string, unknown> | undefined;
+    if (widgetBody && typeof widgetBody === "object") {
+      const widgetPatch: NonNullable<UpdateSettingsInput["widget"]> = {};
+      if ("edge" in widgetBody) {
+        const edge = asString(widgetBody.edge);
+        if (!edge || !(WIDGET_EDGES as readonly string[]).includes(edge)) {
+          res.status(400).json({ error: `widget.edge must be one of: ${WIDGET_EDGES.join(", ")}` });
+          return;
+        }
+        widgetPatch.edge = edge as WidgetEdge;
+      }
+      if ("panel" in widgetBody) {
+        const panel = asString(widgetBody.panel);
+        if (!panel || !(WIDGET_PANELS as readonly string[]).includes(panel)) {
+          res.status(400).json({ error: `widget.panel must be one of: ${WIDGET_PANELS.join(", ")}` });
+          return;
+        }
+        widgetPatch.panel = panel as WidgetPanel;
+      }
+      if ("autostart" in widgetBody) {
+        if (typeof widgetBody.autostart !== "boolean") {
+          res.status(400).json({ error: "widget.autostart must be a boolean" });
+          return;
+        }
+        widgetPatch.autostart = widgetBody.autostart;
+      }
+      const ringsBody = widgetBody.rings as Record<string, unknown> | undefined;
+      if (ringsBody && typeof ringsBody === "object") {
+        const ringsPatch: NonNullable<NonNullable<UpdateSettingsInput["widget"]>["rings"]> = {};
+        for (const key of ["claude", "codex"] as const) {
+          if (!(key in ringsBody)) continue;
+          const flag = ringsBody[key];
+          if (typeof flag !== "boolean") {
+            res.status(400).json({ error: `widget.rings.${key} must be a boolean` });
+            return;
+          }
+          ringsPatch[key] = flag;
+        }
+        widgetPatch.rings = ringsPatch;
+      }
+      patch.widget = widgetPatch;
+    }
+    const limitsBody = body.limits as Record<string, unknown> | undefined;
+    if (limitsBody && typeof limitsBody === "object") {
+      const limitsPatch: NonNullable<UpdateSettingsInput["limits"]> = {};
+      for (const key of ["claude", "codex"] as const) {
+        if (!(key in limitsBody)) continue;
+        const flag = limitsBody[key];
+        if (typeof flag !== "boolean") {
+          res.status(400).json({ error: `limits.${key} must be a boolean` });
+          return;
+        }
+        limitsPatch[key] = flag;
+      }
+      if ("refreshMinutes" in limitsBody) {
+        const minutes = limitsBody.refreshMinutes;
+        if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes < LIMITS_REFRESH_MIN || minutes > LIMITS_REFRESH_MAX) {
+          res.status(400).json({ error: `limits.refreshMinutes must be between ${LIMITS_REFRESH_MIN} and ${LIMITS_REFRESH_MAX}` });
+          return;
+        }
+        limitsPatch.refreshMinutes = minutes;
+      }
+      patch.limits = limitsPatch;
+    }
+    const usageBody = body.usage as Record<string, unknown> | undefined;
+    if (usageBody && typeof usageBody === "object") {
+      const usagePatch: NonNullable<UpdateSettingsInput["usage"]> = {};
+      if ("days" in usageBody) {
+        const days = usageBody.days;
+        if (typeof days !== "number" || !Number.isFinite(days) || days < USAGE_DAYS_MIN || days > USAGE_DAYS_MAX) {
+          res.status(400).json({ error: `usage.days must be between ${USAGE_DAYS_MIN} and ${USAGE_DAYS_MAX}` });
+          return;
+        }
+        usagePatch.days = days;
+      }
+      patch.usage = usagePatch;
+    }
     const updated = updateSettings(patch);
     watchDaily(updated);
+    broadcast("settings", updated);
     res.json(updated);
   });
 

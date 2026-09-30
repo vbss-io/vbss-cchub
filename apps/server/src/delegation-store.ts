@@ -22,8 +22,24 @@ import type {
   TaskStatus,
   TrailDetail,
   TrailFeatureSettings,
+  WidgetSettings,
+  LimitsSettings,
+  UsageSettings,
 } from "./delegation-types.js";
-import { RUN_TIMEOUT_DEFAULT, RUN_TIMEOUT_MAX, RUN_TIMEOUT_MIN, TRAIL_DETAILS } from "./delegation-types.js";
+import {
+  LIMITS_REFRESH_DEFAULT,
+  LIMITS_REFRESH_MAX,
+  LIMITS_REFRESH_MIN,
+  RUN_TIMEOUT_DEFAULT,
+  RUN_TIMEOUT_MAX,
+  RUN_TIMEOUT_MIN,
+  TRAIL_DETAILS,
+  USAGE_DAYS_DEFAULT,
+  USAGE_DAYS_MAX,
+  USAGE_DAYS_MIN,
+  WIDGET_EDGES,
+  WIDGET_PANELS,
+} from "./delegation-types.js";
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS hub_settings (
@@ -285,6 +301,20 @@ function clampRunTimeout(value: number): number {
 
 const TRAIL_DEFAULT_MODEL = "haiku";
 
+function clampInt(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(Math.max(Math.round(value), min), max);
+}
+
+function storedFlag(stored: Map<string, string | null>, key: string, fallback: boolean): boolean {
+  return stored.has(key) ? stored.get(key) === "1" : fallback;
+}
+
+function storedInt(stored: Map<string, string | null>, key: string, min: number, max: number, fallback: number): number {
+  const raw = stored.get(key);
+  return raw == null ? fallback : clampInt(Number(raw), min, max, fallback);
+}
+
 function trailDetailOf(value: string | null | undefined): TrailDetail {
   return TRAIL_DETAILS.find((detail) => detail === value) ?? "light";
 }
@@ -303,6 +333,8 @@ export function getSettings(): DelegationSettings {
     features: {
       daily: stored.get("features.daily") === "1",
       trail: stored.get("features.trail") === "1",
+      usage: stored.get("features.usage") === "1",
+      limits: stored.get("features.limits") === "1",
     },
     daily: {
       dir: stored.get("daily.dir") ?? null,
@@ -323,6 +355,23 @@ export function getSettings(): DelegationSettings {
       model: stored.has("trail.model") ? (stored.get("trail.model") ?? null) : TRAIL_DEFAULT_MODEL,
       prompt: stored.get("trail.prompt") ?? null,
       hubEvents: stored.has("trail.hubEvents") ? stored.get("trail.hubEvents") === "1" : true,
+    },
+    widget: {
+      edge: WIDGET_EDGES.find((edge) => edge === stored.get("widget.edge")) ?? "right",
+      rings: {
+        claude: storedFlag(stored, "widget.rings.claude", false),
+        codex: storedFlag(stored, "widget.rings.codex", false),
+      },
+      panel: WIDGET_PANELS.find((panel) => panel === stored.get("widget.panel")) ?? "sessions",
+      autostart: storedFlag(stored, "widget.autostart", true),
+    },
+    limits: {
+      claude: storedFlag(stored, "limits.claude", false),
+      codex: storedFlag(stored, "limits.codex", false),
+      refreshMinutes: storedInt(stored, "limits.refreshMinutes", LIMITS_REFRESH_MIN, LIMITS_REFRESH_MAX, LIMITS_REFRESH_DEFAULT),
+    },
+    usage: {
+      days: storedInt(stored, "usage.days", USAGE_DAYS_MIN, USAGE_DAYS_MAX, USAGE_DAYS_DEFAULT),
     },
   };
 }
@@ -346,6 +395,9 @@ export interface UpdateSettingsInput {
   features?: Partial<DelegationSettings["features"]>;
   daily?: Partial<Omit<DelegationSettings["daily"], "headings">> & { headings?: Partial<DailyHeadings> };
   trail?: Partial<TrailFeatureSettings>;
+  widget?: Partial<Omit<WidgetSettings, "rings">> & { rings?: Partial<WidgetSettings["rings"]> };
+  limits?: Partial<LimitsSettings>;
+  usage?: Partial<UsageSettings>;
 }
 
 export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
@@ -360,6 +412,8 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     }
     if (patch.features?.daily !== undefined) upsertSettingStmt.run("features.daily", patch.features.daily ? "1" : "0");
     if (patch.features?.trail !== undefined) upsertSettingStmt.run("features.trail", patch.features.trail ? "1" : "0");
+    if (patch.features?.usage !== undefined) upsertSettingStmt.run("features.usage", patch.features.usage ? "1" : "0");
+    if (patch.features?.limits !== undefined) upsertSettingStmt.run("features.limits", patch.features.limits ? "1" : "0");
     if (patch.daily?.dir !== undefined) upsertSettingStmt.run("daily.dir", patch.daily.dir);
     if (patch.daily?.template !== undefined) upsertSettingStmt.run("daily.template", patch.daily.template);
     if (patch.daily?.prompt !== undefined) upsertSettingStmt.run("daily.prompt", patch.daily.prompt);
@@ -374,6 +428,19 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     if (patch.trail?.model !== undefined) upsertSettingStmt.run("trail.model", patch.trail.model);
     if (patch.trail?.prompt !== undefined) upsertSettingStmt.run("trail.prompt", patch.trail.prompt);
     if (patch.trail?.hubEvents !== undefined) upsertSettingStmt.run("trail.hubEvents", patch.trail.hubEvents ? "1" : "0");
+    if (patch.widget?.edge !== undefined) upsertSettingStmt.run("widget.edge", patch.widget.edge);
+    if (patch.widget?.panel !== undefined) upsertSettingStmt.run("widget.panel", patch.widget.panel);
+    if (patch.widget?.autostart !== undefined) upsertSettingStmt.run("widget.autostart", patch.widget.autostart ? "1" : "0");
+    if (patch.widget?.rings?.claude !== undefined) upsertSettingStmt.run("widget.rings.claude", patch.widget.rings.claude ? "1" : "0");
+    if (patch.widget?.rings?.codex !== undefined) upsertSettingStmt.run("widget.rings.codex", patch.widget.rings.codex ? "1" : "0");
+    if (patch.limits?.claude !== undefined) upsertSettingStmt.run("limits.claude", patch.limits.claude ? "1" : "0");
+    if (patch.limits?.codex !== undefined) upsertSettingStmt.run("limits.codex", patch.limits.codex ? "1" : "0");
+    if (patch.limits?.refreshMinutes !== undefined) {
+      upsertSettingStmt.run("limits.refreshMinutes", String(clampInt(patch.limits.refreshMinutes, LIMITS_REFRESH_MIN, LIMITS_REFRESH_MAX, LIMITS_REFRESH_DEFAULT)));
+    }
+    if (patch.usage?.days !== undefined) {
+      upsertSettingStmt.run("usage.days", String(clampInt(patch.usage.days, USAGE_DAYS_MIN, USAGE_DAYS_MAX, USAGE_DAYS_DEFAULT)));
+    }
   });
   apply();
   return getSettings();

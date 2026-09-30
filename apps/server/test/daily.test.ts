@@ -44,9 +44,12 @@ function fixtureSettings(root: string, overrides: Partial<DelegationSettings> = 
     autonomy: "full",
     ownerName: "tester",
     runTimeoutMinutes: 60,
-    features: { daily: true, trail: false },
+    features: { daily: true, trail: false, usage: false, limits: false },
     daily: defaultDaily,
     trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true },
+    widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions", autostart: true },
+    limits: { claude: false, codex: false, refreshMinutes: 5 },
+    usage: { days: 7 },
     ...overrides,
   };
 }
@@ -134,7 +137,7 @@ tags: [diario]
 describe("daily settings", () => {
   it("defaults features.daily off and merges nested daily patches", () => {
     const defaults = store.getSettings();
-    assert.deepEqual(defaults.features, { daily: false, trail: false });
+    assert.deepEqual(defaults.features, { daily: false, trail: false, usage: false, limits: false });
     assert.deepEqual(defaults.daily, defaultDaily);
 
     const afterFeature = store.updateSettings({ features: { daily: true } });

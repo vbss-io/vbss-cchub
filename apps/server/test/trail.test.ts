@@ -897,7 +897,7 @@ describe("trail HTTP routes", () => {
     const saved = await http("PUT", "/delegation/settings", { secondBrainRoot: box.brain, features: { trail: true }, trail: { detail: "medium", dir: "mytrail" } });
     assert.equal(saved.status, 200);
     const body = saved.json as { features: { daily: boolean; trail: boolean }; trail: Record<string, unknown> };
-    assert.deepEqual(body.features, { daily: false, trail: true });
+    assert.deepEqual(body.features, { daily: false, trail: true, usage: false, limits: false });
     assert.deepEqual(body.trail, { dir: "mytrail", detail: "medium", model: "haiku", prompt: null, hubEvents: true });
     const status = (await http("GET", "/delegation/trail")).json as { enabled: boolean; dir: string; detail: string };
     assert.equal(status.enabled, true);

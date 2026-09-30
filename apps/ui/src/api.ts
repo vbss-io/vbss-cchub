@@ -29,7 +29,7 @@ const base = envUrl ?? `http://${host}:4317`;
 export const hubBase = base;
 
 export type { HooksStatus, WslHookStatus } from "./types";
-import type { ShareRequestRecord, TunnelStatus } from "./delegation";
+import type { DelegationSettings, ShareRequestRecord, TunnelStatus } from "./delegation";
 import type { NotifEventKind } from "./notifications";
 
 export type ShareRequestEvent = ShareRequestRecord;
@@ -165,6 +165,8 @@ export interface HubEvents {
   onClaims?: (claims: ClaimRecord[]) => void;
   onDaily?: (event: DailyStreamEvent) => void;
   onTrail?: (event: TrailStreamEvent) => void;
+  onSettings?: (settings: DelegationSettings) => void;
+  onLimits?: () => void;
 }
 
 export interface TrailStreamEvent {
@@ -222,6 +224,8 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("claims", (event) => handlers.onClaims?.(data<ClaimRecord[]>(event)));
   source.addEventListener("daily", (event) => handlers.onDaily?.(data<DailyStreamEvent>(event)));
   source.addEventListener("trail", (event) => handlers.onTrail?.(data<TrailStreamEvent>(event)));
+  source.addEventListener("settings", (event) => handlers.onSettings?.(data<DelegationSettings>(event)));
+  source.addEventListener("limits", () => handlers.onLimits?.());
   return () => source.close();
 }
 

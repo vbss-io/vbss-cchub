@@ -100,9 +100,12 @@ describe("hub surface", () => {
       autonomy: "full",
       ownerName: userInfo().username,
       runTimeoutMinutes: 60,
-      features: { daily: false, trail: false },
+      features: { daily: false, trail: false, usage: false, limits: false },
       daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false },
       trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true },
+      widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions", autostart: true },
+      limits: { claude: false, codex: false, refreshMinutes: 5 },
+      usage: { days: 7 },
     });
     assert.equal((await http("PUT", "/delegation/settings", { body: { workspacesRoot: join(box.tmp, "nope") } })).status, 400);
     const saved = await http("PUT", "/delegation/settings", { body: { workspacesRoot: box.root, secondBrainRoot: box.brain } });
@@ -120,6 +123,72 @@ describe("hub surface", () => {
     assert.equal((updated.json as { repos: unknown[] }).repos.length, 2);
     assert.equal((await http("POST", "/delegation/workspaces", { body: { name: "second", repos: [] } })).status, 400);
     assert.equal((await http("POST", "/delegation/workspaces/ghost/open")).status, 404);
+  });
+
+  it("validates and merges the widget, limits and usage settings and broadcasts them", async () => {
+    const controller = new AbortController();
+    const stream = await fetch(`${base}/api/events`, { signal: controller.signal });
+    assert.equal(stream.status, 200);
+    const reader = stream.body?.getReader();
+    assert.ok(reader);
+    const decoder = new TextDecoder();
+    let received = "";
+    const pump = (async () => {
+      try {
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) return;
+          received += decoder.decode(chunk.value);
+        }
+      } catch {
+        return;
+      }
+    })();
+
+    const put = (body: unknown) => http("PUT", "/delegation/settings", { body });
+    assert.equal((await put({ widget: { edge: "bottom" } })).status, 400);
+    assert.equal((await put({ widget: { panel: "tasks" } })).status, 400);
+    assert.equal((await put({ widget: { autostart: "yes" } })).status, 400);
+    assert.equal((await put({ widget: { rings: { claude: 1 } } })).status, 400);
+    assert.equal((await put({ limits: { codex: "on" } })).status, 400);
+    assert.equal((await put({ limits: { refreshMinutes: 0 } })).status, 400);
+    assert.equal((await put({ limits: { refreshMinutes: 61 } })).status, 400);
+    assert.equal((await put({ limits: { refreshMinutes: "5" } })).status, 400);
+    assert.equal((await put({ usage: { days: 31 } })).status, 400);
+    assert.equal((await put({ usage: { days: 0 } })).status, 400);
+    assert.equal((await put({ features: { usage: "true" } })).status, 400);
+
+    const saved = await put({
+      widget: { edge: "left", rings: { claude: true }, panel: "usage" },
+      limits: { refreshMinutes: 10 },
+      usage: { days: 14 },
+      features: { limits: true, usage: true },
+    });
+    assert.equal(saved.status, 200);
+    const body = saved.json as { widget: unknown; limits: unknown; usage: unknown; features: unknown };
+    assert.deepEqual(body.widget, { edge: "left", rings: { claude: true, codex: false }, panel: "usage", autostart: true });
+    assert.deepEqual(body.limits, { claude: false, codex: false, refreshMinutes: 10 });
+    assert.deepEqual(body.usage, { days: 14 });
+    assert.deepEqual(body.features, { daily: false, trail: false, usage: true, limits: true });
+
+    const merged = await put({ widget: { rings: { codex: true } } });
+    assert.deepEqual((merged.json as { widget: unknown }).widget, { edge: "left", rings: { claude: true, codex: true }, panel: "usage", autostart: true });
+
+    await waitFor(async () => (received.includes("event: settings") ? true : null), 5000);
+    const frame = received.split("\n\n").filter((part) => part.startsWith("event: settings")).pop() ?? "";
+    const line = frame.split("\n").find((entry) => entry.startsWith("data: "));
+    const payload = JSON.parse(line?.slice(6) ?? "null") as { widget: { rings: { claude: boolean; codex: boolean } }; usage: { days: number } };
+    assert.deepEqual(payload.widget.rings, { claude: true, codex: true });
+    assert.equal(payload.usage.days, 14);
+    controller.abort();
+    await pump;
+
+    await put({
+      widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions" },
+      limits: { refreshMinutes: 5 },
+      usage: { days: 7 },
+      features: { limits: false, usage: false },
+    });
   });
 
   it("validates task input and names what is available instead of guessing", async () => {
