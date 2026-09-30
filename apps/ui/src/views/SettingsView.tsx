@@ -859,6 +859,26 @@ export function SettingsView(props: Props) {
           Usage
         </label>
         <small className="muted">Token usage per Claude and Codex, shown in the widget Usage tab and the Usage view.</small>
+        {settings?.features.usage && (
+          <div className="form">
+            <label className="field">
+              <span>Window: {settings.usage?.days ?? 7} days</span>
+              <input
+                className="in"
+                type="number"
+                min={1}
+                max={30}
+                value={settings.usage?.days ?? 7}
+                disabled={!enabled}
+                onChange={(event) => {
+                  const days = Number(event.target.value);
+                  if (Number.isInteger(days) && days >= 1 && days <= 30) void props.onSaveSettings({ usage: { days } });
+                }}
+              />
+              <small>How many days the Usage summaries cover. 1-30, default 7.</small>
+            </label>
+          </div>
+        )}
         <label className="check">
           <input
             type="checkbox"
@@ -869,6 +889,44 @@ export function SettingsView(props: Props) {
           Limits
         </label>
         <small className="muted">Quota windows (5 h and 7 d) for Claude and Codex, and the weekly rings on the widget.</small>
+        {settings?.features.limits && (
+          <div className="form">
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings.limits?.claude ?? false}
+                disabled={!enabled}
+                onChange={(event) => void props.onSaveSettings({ limits: { claude: event.target.checked } })}
+              />
+              Claude (reads the local Claude Code login token to ask Anthropic how much of your plan is used; never stored)
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings.limits?.codex ?? false}
+                disabled={!enabled}
+                onChange={(event) => void props.onSaveSettings({ limits: { codex: event.target.checked } })}
+              />
+              Codex (from the local Codex session files)
+            </label>
+            <label className="field">
+              <span>Refresh every {settings.limits?.refreshMinutes ?? 5} minutes</span>
+              <input
+                className="in"
+                type="number"
+                min={1}
+                max={60}
+                value={settings.limits?.refreshMinutes ?? 5}
+                disabled={!enabled}
+                onChange={(event) => {
+                  const minutes = Number(event.target.value);
+                  if (Number.isInteger(minutes) && minutes >= 1 && minutes <= 60) void props.onSaveSettings({ limits: { refreshMinutes: minutes } });
+                }}
+              />
+              <small>1-60, default 5.</small>
+            </label>
+          </div>
+        )}
       </section>
 
       <section className="settings__section" id="settings-widget">
@@ -923,7 +981,7 @@ export function SettingsView(props: Props) {
               />
               Codex
             </label>
-            <small>{settings?.features.limits ? "A ring fills with the 7-day utilization." : "Needs the Limits feature (turn it on under Features)."}</small>
+            <small>Rings need Limits on with at least one provider.</small>
           </div>
           <div className="field">
             <span>Default panel</span>
