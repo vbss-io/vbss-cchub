@@ -349,7 +349,7 @@ function ProviderCard({ provider, usageEnabled, usage, limitsEnabled, limits, no
   return (
     <section className="wgd-card">
       <div className="wgd-card-h">
-        <span className="wgd-card-ico">{provider === "claude" ? <IconClaude size={24} /> : <IconOpenAI size={24} />}</span>
+        <span className="wgd-card-ico">{provider === "claude" ? <IconClaude size={20} /> : <IconOpenAI size={20} />}</span>
         {PROVIDER_NAME[provider]}
       </div>
       {!usageEnabled ? (
@@ -699,7 +699,7 @@ export function Widget() {
       >
         <span className="wg-ico">{sessionClient(session).icon}</span>
         <span className={`wg-dot wg-dot--${tone}`} />
-        {session.favoriteAt != null && <IconStar size={18} filled />}
+        {session.favoriteAt != null && <IconStar size={14} filled />}
         <span className="wg-title">{nameOf(session)}</span>
         {(session.agentsRunning ?? 0) > 0 && (
           <span className="wg-pill wg-pill--agents" title="Subagents running">
@@ -826,7 +826,7 @@ export function Widget() {
         <section className="wgd-panel" onMouseEnter={onPanelEnter} onMouseMove={onPanelEnter} onMouseLeave={onPanelLeave}>
           <header className="wgd-head">
             <span className="wgd-brand">
-              <BrandMark size={28} />
+              <BrandMark size={22} />
             </span>
             <span className="wgd-state">
               <b>{model.live.length - model.idle.length}</b> live
