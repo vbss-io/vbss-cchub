@@ -8,6 +8,7 @@ import { broadcast } from "./sse.js";
 export interface LimitWindow {
   utilization: number;
   resetsAt: number | null;
+  reset: boolean;
 }
 
 export interface ClaudeModelLimit extends LimitWindow {
@@ -15,8 +16,8 @@ export interface ClaudeModelLimit extends LimitWindow {
 }
 
 export interface ClaudeLimits {
-  source: "api" | "cache";
-  fetchedAt: number;
+  source: "api" | "cache" | "none";
+  fetchedAt: number | null;
   stale: boolean;
   fiveHour: LimitWindow;
   sevenDay: LimitWindow;
@@ -32,8 +33,8 @@ export interface CodexWindow {
 }
 
 export interface CodexLimits {
-  source: "rollout" | "live";
-  fetchedAt: number;
+  source: "rollout" | "live" | "none";
+  fetchedAt: number | null;
   stale: boolean;
   primary: CodexWindow;
   secondary: CodexWindow;
@@ -71,6 +72,9 @@ const LIVE_TIMEOUT_MS = 8_000;
 const ROLLOUT_LOOKBACK_DAYS = 14;
 const ROLLOUT_TAIL_BYTES = 2 * 1024 * 1024;
 const MIN_STALE_AFTER_MS = 10 * 60_000;
+const NO_CLAUDE_LOGIN = "no Claude Code login found";
+const NO_CODEX_DATA = "no Codex session data found";
+const CODEX_LIVE_UNAVAILABLE = "codex live limits unavailable";
 const MODEL_WINDOWS: readonly (readonly [string, string])[] = [
   ["Opus", "seven_day_opus"],
   ["Sonnet", "seven_day_sonnet"],
@@ -107,7 +111,11 @@ function parseWindow(value: unknown): LimitWindow | null {
   const utilization = asNumber(obj.utilization);
   const resetsAt = isoToMs(obj.resets_at);
   if (utilization === null && resetsAt === null) return null;
-  return { utilization: clampPercent(utilization ?? 0), resetsAt };
+  return { utilization: clampPercent(utilization ?? 0), resetsAt, reset: false };
+}
+
+function emptyWindow(): LimitWindow {
+  return { utilization: 0, resetsAt: null, reset: false };
 }
 
 interface ParsedClaude {
@@ -131,7 +139,7 @@ export function parseClaudeUsage(raw: unknown): ParsedClaude | null {
     const key = name.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
-    models.push({ name, utilization: window.utilization, resetsAt: window.resetsAt });
+    models.push({ name, utilization: window.utilization, resetsAt: window.resetsAt, reset: false });
   };
   for (const [name, key] of MODEL_WINDOWS) {
     const window = parseWindow(obj[key]);
@@ -143,7 +151,7 @@ export function parseClaudeUsage(raw: unknown): ParsedClaude | null {
     const name = asString(asObject(asObject(limit.scope)?.model)?.display_name);
     const percent = asNumber(limit.percent);
     if (name === null || percent === null) continue;
-    add(name, { utilization: clampPercent(percent), resetsAt: isoToMs(limit.resets_at) });
+    add(name, { utilization: clampPercent(percent), resetsAt: isoToMs(limit.resets_at), reset: false });
   }
 
   const extraObj = asObject(obj.extra_usage);
@@ -153,8 +161,8 @@ export function parseClaudeUsage(raw: unknown): ParsedClaude | null {
     : null;
 
   return {
-    fiveHour: fiveHour ?? { utilization: 0, resetsAt: null },
-    sevenDay: sevenDay ?? { utilization: 0, resetsAt: null },
+    fiveHour: fiveHour ?? emptyWindow(),
+    sevenDay: sevenDay ?? emptyWindow(),
     models,
     extra,
   };
@@ -197,19 +205,18 @@ interface ClaudeState {
 interface CodexState {
   value: CodexLimits | null;
   attemptedAt: number | null;
+  lastError: string | null;
 }
 
 interface LimitsState {
   claude: ClaudeState;
   codex: CodexState;
-  updatedAt: number | null;
 }
 
 function freshState(): LimitsState {
   return {
     claude: { value: null, attemptedAt: null, lastCallAt: null, backoffUntil: 0, backoffStep: 0, lastError: null },
-    codex: { value: null, attemptedAt: null },
-    updatedAt: null,
+    codex: { value: null, attemptedAt: null, lastError: null },
   };
 }
 
@@ -276,7 +283,7 @@ export async function fetchClaudeLimits(sources: LimitsSources = {}): Promise<Cl
 
   const credentials = readClaudeCredentials(sources.credentialsPath);
   if (credentials === null) {
-    const message = "no Claude credentials found";
+    const message = NO_CLAUDE_LOGIN;
     return settle(claudeFallback(message, sources), message);
   }
   if (credentials.expiresAt !== null && credentials.expiresAt - now < TOKEN_EXPIRY_MARGIN_MS) {
@@ -440,8 +447,7 @@ export function readCodexRolloutLimits(options: { root?: string; now?: number; d
   return null;
 }
 
-export function readCodexLimitsLive(): Promise<CodexLimits | null> {
-  if (process.env.HUB_CODEX_LIVE_LIMITS !== "1") return Promise.resolve(null);
+export function readCodexLimitsLive(timeoutMs: number = LIVE_TIMEOUT_MS): Promise<CodexLimits | null> {
   return new Promise((resolve) => {
     let settled = false;
     let buffer = "";
@@ -462,7 +468,7 @@ export function readCodexLimitsLive(): Promise<CodexLimits | null> {
       child.kill();
       resolve(value);
     };
-    const timer = setTimeout(() => finish(null), LIVE_TIMEOUT_MS);
+    const timer = setTimeout(() => finish(null), timeoutMs);
     child.stdin.on("error", () => finish(null));
     const send = (message: Json): void => {
       try {
@@ -518,53 +524,101 @@ export function readCodexLimitsLive(): Promise<CodexLimits | null> {
   });
 }
 
-async function refreshCodex(sources: LimitsSources): Promise<void> {
+async function refreshCodex(settings: DelegationSettings, sources: LimitsSources): Promise<void> {
   const now = sources.now ?? Date.now();
-  state.codex.attemptedAt = now;
-  let live: CodexLimits | null = null;
-  if (process.env.HUB_CODEX_LIVE_LIMITS === "1") {
+  const codex = state.codex;
+  codex.attemptedAt = now;
+  let liveFailed = false;
+  if (settings.limits.codexLive) {
+    let live: CodexLimits | null = null;
     try {
-      live = await (sources.codexLive ?? readCodexLimitsLive)();
+      live = await (sources.codexLive ?? (() => readCodexLimitsLive()))();
     } catch {
       live = null;
     }
     if (live) {
-      state.codex.value = live;
+      codex.value = live;
+      codex.lastError = null;
       return;
     }
+    liveFailed = true;
   }
   let rollout: CodexLimits | null = null;
-  let failed = false;
+  let readFailed = false;
   try {
     rollout = readCodexRolloutLimits({ root: sources.codexSessionsDir, now });
   } catch {
-    failed = true;
+    readFailed = true;
   }
+  const error = liveFailed ? CODEX_LIVE_UNAVAILABLE : readFailed ? "could not read Codex rollouts" : NO_CODEX_DATA;
   if (rollout) {
-    state.codex.value = process.env.HUB_CODEX_LIVE_LIMITS === "1" ? { ...rollout, error: "live read failed; showing the last rollout snapshot" } : rollout;
+    codex.value = liveFailed ? { ...rollout, error: CODEX_LIVE_UNAVAILABLE } : rollout;
+    codex.lastError = liveFailed ? CODEX_LIVE_UNAVAILABLE : null;
     return;
   }
-  if (state.codex.value) {
-    state.codex.value = { ...state.codex.value, error: failed ? "could not read Codex rollouts" : "no Codex rate limit record found" };
-  }
+  codex.lastError = error;
+  if (codex.value) codex.value = { ...codex.value, error };
 }
 
 function staleAfterMs(settings: DelegationSettings): number {
   return Math.max(settings.limits.refreshMinutes * 2 * 60_000, MIN_STALE_AFTER_MS);
 }
 
+function resolveWindowReset(window: LimitWindow, now: number): LimitWindow {
+  if (window.resetsAt !== null && window.resetsAt <= now) return { utilization: 0, resetsAt: null, reset: true };
+  return window;
+}
+
+function resolveClaudeResets(value: ClaudeLimits, now: number): ClaudeLimits {
+  return {
+    ...value,
+    fiveHour: resolveWindowReset(value.fiveHour, now),
+    sevenDay: resolveWindowReset(value.sevenDay, now),
+    models: value.models.map((model) => ({ name: model.name, ...resolveWindowReset(model, now) })),
+  };
+}
+
+function noClaudeLimits(error: string): ClaudeLimits {
+  return { source: "none", fetchedAt: null, stale: true, fiveHour: emptyWindow(), sevenDay: emptyWindow(), models: [], extra: null, error };
+}
+
+function noCodexLimits(error: string): CodexLimits {
+  const empty: CodexWindow = { usedPercent: 0, resetsAt: null, reset: false };
+  return { source: "none", fetchedAt: null, stale: true, primary: empty, secondary: empty, planType: null, error };
+}
+
+function successfulFetchedAt(value: { source: string; fetchedAt: number | null } | null): number | null {
+  return value !== null && value.source !== "none" && value.source !== "cache" ? value.fetchedAt : null;
+}
+
+function refreshedCleanly(value: { source: string; error: string | null } | null): boolean {
+  return value !== null && value.source !== "none" && value.error === null;
+}
+
+function latestUpdate(settings: DelegationSettings): number | null {
+  const times = [
+    settings.limits.claude ? successfulFetchedAt(state.claude.value) : null,
+    settings.limits.codex ? successfulFetchedAt(state.codex.value) : null,
+  ].filter((time): time is number => time !== null);
+  return times.length > 0 ? Math.max(...times) : null;
+}
+
 export function limitsSnapshot(settings: DelegationSettings, now: number = Date.now()): LimitsPayload {
   if (!settings.features.limits) return { updatedAt: null, claude: null, codex: null };
   const staleAfter = staleAfterMs(settings);
-  const claude = settings.limits.claude ? state.claude.value : null;
-  const codex = settings.limits.codex ? state.codex.value : null;
-  return {
-    updatedAt: state.updatedAt,
-    claude: claude ? { ...claude, stale: claude.error !== null || now - claude.fetchedAt > staleAfter } : null,
-    codex: codex
-      ? { ...resolveCodexResets(codex, now), stale: codex.error !== null || now - codex.fetchedAt > staleAfter }
-      : null,
-  };
+  const isStale = (value: { fetchedAt: number | null; error: string | null }): boolean =>
+    value.error !== null || value.fetchedAt === null || now - value.fetchedAt > staleAfter;
+  let claude: ClaudeLimits | null = null;
+  if (settings.limits.claude) {
+    const value = state.claude.value;
+    claude = value ? { ...resolveClaudeResets(value, now), stale: isStale(value) } : noClaudeLimits(state.claude.lastError ?? NO_CLAUDE_LOGIN);
+  }
+  let codex: CodexLimits | null = null;
+  if (settings.limits.codex) {
+    const value = state.codex.value;
+    codex = value ? { ...resolveCodexResets(value, now), stale: isStale(value) } : noCodexLimits(state.codex.lastError ?? NO_CODEX_DATA);
+  }
+  return { updatedAt: latestUpdate(settings), claude, codex };
 }
 
 let inflight: Promise<void> | null = null;
@@ -580,17 +634,13 @@ async function runRefresh(settings: DelegationSettings, sources: LimitsSources):
     );
   }
   if (settings.limits.codex) {
-    tasks.push(refreshCodex(sources).catch(() => undefined));
+    tasks.push(refreshCodex(settings, sources).catch(() => undefined));
   }
   await Promise.all(tasks);
-  const now = sources.now ?? Date.now();
-  const fresh =
-    (settings.limits.claude && state.claude.value !== null && state.claude.value.error === null) ||
-    (settings.limits.codex && state.codex.value !== null && state.codex.value.error === null);
-  if (fresh) {
-    state.updatedAt = now;
-    broadcast("limits", { updatedAt: now });
-  }
+  const clean =
+    (settings.limits.claude && refreshedCleanly(state.claude.value)) || (settings.limits.codex && refreshedCleanly(state.codex.value));
+  const updatedAt = latestUpdate(settings);
+  if (clean && updatedAt !== null) broadcast("limits", { updatedAt });
 }
 
 export async function refreshLimits(settings: DelegationSettings, sources: LimitsSources = {}): Promise<LimitsPayload> {
@@ -634,7 +684,7 @@ export function startLimitsPolling(settings: DelegationSettings, sources: Limits
     stopLimitsPolling();
     return;
   }
-  const signature = `${settings.limits.claude}:${settings.limits.codex}:${settings.limits.refreshMinutes}`;
+  const signature = `${settings.limits.claude}:${settings.limits.codex}:${settings.limits.codexLive}:${settings.limits.refreshMinutes}`;
   pollSettings = settings;
   pollSources = sources;
   if (pollTimer && pollSignature === signature) return;

@@ -104,7 +104,7 @@ describe("hub surface", () => {
       daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false },
       trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true },
       widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions", autostart: true },
-      limits: { claude: false, codex: false, refreshMinutes: 5 },
+      limits: { claude: false, codex: false, codexLive: false, refreshMinutes: 5 },
       usage: { days: 7 },
     });
     assert.equal((await http("PUT", "/delegation/settings", { body: { workspacesRoot: join(box.tmp, "nope") } })).status, 400);
@@ -151,6 +151,7 @@ describe("hub surface", () => {
     assert.equal((await put({ widget: { autostart: "yes" } })).status, 400);
     assert.equal((await put({ widget: { rings: { claude: 1 } } })).status, 400);
     assert.equal((await put({ limits: { codex: "on" } })).status, 400);
+    assert.equal((await put({ limits: { codexLive: 1 } })).status, 400);
     assert.equal((await put({ limits: { refreshMinutes: 0 } })).status, 400);
     assert.equal((await put({ limits: { refreshMinutes: 61 } })).status, 400);
     assert.equal((await put({ limits: { refreshMinutes: "5" } })).status, 400);
@@ -167,7 +168,7 @@ describe("hub surface", () => {
     assert.equal(saved.status, 200);
     const body = saved.json as { widget: unknown; limits: unknown; usage: unknown; features: unknown };
     assert.deepEqual(body.widget, { edge: "left", rings: { claude: true, codex: false }, panel: "usage", autostart: true });
-    assert.deepEqual(body.limits, { claude: false, codex: false, refreshMinutes: 10 });
+    assert.deepEqual(body.limits, { claude: false, codex: false, codexLive: false, refreshMinutes: 10 });
     assert.deepEqual(body.usage, { days: 14 });
     assert.deepEqual(body.features, { daily: false, trail: false, usage: true, limits: true });
 

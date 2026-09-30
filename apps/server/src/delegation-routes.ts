@@ -369,7 +369,7 @@ export function delegationRouter(): Router {
     const limitsBody = body.limits as Record<string, unknown> | undefined;
     if (limitsBody && typeof limitsBody === "object") {
       const limitsPatch: NonNullable<UpdateSettingsInput["limits"]> = {};
-      for (const key of ["claude", "codex"] as const) {
+      for (const key of ["claude", "codex", "codexLive"] as const) {
         if (!(key in limitsBody)) continue;
         const flag = limitsBody[key];
         if (typeof flag !== "boolean") {

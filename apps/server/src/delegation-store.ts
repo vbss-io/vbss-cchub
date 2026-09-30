@@ -368,6 +368,7 @@ export function getSettings(): DelegationSettings {
     limits: {
       claude: storedFlag(stored, "limits.claude", false),
       codex: storedFlag(stored, "limits.codex", false),
+      codexLive: storedFlag(stored, "limits.codexLive", false),
       refreshMinutes: storedInt(stored, "limits.refreshMinutes", LIMITS_REFRESH_MIN, LIMITS_REFRESH_MAX, LIMITS_REFRESH_DEFAULT),
     },
     usage: {
@@ -435,6 +436,7 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     if (patch.widget?.rings?.codex !== undefined) upsertSettingStmt.run("widget.rings.codex", patch.widget.rings.codex ? "1" : "0");
     if (patch.limits?.claude !== undefined) upsertSettingStmt.run("limits.claude", patch.limits.claude ? "1" : "0");
     if (patch.limits?.codex !== undefined) upsertSettingStmt.run("limits.codex", patch.limits.codex ? "1" : "0");
+    if (patch.limits?.codexLive !== undefined) upsertSettingStmt.run("limits.codexLive", patch.limits.codexLive ? "1" : "0");
     if (patch.limits?.refreshMinutes !== undefined) {
       upsertSettingStmt.run("limits.refreshMinutes", String(clampInt(patch.limits.refreshMinutes, LIMITS_REFRESH_MIN, LIMITS_REFRESH_MAX, LIMITS_REFRESH_DEFAULT)));
     }

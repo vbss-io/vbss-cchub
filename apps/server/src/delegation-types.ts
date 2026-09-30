@@ -105,6 +105,7 @@ export interface WidgetSettings {
 export interface LimitsSettings {
   claude: boolean;
   codex: boolean;
+  codexLive: boolean;
   refreshMinutes: number;
 }
 
