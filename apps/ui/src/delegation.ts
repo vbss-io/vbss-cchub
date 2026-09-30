@@ -256,19 +256,34 @@ export interface ClaudeLimitWindow {
 export interface CodexLimitWindow {
   usedPercent: number;
   resetsAt: number | null;
+  reset?: string | null;
+}
+
+export interface ClaudeLimits {
+  source?: "api" | "cache";
+  fetchedAt?: number | null;
+  stale?: boolean;
+  fiveHour: ClaudeLimitWindow;
+  sevenDay: ClaudeLimitWindow;
+  models: { name: string; utilization: number; resetsAt: number | null }[];
+  extra?: { enabled: boolean; utilization: number | null } | null;
+  error?: string | null;
+}
+
+export interface CodexLimits {
+  source?: "rollout" | "live";
+  fetchedAt?: number | null;
+  stale?: boolean;
+  primary: CodexLimitWindow;
+  secondary: CodexLimitWindow;
+  planType?: string | null;
+  error?: string | null;
 }
 
 export interface LimitsSnapshot {
   updatedAt: number | null;
-  claude: {
-    fiveHour: ClaudeLimitWindow;
-    sevenDay: ClaudeLimitWindow;
-    models: { name: string; utilization: number; resetsAt: number | null }[];
-  } | null;
-  codex: {
-    primary: CodexLimitWindow;
-    secondary: CodexLimitWindow;
-  } | null;
+  claude: ClaudeLimits | null;
+  codex: CodexLimits | null;
 }
 
 export interface TokenTotals {
@@ -298,7 +313,79 @@ async function optionalJson<T>(path: string): Promise<T | null> {
 
 export const fetchLimits = (): Promise<LimitsSnapshot | null> => optionalJson("/limits");
 
+export const refreshLimits = (): Promise<LimitsSnapshot> => call("POST", "/limits/refresh");
+
 export const fetchUsageSummary = (): Promise<UsageSummary | null> => optionalJson("/usage/summary");
+
+export interface UsageTotals {
+  read: number;
+  fresh: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  messages: number;
+}
+
+export type UsageProvider = "claude" | "codex";
+
+export interface UsageDay {
+  day: string;
+  claude: UsageTotals;
+  codex: UsageTotals;
+}
+
+export interface UsageModelRow extends UsageTotals {
+  model: string;
+  provider: UsageProvider;
+}
+
+export interface UsageProjectRow extends UsageTotals {
+  project: string;
+  provider: UsageProvider;
+  sessions: number;
+}
+
+export interface UsageSessionRow extends UsageTotals {
+  sessionId: string;
+  provider: UsageProvider;
+  project: string;
+  cwd: string | null;
+  title: string | null;
+  avgContext: number;
+  p50Context: number;
+  p90Context: number;
+  maxContext: number;
+  firstAt: number;
+  lastAt: number;
+}
+
+export interface UsageContext {
+  avgPerMessage: number;
+  p50: number;
+  p90: number;
+  max: number;
+  over300k: number;
+  over600k: number;
+}
+
+export interface UsageReport {
+  days: number;
+  from: number;
+  to: number;
+  totals: UsageTotals;
+  byProvider: Record<UsageProvider, UsageTotals>;
+  byDay: UsageDay[];
+  byModel: UsageModelRow[];
+  byProject: UsageProjectRow[];
+  bySession: UsageSessionRow[];
+  context: UsageContext;
+  sidechainShare: number;
+  costs: null;
+}
+
+export const fetchUsage = (days: number): Promise<UsageReport> => call("GET", `/usage?days=${days}`);
+
+export const rescanUsage = (): Promise<{ files: number }> => call("POST", "/usage/rescan");
 
 export const getSettings = (): Promise<DelegationSettings> => call("GET", "/settings");
 
