@@ -61,11 +61,13 @@ export interface LimitsSources {
   usageUrl?: string;
   codexSessionsDir?: string;
   codexLive?: () => Promise<CodexLimits | null>;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const REQUEST_TIMEOUT_MS = 5_000;
 const TOKEN_EXPIRY_MARGIN_MS = 5 * 60_000;
 const MIN_CALL_GAP_MS = 60_000;
+const TRANSIENT_RETRY_DELAY_MS = 20_000;
 const BACKOFF_BASE_MS = 5 * 60_000;
 const BACKOFF_MAX_MS = 60 * 60_000;
 const LIVE_TIMEOUT_MS = 8_000;
@@ -240,6 +242,23 @@ function claudeFallback(message: string, sources: LimitsSources): ClaudeLimits |
   return base ? { ...base, error: message } : null;
 }
 
+function clockLabel(at: number): string {
+  const date = new Date(at);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function claudeTransientFallback(message: string, sources: LimitsSources): ClaudeLimits | null {
+  const last = state.claude.value;
+  if (last !== null && last.source === "api" && last.fetchedAt !== null) {
+    return { ...last, error: `network error, showing the value from ${clockLabel(last.fetchedAt)}` };
+  }
+  return claudeFallback(message, sources);
+}
+
+function waitMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function recordClaudeBackoff(now: number): void {
   const wait = Math.min(BACKOFF_BASE_MS * 2 ** state.claude.backoffStep, BACKOFF_MAX_MS);
   state.claude.backoffUntil = now + wait;
@@ -292,12 +311,23 @@ export async function fetchClaudeLimits(sources: LimitsSources = {}): Promise<Cl
   }
 
   claude.lastCallAt = now;
-  let response: Response;
-  try {
-    response = await callClaudeUsage(credentials.accessToken, sources);
-  } catch (error) {
-    const message = error instanceof Error && error.name === "AbortError" ? "usage request timed out" : "usage request failed";
-    return settle(claudeFallback(message, sources), message);
+  let response: Response | null = null;
+  let transientMessage = "";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt > 0) await (sources.sleep ?? waitMs)(TRANSIENT_RETRY_DELAY_MS);
+    try {
+      response = await callClaudeUsage(credentials.accessToken, sources);
+    } catch (error) {
+      transientMessage = error instanceof Error && error.name === "AbortError" ? "usage request timed out" : "usage request failed";
+      response = null;
+      continue;
+    }
+    if (response.status < 500) break;
+    transientMessage = `usage API returned ${response.status}`;
+    response = null;
+  }
+  if (response === null) {
+    return settle(claudeTransientFallback(transientMessage, sources), transientMessage);
   }
 
   if (response.status === 401 || response.status === 403 || response.status === 429) {

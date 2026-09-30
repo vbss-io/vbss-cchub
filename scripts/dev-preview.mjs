@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -101,7 +101,8 @@ const seedData = async () => {
 };
 
 const nodeBin = process.execPath;
-spawnChild("server", nodeBin, ["--import", "tsx", join(repoRoot, "apps", "server", "src", "index.ts")], join(repoRoot, "apps", "server"), serverEnv);
+const systemCaArgs = spawnSync(nodeBin, ["--use-system-ca", "-e", "0"], { stdio: "ignore" }).status === 0 ? ["--use-system-ca"] : [];
+spawnChild("server", nodeBin, [...systemCaArgs, "--import", "tsx", join(repoRoot, "apps", "server", "src", "index.ts")], join(repoRoot, "apps", "server"), serverEnv);
 await waitForHub();
 console.log(`[server] up on ${base} (share ${SHARE_PORT}); data ${dataDir}; codexHome ${codexHome ?? "(real ~/.codex)"}`);
 if (seed) await seedData();

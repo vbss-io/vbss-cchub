@@ -29,7 +29,8 @@ fn spawn_sidecar(app: &tauri::App) -> Option<Child> {
         })
         .unwrap_or_default();
     let mut cmd = Command::new(&node);
-    cmd.arg(&server)
+    cmd.arg("--use-system-ca")
+        .arg(&server)
         .env("HUB_RESOURCE_DIR", &sidecar)
         .env("HUB_DELEGATION", "1")
         .env("HUB_APP_EXE", app_exe)
