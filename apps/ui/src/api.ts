@@ -170,7 +170,7 @@ export interface HubEvents {
 export interface TrailStreamEvent {
   date: string;
   sessionId: string;
-  bullets: string[];
+  bullets: number;
 }
 
 export interface DailyStreamEvent {

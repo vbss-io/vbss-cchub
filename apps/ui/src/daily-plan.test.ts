@@ -121,3 +121,13 @@ test("mergeTrailIntoSummary trims bullets and current text and skips blanks", ()
 test("mergeTrailIntoSummary leaves current untouched when there are no bullets", () => {
   assert.equal(mergeTrailIntoSummary("keep", []), "keep");
 });
+
+test("mergeTrailIntoSummary is idempotent on a second call", () => {
+  const once = mergeTrailIntoSummary("", ["a", "b", "c"]);
+  assert.equal(mergeTrailIntoSummary(once, ["a", "b", "c"]), once);
+});
+
+test("mergeTrailIntoSummary takes the first max bullets not yet present", () => {
+  assert.equal(mergeTrailIntoSummary("b", ["a", "b", "c", "d", "e"], 2), "b\na\nc");
+  assert.equal(mergeTrailIntoSummary("  a\nb  ", [" a ", "b", "c"]), "a\nb\nc");
+});
