@@ -6,17 +6,18 @@ import { broadcast } from "./sse.js";
 import {
   aggregateUsage,
   collectUsage,
-  resetUsageCache,
+  rescanUsage,
   type UsageAggregate,
   type UsageProvider,
   type UsageTitleResolver,
+  usageGeneration,
 } from "./usage.js";
 
 const CACHE_TTL_MS = 60_000;
 const DEFAULT_DAYS = 7;
 const MAX_DAYS = 30;
 
-const responseCache = new Map<number, { at: number; value: UsageAggregate }>();
+const responseCache = new Map<number, { at: number; generation: number; value: UsageAggregate }>();
 
 export interface ProviderSummary {
   today: { read: number; output: number; messages: number };
@@ -44,11 +45,11 @@ function titleResolver(): UsageTitleResolver {
 
 async function usageFor(days: number, fresh: boolean): Promise<UsageAggregate> {
   const cached = responseCache.get(days);
-  if (!fresh && cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
+  if (!fresh && cached && cached.generation === usageGeneration() && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
   const now = Date.now();
   const scan = await collectUsage({ days, now });
   const value = aggregateUsage(scan.records, { days, now, titleOf: titleResolver() });
-  responseCache.set(days, { at: Date.now(), value });
+  if (scan.generation === usageGeneration()) responseCache.set(days, { at: Date.now(), generation: scan.generation, value });
   return value;
 }
 
@@ -100,11 +101,11 @@ export function usageRouter(): Router {
 
   router.post("/rescan", async (_req, res) => {
     try {
-      resetUsageCache();
+      const started = Date.now();
+      const scan = await rescanUsage({ days: DEFAULT_DAYS });
       responseCache.clear();
-      const scan = await collectUsage({ days: DEFAULT_DAYS });
       broadcast("usage", { at: Date.now() });
-      res.json({ files: scan.files });
+      res.json({ files: scan.files, elapsedMs: Date.now() - started });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "usage rescan failed" });
     }

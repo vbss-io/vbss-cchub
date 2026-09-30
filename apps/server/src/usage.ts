@@ -92,6 +92,7 @@ export interface UsageScan {
   files: number;
   parsed: number;
   ms: number;
+  generation: number;
 }
 
 export interface CollectOptions {
@@ -325,6 +326,15 @@ export function usageScanStats(): { parses: number; cachedFiles: number; lastSca
   return { parses: scanStats.parses, cachedFiles: fileCache.size, lastScan: scanStats.lastScan };
 }
 
+export const usageGeneration = (): number => scanStats.generation;
+
+type FileHook = (path: string) => Promise<void>;
+let fileHook: FileHook | null = null;
+
+export function setUsageFileHook(hook: FileHook | null): void {
+  fileHook = hook;
+}
+
 export function resetUsageCache(): void {
   scanStats.generation += 1;
   fileCache.clear();
@@ -449,18 +459,17 @@ function parserFor(file: SourceFile): FileParser {
 async function refresh(file: SourceFile): Promise<boolean> {
   const cached = fileCache.get(file.path);
   if (cached && cached.size === file.size && cached.mtimeMs === file.mtimeMs) return false;
-  const generation = scanStats.generation;
   const resume = cached !== undefined && file.size > cached.size;
   const parser = resume ? cached.parser : parserFor(file);
   scanStats.parses += 1;
   const offset = await feedFile(file.path, resume ? cached.offset : 0, parser);
-  if (generation !== scanStats.generation) return true;
   fileCache.set(file.path, { size: file.size, mtimeMs: file.mtimeMs, offset, parser, records: parser.records() });
   return true;
 }
 
 async function scan(options: CollectOptions): Promise<UsageScan> {
   const started = performance.now();
+  const generation = scanStats.generation;
   const now = options.now ?? Date.now();
   const from = windowStart(options.days, now);
   const listing = [
@@ -477,6 +486,7 @@ async function scan(options: CollectOptions): Promise<UsageScan> {
     if (file.mtimeMs < from) continue;
     considered += 1;
     try {
+      if (fileHook) await fileHook(file.path);
       if (await refresh(file)) parsed += 1;
     } catch {
       continue;
@@ -491,23 +501,33 @@ async function scan(options: CollectOptions): Promise<UsageScan> {
     scanStats.lastScan = { files: considered, parsed, ms };
     console.log(`[usage] scanned ${considered} files (${parsed} parsed) in ${ms}ms`);
   }
-  return { records, files: considered, parsed, ms };
+  return { records, files: considered, parsed, ms, generation };
 }
 
 const inflight = new Map<string, Promise<UsageScan>>();
 let queue: Promise<unknown> = Promise.resolve();
 
-export function collectUsage(options: CollectOptions): Promise<UsageScan> {
+function enqueue(options: CollectOptions, beforeScan: (() => void) | null): Promise<UsageScan> {
   const key = `${options.days}|${options.claudeDir ?? ""}|${options.codexDir ?? ""}`;
-  const running = inflight.get(key);
-  if (running) return running;
-  const next = queue.then(() => scan(options));
+  const next = queue.then(() => {
+    beforeScan?.();
+    return scan(options);
+  });
   queue = next.catch(() => undefined);
   const tracked = next.finally(() => {
     if (inflight.get(key) === tracked) inflight.delete(key);
   });
   inflight.set(key, tracked);
   return tracked;
+}
+
+export function collectUsage(options: CollectOptions): Promise<UsageScan> {
+  const running = inflight.get(`${options.days}|${options.claudeDir ?? ""}|${options.codexDir ?? ""}`);
+  return running ?? enqueue(options, null);
+}
+
+export function rescanUsage(options: CollectOptions): Promise<UsageScan> {
+  return enqueue(options, resetUsageCache);
 }
 
 interface SessionAccumulator {
