@@ -20,8 +20,10 @@ import type {
   TaskDetail,
   TaskRecord,
   TaskStatus,
+  TrailDetail,
+  TrailFeatureSettings,
 } from "./delegation-types.js";
-import { RUN_TIMEOUT_DEFAULT, RUN_TIMEOUT_MAX, RUN_TIMEOUT_MIN } from "./delegation-types.js";
+import { RUN_TIMEOUT_DEFAULT, RUN_TIMEOUT_MAX, RUN_TIMEOUT_MIN, TRAIL_DETAILS } from "./delegation-types.js";
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS hub_settings (
@@ -281,6 +283,12 @@ function clampRunTimeout(value: number): number {
   return Math.min(Math.max(Math.round(value), RUN_TIMEOUT_MIN), RUN_TIMEOUT_MAX);
 }
 
+const TRAIL_DEFAULT_MODEL = "haiku";
+
+function trailDetailOf(value: string | null | undefined): TrailDetail {
+  return TRAIL_DETAILS.find((detail) => detail === value) ?? "light";
+}
+
 export function getSettings(): DelegationSettings {
   const rows = listSettingsStmt.all() as { key: string; value: string | null }[];
   const stored = new Map(rows.map((row) => [row.key, row.value]));
@@ -294,6 +302,7 @@ export function getSettings(): DelegationSettings {
     runTimeoutMinutes: storedTimeout != null ? clampRunTimeout(Number(storedTimeout)) : RUN_TIMEOUT_DEFAULT,
     features: {
       daily: stored.get("features.daily") === "1",
+      trail: stored.get("features.trail") === "1",
     },
     daily: {
       dir: stored.get("daily.dir") ?? null,
@@ -307,6 +316,13 @@ export function getSettings(): DelegationSettings {
       },
       closedKey: stored.get("daily.closedKey") ?? "closed",
       wikilinks: stored.get("daily.wikilinks") === "1",
+    },
+    trail: {
+      dir: stored.get("trail.dir") ?? null,
+      detail: trailDetailOf(stored.get("trail.detail")),
+      model: stored.has("trail.model") ? (stored.get("trail.model") ?? null) : TRAIL_DEFAULT_MODEL,
+      prompt: stored.get("trail.prompt") ?? null,
+      hubEvents: stored.has("trail.hubEvents") ? stored.get("trail.hubEvents") === "1" : true,
     },
   };
 }
@@ -329,6 +345,7 @@ export interface UpdateSettingsInput {
   runTimeoutMinutes?: number;
   features?: Partial<DelegationSettings["features"]>;
   daily?: Partial<Omit<DelegationSettings["daily"], "headings">> & { headings?: Partial<DailyHeadings> };
+  trail?: Partial<TrailFeatureSettings>;
 }
 
 export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
@@ -342,6 +359,7 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
       upsertSettingStmt.run("runTimeoutMinutes", String(clampRunTimeout(patch.runTimeoutMinutes)));
     }
     if (patch.features?.daily !== undefined) upsertSettingStmt.run("features.daily", patch.features.daily ? "1" : "0");
+    if (patch.features?.trail !== undefined) upsertSettingStmt.run("features.trail", patch.features.trail ? "1" : "0");
     if (patch.daily?.dir !== undefined) upsertSettingStmt.run("daily.dir", patch.daily.dir);
     if (patch.daily?.template !== undefined) upsertSettingStmt.run("daily.template", patch.daily.template);
     if (patch.daily?.prompt !== undefined) upsertSettingStmt.run("daily.prompt", patch.daily.prompt);
@@ -351,6 +369,11 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     if (patch.daily?.headings?.sessions !== undefined) upsertSettingStmt.run("daily.headings.sessions", patch.daily.headings.sessions);
     if (patch.daily?.closedKey !== undefined) upsertSettingStmt.run("daily.closedKey", patch.daily.closedKey);
     if (patch.daily?.wikilinks !== undefined) upsertSettingStmt.run("daily.wikilinks", patch.daily.wikilinks ? "1" : "0");
+    if (patch.trail?.dir !== undefined) upsertSettingStmt.run("trail.dir", patch.trail.dir);
+    if (patch.trail?.detail !== undefined) upsertSettingStmt.run("trail.detail", patch.trail.detail);
+    if (patch.trail?.model !== undefined) upsertSettingStmt.run("trail.model", patch.trail.model);
+    if (patch.trail?.prompt !== undefined) upsertSettingStmt.run("trail.prompt", patch.trail.prompt);
+    if (patch.trail?.hubEvents !== undefined) upsertSettingStmt.run("trail.hubEvents", patch.trail.hubEvents ? "1" : "0");
   });
   apply();
   return getSettings();

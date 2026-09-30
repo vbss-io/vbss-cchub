@@ -5,9 +5,10 @@ import { listSessions } from "./db.js";
 import { BadRequestError, createInternalTask, startRun } from "./delegation-launch.js";
 import { activeDailyTask, getSettings } from "./delegation-store.js";
 import type { DailyHeadings, DelegationSettings, TaskRecord } from "./delegation-types.js";
-import { localDate } from "./second-brain.js";
+import { localDate, readAllBlockBullets, trailFilePath } from "./second-brain.js";
 import { broadcast } from "./sse.js";
 import type { SessionStatus } from "./types.js";
+import { trailDir } from "./trail.js";
 import { isDirectory } from "./workspaces.js";
 
 const DATE_FILE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
@@ -406,6 +407,23 @@ export function listDiaryDates(settings: DelegationSettings): string[] {
 export function findYesterday(settings: DelegationSettings, date: string): string | null {
   const before = listDiaryDates(settings).filter((candidate) => candidate < date);
   return before[0] ?? null;
+}
+
+const YESTERDAY_TRAIL_MAX = 40;
+
+export function previousDate(date: string): string {
+  const [year, month, day] = date.split("-").map(Number);
+  return localDate(new Date(year ?? 1970, (month ?? 1) - 1, (day ?? 1) - 1));
+}
+
+export function yesterdayTrail(settings: DelegationSettings, date: string): { path: string; bullets: string[] } | null {
+  const root = dailyRoot(settings);
+  if (!root) return null;
+  const dir = settings.features.trail ? trailDir(settings) : join(root, "fontes", "sessions");
+  if (!dir) return null;
+  const path = trailFilePath(dir, date);
+  if (!existsSync(path)) return null;
+  return { path, bullets: readAllBlockBullets(readFileSync(path, "utf8")).slice(0, YESTERDAY_TRAIL_MAX) };
 }
 
 export interface DailySessionSummary {

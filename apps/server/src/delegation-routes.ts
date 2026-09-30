@@ -45,13 +45,16 @@ import {
   readDaily,
   readFrontmatterKey,
   setFrontmatterKey,
+  previousDate,
   setTaskChecked,
   taskBlock,
   watchDaily,
   writeDaily,
+  yesterdayTrail,
   type ComposeFocusItem,
   type TaskLine,
 } from "./daily.js";
+import { flushTrail, trailStatus } from "./trail.js";
 import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus, WorktreeError } from "./worktrees.js";
 import { portRangeOf } from "./task-ports.js";
 import { shareRouter } from "./share-routes.js";
@@ -68,6 +71,7 @@ import {
   RUN_TIMEOUT_MIN,
   RUNNERS,
   TASK_STATUSES,
+  TRAIL_DETAILS,
   type Autonomy,
   type CodexSandbox,
   type Isolation,
@@ -78,6 +82,7 @@ import {
   type Runner,
   type TaskRecord,
   type TaskStatus,
+  type TrailDetail,
 } from "./delegation-types.js";
 import {
   configureMcp,
@@ -208,12 +213,18 @@ export function delegationRouter(): Router {
       patch.secondBrainRoot = root;
     }
     const featuresBody = body.features as Record<string, unknown> | undefined;
-    if (featuresBody && typeof featuresBody === "object" && "daily" in featuresBody) {
-      if (typeof featuresBody.daily !== "boolean") {
-        res.status(400).json({ error: "features.daily must be a boolean" });
-        return;
+    if (featuresBody && typeof featuresBody === "object") {
+      const featuresPatch: NonNullable<UpdateSettingsInput["features"]> = {};
+      for (const key of ["daily", "trail"] as const) {
+        if (!(key in featuresBody)) continue;
+        const flag = featuresBody[key];
+        if (typeof flag !== "boolean") {
+          res.status(400).json({ error: `features.${key} must be a boolean` });
+          return;
+        }
+        featuresPatch[key] = flag;
       }
-      patch.features = { daily: featuresBody.daily };
+      if (Object.keys(featuresPatch).length > 0) patch.features = featuresPatch;
     }
     const dailyBody = body.daily as Record<string, unknown> | undefined;
     if (dailyBody && typeof dailyBody === "object") {
@@ -274,6 +285,36 @@ export function delegationRouter(): Router {
         dailyPatch.headings = headingsPatch;
       }
       patch.daily = dailyPatch;
+    }
+    const trailBody = body.trail as Record<string, unknown> | undefined;
+    if (trailBody && typeof trailBody === "object") {
+      const trailPatch: NonNullable<UpdateSettingsInput["trail"]> = {};
+      if ("dir" in trailBody) trailPatch.dir = asString(trailBody.dir);
+      if ("prompt" in trailBody) trailPatch.prompt = asString(trailBody.prompt);
+      if ("detail" in trailBody) {
+        const detail = asString(trailBody.detail);
+        if (!detail || !(TRAIL_DETAILS as readonly string[]).includes(detail)) {
+          res.status(400).json({ error: `trail.detail must be one of: ${TRAIL_DETAILS.join(", ")}` });
+          return;
+        }
+        trailPatch.detail = detail as TrailDetail;
+      }
+      if ("model" in trailBody) {
+        const model = trailBody.model === null ? null : asString(trailBody.model);
+        if ((trailBody.model !== null && !model) || (model !== null && model.trim().length > 80)) {
+          res.status(400).json({ error: "trail.model must be null or 1-80 characters" });
+          return;
+        }
+        trailPatch.model = model === null ? null : model.trim();
+      }
+      if ("hubEvents" in trailBody) {
+        if (typeof trailBody.hubEvents !== "boolean") {
+          res.status(400).json({ error: "trail.hubEvents must be a boolean" });
+          return;
+        }
+        trailPatch.hubEvents = trailBody.hubEvents;
+      }
+      patch.trail = trailPatch;
     }
     const updated = updateSettings(patch);
     watchDaily(updated);
@@ -484,6 +525,23 @@ export function delegationRouter(): Router {
   });
 
 
+  router.get("/trail", (_req, res) => {
+    res.json(trailStatus());
+  });
+
+  router.post("/trail/flush", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const sessionId = asString(body.sessionId);
+    if (sessionId) {
+      const session = getSession(sessionId);
+      if (!session?.transcriptPath) {
+        res.status(404).json({ error: "session not found or without a transcript" });
+        return;
+      }
+    }
+    res.json({ scheduled: flushTrail(sessionId) });
+  });
+
   router.get("/daily", (_req, res) => {
     const settings = getSettings();
     const root = dailyRoot(settings);
@@ -600,6 +658,7 @@ export function delegationRouter(): Router {
       res.json({
         date,
         yesterday,
+        yesterdayTrail: yesterdayTrail(settings, yesterdayDate ?? previousDate(date)),
         sessionsToday: dailySessionsForDate(date),
         headings: settings.daily.headings,
         wikilinks: settings.daily.wikilinks,

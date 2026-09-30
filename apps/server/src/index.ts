@@ -51,8 +51,9 @@ import { markShareEndpoint, stopTunnel } from "./tunnel.js";
 import { abortAllAsks } from "./share-service.js";
 import { mergeHooks, windowsHooks, wslHooks } from "./hooks-control.js";
 import { readSessionName, readTranscript } from "./transcript.js";
+import { isHubRun, scheduleTrail } from "./trail.js";
 import { addClient, broadcast, clientCount } from "./sse.js";
-import { HOOK_KINDS, type HookKind, type HookPayload } from "./types.js";
+import { HOOK_KINDS, type HookKind, type HookPayload, type SessionRecord } from "./types.js";
 
 const isHookKind = (value: unknown): value is HookKind =>
   typeof value === "string" && (HOOK_KINDS as readonly string[]).includes(value);
@@ -80,6 +81,15 @@ function transcriptPathFor(path: string | null, source: string | null): string |
     return `\\\\wsl$\\${distro}${path.replace(/\//g, "\\")}`;
   }
   return path;
+}
+
+function trailAfterHook(session: SessionRecord, kind: HookKind): void {
+  if ((kind !== "stop" && kind !== "session_end") || !session.transcriptPath || isHubRun(session)) return;
+  try {
+    scheduleTrail(session.sessionId, kind);
+  } catch (err) {
+    console.error(`session trail schedule failed: ${String(err)}`);
+  }
 }
 
 const app = express();
@@ -117,6 +127,7 @@ app.post("/hook", (req, res) => {
   const seededAt = process.env.HUB_DEV_SEED === "1" ? asNumber(body.updatedAt) : null;
   const session = payload.kind === "meta" ? (applyMeta(payload) ?? applyHook(payload, seededAt ?? undefined)) : applyHook(payload, seededAt ?? undefined);
   broadcast("session", session);
+  trailAfterHook(session, payload.kind);
   if (payload.kind === "session_end") {
     const releasedClaims = releaseClaimsOfSession(payload.sessionId);
     if (releasedClaims > 0) broadcast("claims", listClaims());
@@ -166,6 +177,7 @@ app.post("/hook/raw", (req, res) => {
   };
   const session = applyHook(payload);
   broadcast("session", session);
+  trailAfterHook(session, payload.kind);
   res.json(session);
 });
 

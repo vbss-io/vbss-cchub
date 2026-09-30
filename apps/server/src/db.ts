@@ -106,6 +106,64 @@ ensureColumns("agents", [
   ["last_message", "TEXT"],
 ]);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS trail_state (
+    session_id    TEXT PRIMARY KEY,
+    last_turns    INTEGER NOT NULL,
+    first_started INTEGER NOT NULL,
+    last_update   INTEGER NOT NULL,
+    bullets_today INTEGER NOT NULL,
+    day           TEXT NOT NULL
+  );
+`);
+
+export interface TrailStateRecord {
+  sessionId: string;
+  lastTurns: number;
+  firstStarted: number;
+  lastUpdate: number;
+  bulletsToday: number;
+  day: string;
+}
+
+interface TrailStateRow {
+  session_id: string;
+  last_turns: number;
+  first_started: number;
+  last_update: number;
+  bullets_today: number;
+  day: string;
+}
+
+const getTrailStateStmt = db.prepare(`SELECT * FROM trail_state WHERE session_id = ?`);
+const saveTrailStateStmt = db.prepare(`
+  INSERT INTO trail_state (session_id, last_turns, first_started, last_update, bullets_today, day)
+  VALUES (@sessionId, @lastTurns, @firstStarted, @lastUpdate, @bulletsToday, @day)
+  ON CONFLICT(session_id) DO UPDATE SET
+    last_turns = excluded.last_turns,
+    first_started = excluded.first_started,
+    last_update = excluded.last_update,
+    bullets_today = excluded.bullets_today,
+    day = excluded.day
+`);
+
+export function getTrailState(sessionId: string): TrailStateRecord | null {
+  const row = getTrailStateStmt.get(sessionId) as TrailStateRow | undefined;
+  if (!row) return null;
+  return {
+    sessionId: row.session_id,
+    lastTurns: row.last_turns,
+    firstStarted: row.first_started,
+    lastUpdate: row.last_update,
+    bulletsToday: row.bullets_today,
+    day: row.day,
+  };
+}
+
+export function saveTrailState(state: TrailStateRecord): void {
+  saveTrailStateStmt.run(state);
+}
+
 const STALE_HOURS = Number(process.env.HUB_STALE_HOURS ?? 4);
 const STALE_MS = Number.isFinite(STALE_HOURS) && STALE_HOURS > 0 ? STALE_HOURS * 3_600_000 : 4 * 3_600_000;
 

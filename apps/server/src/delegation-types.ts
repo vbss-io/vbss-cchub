@@ -76,8 +76,21 @@ export interface WorkspaceRecord {
   error: string | null;
 }
 
+export const TRAIL_DETAILS = ["light", "medium", "high"] as const;
+
+export type TrailDetail = (typeof TRAIL_DETAILS)[number];
+
 export interface DelegationFeatures {
   daily: boolean;
+  trail: boolean;
+}
+
+export interface TrailFeatureSettings {
+  dir: string | null;
+  detail: TrailDetail;
+  model: string | null;
+  prompt: string | null;
+  hubEvents: boolean;
 }
 
 export interface DailyHeadings {
@@ -105,6 +118,7 @@ export interface DelegationSettings {
   runTimeoutMinutes: number;
   features: DelegationFeatures;
   daily: DailyFeatureSettings;
+  trail: TrailFeatureSettings;
 }
 
 export const RUN_TIMEOUT_MIN = 5;

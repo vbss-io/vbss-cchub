@@ -100,8 +100,9 @@ describe("hub surface", () => {
       autonomy: "full",
       ownerName: userInfo().username,
       runTimeoutMinutes: 60,
-      features: { daily: false },
+      features: { daily: false, trail: false },
       daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false },
+      trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true },
     });
     assert.equal((await http("PUT", "/delegation/settings", { body: { workspacesRoot: join(box.tmp, "nope") } })).status, 400);
     const saved = await http("PUT", "/delegation/settings", { body: { workspacesRoot: box.root, secondBrainRoot: box.brain } });
