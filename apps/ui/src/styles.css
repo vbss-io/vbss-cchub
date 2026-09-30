@@ -4079,7 +4079,7 @@ h6.md__h {
 .usage {
   --usage-claude: var(--brand);
   --usage-codex: var(--amber);
-  max-width: 1200px;
+  min-width: 0;
 }
 
 .usage__head {
@@ -4104,20 +4104,17 @@ h6.md__h {
   margin: 0;
 }
 
-.usage__dot {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
+.usage__ico {
+  display: inline-flex;
   flex: none;
 }
 
-.usage__dot--claude {
-  background: var(--usage-claude);
+.usage__ico--claude {
+  color: var(--usage-claude);
 }
 
-.usage__dot--codex {
-  background: var(--usage-codex);
+.usage__ico--codex {
+  color: var(--usage-codex);
 }
 
 .usage__prov {
@@ -4167,7 +4164,7 @@ h6.md__h {
 
 .usage__gauge {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 44px minmax(0, auto);
+  grid-template-columns: 34px minmax(0, 1fr) minmax(44px, auto) minmax(0, auto);
   align-items: center;
   gap: 10px;
   font-size: 13px;
@@ -4180,6 +4177,7 @@ h6.md__h {
 .usage__gauge-v {
   text-align: right;
   font-weight: 600;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
@@ -4246,6 +4244,12 @@ h6.md__h {
   gap: 8px;
 }
 
+.usage__scrollx {
+  overflow-x: auto;
+  max-width: 100%;
+  padding-bottom: 4px;
+}
+
 .usage__bars {
   display: grid;
   gap: 4px;
@@ -4308,7 +4312,7 @@ h6.md__h {
 
 .usage__tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -4470,9 +4474,25 @@ h6.md__h {
   align-self: flex-start;
 }
 
+@media (max-width: 1199px) {
+  .usage__tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .usage__tiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .usage__cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 720px) {
   .usage__gauge {
-    grid-template-columns: 30px minmax(0, 1fr) 40px;
+    grid-template-columns: 30px minmax(0, 1fr) minmax(40px, auto);
   }
 
   .usage__gauge-r {

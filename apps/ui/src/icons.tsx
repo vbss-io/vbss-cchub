@@ -195,3 +195,38 @@ export function IconExpand({ size = 14 }: IconProps) {
     </svg>
   );
 }
+
+const CLAUDE_RAYS: readonly string[] = [
+  "M12 12 12 2.4",
+  "M12 12 17.2 4.1",
+  "M12 12 21 8.6",
+  "M12 12 21.6 13.4",
+  "M12 12 18.4 19.6",
+  "M12 12 12.4 21.6",
+  "M12 12 6.2 19.4",
+  "M12 12 2.6 14.2",
+  "M12 12 3.2 7.6",
+  "M12 12 7.2 3.6",
+];
+
+export function IconClaude({ size = 14 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" aria-hidden={true}>
+      {CLAUDE_RAYS.map((ray) => (
+        <path key={ray} d={ray} />
+      ))}
+    </svg>
+  );
+}
+
+const OPENAI_ARM = "M9.5 4.1 12 2.6 20.1 7.3V12.4M20.1 12.4 12 7.7 8 10";
+
+export function IconOpenAI({ size = 14 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden={true}>
+      {[0, 60, 120, 180, 240, 300].map((angle) => (
+        <path key={angle} d={OPENAI_ARM} transform={`rotate(${angle} 12 12)`} />
+      ))}
+    </svg>
+  );
+}

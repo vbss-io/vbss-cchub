@@ -9,10 +9,10 @@ export interface Rect {
 
 export type Tone = "go" | "pend" | "hold" | "muted";
 
-export const TAB_THICKNESS = 28;
-export const TAB_LENGTH = 132;
-export const PANEL_LONG = 520;
-export const PANEL_SHORT = 340;
+export const TAB_THICKNESS = 56;
+export const TAB_LENGTH = 264;
+export const PANEL_LONG = 760;
+export const PANEL_SHORT = 560;
 
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), Math.max(min, max));
 
