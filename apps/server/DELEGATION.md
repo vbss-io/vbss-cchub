@@ -353,7 +353,7 @@ turns, 1-3 bullets) or `high` (60 turns, every stop, 3-6 bullets with files and 
 (default `haiku`, `null` for the CLI default), `trail.prompt` (replaces the level prompt), `trail.hubEvents`
 (default `true`): delegations, reports and share asks go to a trailing `## Hub` section of the same file
 instead of `fontes/hub/<date>.md`, and `GET /brain/today` serves the file as `sessions` and that section as
-`hub`. One serial worker runs the model through `HUB_CLAUDE_BIN` (secrets redacted, failed windows retried
+`hub`. A session seen for the first time is summarized from its latest window only, and a trigger runs at most 3 windows (6 in `high`). One serial worker runs the model through `HUB_CLAUDE_BIN` (secrets redacted, failed windows retried
 from the checkpoint in `trail_state`). `GET /trail` returns `{ enabled, dir, detail, model, hubEvents, today:
 { path, exists, sessions, hubLines }, queue, running, lastError }`; `POST /trail/flush` (`{ sessionId? }`)
 returns `{ scheduled }`; SSE `trail { date, sessionId, bullets }`. `GET /daily/:date/prepare` adds
