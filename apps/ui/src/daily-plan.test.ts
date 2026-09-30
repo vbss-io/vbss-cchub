@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { carryOverFromYesterday, focusPreviewLines, parseMeetings, parseNewItems, shouldPersistWizardDraft } from "./daily-plan";
+import { carryOverFromYesterday, focusPreviewLines, mergeTrailIntoSummary, parseMeetings, parseNewItems, shouldPersistWizardDraft } from "./daily-plan";
 import type { DailyYesterdayTask } from "./delegation";
 
 test("parseNewItems splits project from text on the first ' - '", () => {
@@ -99,4 +99,25 @@ test("shouldPersistWizardDraft is false before hydration completes", () => {
 test("shouldPersistWizardDraft is false when no wizard date is set", () => {
   assert.equal(shouldPersistWizardDraft(null, "2026-09-15", true), false);
   assert.equal(shouldPersistWizardDraft(null, null, true), false);
+});
+
+test("mergeTrailIntoSummary fills an empty summary with the first bullets", () => {
+  assert.equal(mergeTrailIntoSummary("", ["a", "b"]), "a\nb");
+});
+
+test("mergeTrailIntoSummary appends after a newline when text exists", () => {
+  assert.equal(mergeTrailIntoSummary("Shipped export", ["a", "b"]), "Shipped export\na\nb");
+});
+
+test("mergeTrailIntoSummary respects max", () => {
+  assert.equal(mergeTrailIntoSummary("", ["a", "b", "c", "d"]), "a\nb\nc");
+  assert.equal(mergeTrailIntoSummary("", ["a", "b", "c", "d"], 2), "a\nb");
+});
+
+test("mergeTrailIntoSummary trims bullets and current text and skips blanks", () => {
+  assert.equal(mergeTrailIntoSummary("  note  \n", ["  a  ", "", "b"]), "note\na\nb");
+});
+
+test("mergeTrailIntoSummary leaves current untouched when there are no bullets", () => {
+  assert.equal(mergeTrailIntoSummary("keep", []), "keep");
 });

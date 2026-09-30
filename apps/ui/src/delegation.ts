@@ -69,6 +69,16 @@ export interface DailySettings {
   wikilinks: boolean;
 }
 
+export type TrailDetail = "light" | "medium" | "high";
+
+export interface TrailSettings {
+  dir: string | null;
+  detail: TrailDetail;
+  model: string | null;
+  prompt: string | null;
+  hubEvents: boolean;
+}
+
 export interface DelegationSettings {
   workspacesRoot: string | null;
   editorCommand: string;
@@ -76,8 +86,9 @@ export interface DelegationSettings {
   autonomy: Autonomy;
   ownerName: string;
   runTimeoutMinutes: number;
-  features: { daily: boolean };
+  features: { daily: boolean; trail: boolean };
   daily: DailySettings;
+  trail: TrailSettings;
 }
 
 export interface TaskRecord {
@@ -204,9 +215,10 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T;
 }
 
-export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily">> & {
+export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily" | "trail">> & {
   features?: Partial<DelegationSettings["features"]>;
   daily?: Partial<Omit<DailySettings, "headings">> & { headings?: Partial<DailyHeadings> };
+  trail?: Partial<TrailSettings>;
 };
 
 export const getSettings = (): Promise<DelegationSettings> => call("GET", "/settings");
@@ -498,9 +510,15 @@ export interface DailyYesterday {
   tasks: DailyYesterdayTask[];
 }
 
+export interface DailyYesterdayTrail {
+  path: string;
+  bullets: string[];
+}
+
 export interface DailyPrepare {
   date: string;
   yesterday: DailyYesterday | null;
+  yesterdayTrail: DailyYesterdayTrail | null;
   sessionsToday: DailySession[];
   headings: DailyHeadings;
   wikilinks: boolean;
@@ -583,3 +601,20 @@ export const generateDaily = (date: string, focus?: string, context?: string): P
 
 export const listDailySessions = (date: string): Promise<DailySession[]> =>
   call("GET", `/daily/sessions?date=${encodeURIComponent(date)}`);
+
+export interface TrailStatus {
+  enabled: boolean;
+  dir: string | null;
+  detail: TrailDetail;
+  model: string | null;
+  hubEvents: boolean;
+  today: { path: string; exists: boolean; sessions: number; hubLines: number };
+  queue: number;
+  running: { sessionId: string; since: number } | null;
+  lastError: string | null;
+}
+
+export const getTrail = (): Promise<TrailStatus> => call("GET", "/trail");
+
+export const flushTrail = (sessionId?: string): Promise<{ scheduled: number }> =>
+  call("POST", "/trail/flush", sessionId ? { sessionId } : {});

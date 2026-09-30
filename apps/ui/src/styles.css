@@ -3949,3 +3949,94 @@ h6.md__h {
 .callout--warn {
   border-left-color: var(--pend);
 }
+
+.daily__trail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.daily__trail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.daily__trail-head h5 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.daily__trail-list {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 14rem;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.daily__trail-list li + li {
+  margin-top: 4px;
+}
+
+.trail__levels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.trail__level {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.trail__level:hover {
+  border-color: var(--border-2);
+}
+
+.trail__level--on {
+  border-color: var(--brand);
+}
+
+.trail__level-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.trail__level-desc {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.trail__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.trail__status-error {
+  color: var(--pend);
+}
