@@ -11,6 +11,7 @@ import {
   type UsageProvider,
   type UsageTitleResolver,
   usageGeneration,
+  usageScanProgress,
 } from "./usage.js";
 
 const CACHE_TTL_MS = 60_000;
@@ -43,14 +44,59 @@ function titleResolver(): UsageTitleResolver {
   };
 }
 
-async function usageFor(days: number, fresh: boolean): Promise<UsageAggregate> {
-  const cached = responseCache.get(days);
-  if (!fresh && cached && cached.generation === usageGeneration() && Date.now() - cached.at < CACHE_TTL_MS) return cached.value;
+async function compute(days: number): Promise<UsageAggregate> {
   const now = Date.now();
   const scan = await collectUsage({ days, now });
   const value = aggregateUsage(scan.records, { days, now, titleOf: titleResolver() });
   if (scan.generation === usageGeneration()) responseCache.set(days, { at: Date.now(), generation: scan.generation, value });
   return value;
+}
+
+interface BackgroundScan {
+  startedAt: number;
+}
+
+const background = new Map<number, BackgroundScan>();
+const failures = new Map<number, string>();
+
+function startBackground(days: number): BackgroundScan {
+  const running = background.get(days);
+  if (running) return running;
+  const scan: BackgroundScan = { startedAt: Date.now() };
+  background.set(days, scan);
+  failures.delete(days);
+  compute(days)
+    .then(
+      () => undefined,
+      (error: unknown) => {
+        failures.set(days, error instanceof Error ? error.message : "usage scan failed");
+      },
+    )
+    .finally(() => {
+      if (background.get(days) === scan) background.delete(days);
+      broadcast("usage", { at: Date.now() });
+    });
+  return scan;
+}
+
+export function warmUsage(): void {
+  startBackground(DEFAULT_DAYS);
+}
+
+type Lookup = { value: UsageAggregate } | { value: null; startedAt: number };
+
+async function resolve(days: number, fresh: boolean): Promise<Lookup> {
+  const failure = failures.get(days);
+  if (failure !== undefined) {
+    failures.delete(days);
+    throw new Error(failure);
+  }
+  if (fresh) return { value: await compute(days) };
+  const cached = responseCache.get(days);
+  const usable = cached && cached.generation === usageGeneration() ? cached : null;
+  if (usable && Date.now() - usable.at < CACHE_TTL_MS) return { value: usable.value };
+  const scan = startBackground(days);
+  return usable ? { value: usable.value } : { value: null, startedAt: scan.startedAt };
 }
 
 export function summarize(aggregate: UsageAggregate): UsageSummary {
@@ -85,7 +131,9 @@ export function usageRouter(): Router {
       return;
     }
     try {
-      res.json(await usageFor(days, req.query.fresh === "1"));
+      const found = await resolve(days, req.query.fresh === "1");
+      if (found.value) res.json(found.value);
+      else res.status(202).json({ scanning: true, startedAt: found.startedAt, files: usageScanProgress()?.files ?? null });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "usage scan failed" });
     }
@@ -93,7 +141,9 @@ export function usageRouter(): Router {
 
   router.get("/summary", async (req, res) => {
     try {
-      res.json(summarize(await usageFor(DEFAULT_DAYS, req.query.fresh === "1")));
+      const found = await resolve(DEFAULT_DAYS, req.query.fresh === "1");
+      if (found.value) res.json(summarize(found.value));
+      else res.status(202).json({ days: DEFAULT_DAYS, scanning: true, providers: null });
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "usage scan failed" });
     }
@@ -104,6 +154,7 @@ export function usageRouter(): Router {
       const started = Date.now();
       const scan = await rescanUsage({ days: DEFAULT_DAYS });
       responseCache.clear();
+      await compute(DEFAULT_DAYS).catch(() => undefined);
       broadcast("usage", { at: Date.now() });
       res.json({ files: scan.files, elapsedMs: Date.now() - started });
     } catch (error) {

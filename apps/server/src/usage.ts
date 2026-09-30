@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { config } from "./config.js";
 
 export type UsageProvider = "claude" | "codex";
@@ -165,10 +165,16 @@ export function localDay(at: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
+type ParserMeta =
+  | { kind: "claude"; keys: string[]; anonymous: number }
+  | { kind: "codex"; sessionId: string | null; metaSeen: boolean; cwd: string | null; model: string; previousTotal: number | null };
+
 interface FileParser {
   markers: Buffer[];
   feed(line: string): void;
   records(): UsageRecord[];
+  snapshot(): ParserMeta;
+  restore(meta: ParserMeta, records: readonly UsageRecord[]): boolean;
 }
 
 function claudeParser(project: string, fallbackSession: string, sidechainFile: boolean): FileParser {
@@ -211,6 +217,17 @@ function claudeParser(project: string, fallbackSession: string, sidechainFile: b
       });
     },
     records: () => Array.from(byMessage.values()),
+    snapshot: () => ({ kind: "claude", keys: Array.from(byMessage.keys()), anonymous }),
+    restore(meta, records) {
+      if (meta.kind !== "claude" || meta.keys.length !== records.length) return false;
+      byMessage.clear();
+      meta.keys.forEach((key, index) => {
+        const record = records[index];
+        if (record) byMessage.set(key, record);
+      });
+      anonymous = meta.anonymous;
+      return true;
+    },
   };
 }
 
@@ -296,6 +313,29 @@ function codexParser(fallbackSession: string): FileParser {
         sidechain: false,
       }));
     },
+    snapshot: () => ({ kind: "codex", sessionId, metaSeen, cwd, model, previousTotal }),
+    restore(meta, records) {
+      if (meta.kind !== "codex") return false;
+      turns.length = 0;
+      for (const record of records) {
+        turns.push({
+          at: record.at,
+          model: record.model,
+          read: record.read,
+          fresh: record.fresh,
+          cacheRead: record.cacheRead,
+          cacheWrite: record.cacheWrite,
+          output: record.output,
+          thinking: record.thinking,
+        });
+      }
+      sessionId = meta.sessionId;
+      metaSeen = meta.metaSeen;
+      cwd = meta.cwd;
+      model = meta.model;
+      previousTotal = meta.previousTotal;
+      return true;
+    },
   };
 }
 
@@ -315,18 +355,29 @@ interface CacheEntry {
   size: number;
   mtimeMs: number;
   offset: number;
-  parser: FileParser;
+  provider: UsageProvider;
+  parser: FileParser | null;
+  meta: ParserMeta;
   records: UsageRecord[];
 }
 
+const CACHE_FILE = "usage-cache.json";
+const CACHE_VERSION = 1;
+const CACHE_MAX_AGE_MS = 45 * 86_400_000;
+const PERSIST_MIN_INTERVAL_MS = 10_000;
+const RECORD_FIELDS = 12;
+
 const fileCache = new Map<string, CacheEntry>();
 const scanStats = { parses: 0, generation: 0, lastScan: null as { files: number; parsed: number; ms: number } | null };
+let scanProgress: { startedAt: number; files: number | null } | null = null;
 
 export function usageScanStats(): { parses: number; cachedFiles: number; lastScan: { files: number; parsed: number; ms: number } | null } {
   return { parses: scanStats.parses, cachedFiles: fileCache.size, lastScan: scanStats.lastScan };
 }
 
 export const usageGeneration = (): number => scanStats.generation;
+
+export const usageScanProgress = (): { startedAt: number; files: number | null } | null => scanProgress;
 
 type FileHook = (path: string) => Promise<void>;
 let fileHook: FileHook | null = null;
@@ -335,10 +386,194 @@ export function setUsageFileHook(hook: FileHook | null): void {
   fileHook = hook;
 }
 
+let cachePath: string | null = join(config.dataDir, CACHE_FILE);
+let cacheLoaded = false;
+let persistDirty = false;
+let persistTimer: NodeJS.Timeout | null = null;
+let lastPersistAt = 0;
+let persisting: Promise<void> = Promise.resolve();
+
+function cancelPersistTimer(): void {
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = null;
+}
+
+export function setUsageCachePath(path: string | null): void {
+  cancelPersistTimer();
+  cachePath = path;
+  cacheLoaded = false;
+  persistDirty = false;
+  lastPersistAt = 0;
+}
+
 export function resetUsageCache(): void {
   scanStats.generation += 1;
   fileCache.clear();
   interned.clear();
+  cacheLoaded = false;
+}
+
+function dropUsageCache(): void {
+  resetUsageCache();
+  cacheLoaded = true;
+}
+
+const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const isStringOrNull = (value: unknown): value is string | null => value === null || typeof value === "string";
+
+function decodeMeta(raw: unknown, provider: UsageProvider, records: number): ParserMeta {
+  const meta = asObject(raw);
+  if (!meta) throw new Error("usage cache meta");
+  if (provider === "claude") {
+    const keys = meta.keys;
+    if (meta.kind !== "claude" || !Array.isArray(keys) || keys.length !== records || !keys.every((key) => typeof key === "string") || !isNumber(meta.anonymous)) {
+      throw new Error("usage cache claude meta");
+    }
+    return { kind: "claude", keys: keys as string[], anonymous: meta.anonymous };
+  }
+  if (
+    meta.kind !== "codex" ||
+    !isStringOrNull(meta.sessionId) ||
+    typeof meta.metaSeen !== "boolean" ||
+    !isStringOrNull(meta.cwd) ||
+    typeof meta.model !== "string" ||
+    !(meta.previousTotal === null || isNumber(meta.previousTotal))
+  ) {
+    throw new Error("usage cache codex meta");
+  }
+  return { kind: "codex", sessionId: meta.sessionId, metaSeen: meta.metaSeen, cwd: meta.cwd, model: meta.model, previousTotal: meta.previousTotal };
+}
+
+function decodeCache(raw: unknown, cutoff: number): Map<string, CacheEntry> {
+  const root = asObject(raw);
+  if (!root || root.version !== CACHE_VERSION || !Array.isArray(root.strings) || !Array.isArray(root.files)) throw new Error("usage cache shape");
+  const table: string[] = [];
+  for (const value of root.strings) {
+    if (typeof value !== "string") throw new Error("usage cache strings");
+    table.push(intern(value));
+  }
+  const lookup = (index: unknown): string => {
+    const value = typeof index === "number" && Number.isInteger(index) ? table[index] : undefined;
+    if (value === undefined) throw new Error("usage cache string index");
+    return value;
+  };
+  const out = new Map<string, CacheEntry>();
+  for (const item of root.files) {
+    const file = asObject(item);
+    if (!file || typeof file.path !== "string" || !Array.isArray(file.records)) throw new Error("usage cache file");
+    const provider = file.provider;
+    if (provider !== "claude" && provider !== "codex") throw new Error("usage cache provider");
+    if (!isNumber(file.size) || !isNumber(file.mtimeMs) || !isNumber(file.offset)) throw new Error("usage cache numbers");
+    if (file.mtimeMs < cutoff) continue;
+    const records: UsageRecord[] = file.records.map((row: unknown) => {
+      if (!Array.isArray(row) || row.length !== RECORD_FIELDS || ![0, 5, 6, 7, 8, 9, 10, 11].every((column) => isNumber(row[column]))) {
+        throw new Error("usage cache record");
+      }
+      const [at, model, sessionId, project, cwd, read, fresh, cacheRead, cacheWrite, output, thinking, sidechain] = row as number[];
+      return {
+        provider,
+        at: at as number,
+        model: lookup(model),
+        sessionId: lookup(sessionId),
+        project: lookup(project),
+        cwd: cwd === -1 ? null : lookup(cwd),
+        read: read as number,
+        fresh: fresh as number,
+        cacheRead: cacheRead as number,
+        cacheWrite: cacheWrite as number,
+        output: output as number,
+        thinking: thinking as number,
+        sidechain: sidechain === 1,
+      };
+    });
+    out.set(file.path, {
+      size: file.size,
+      mtimeMs: file.mtimeMs,
+      offset: file.offset,
+      provider,
+      parser: null,
+      meta: decodeMeta(file.meta, provider, records.length),
+      records,
+    });
+  }
+  return out;
+}
+
+async function loadPersistedCache(): Promise<void> {
+  const path = cachePath;
+  if (path === null) return;
+  try {
+    const decoded = decodeCache(JSON.parse(await readFile(path, "utf8")) as unknown, Date.now() - CACHE_MAX_AGE_MS);
+    if (fileCache.size > 0) return;
+    for (const [file, entry] of decoded) fileCache.set(file, entry);
+  } catch {
+    return;
+  }
+}
+
+async function persistCache(path: string): Promise<void> {
+  const cutoff = Date.now() - CACHE_MAX_AGE_MS;
+  const entries = Array.from(fileCache).filter(([, entry]) => entry.mtimeMs >= cutoff);
+  const strings: string[] = [];
+  const positions = new Map<string, number>();
+  const position = (value: string): number => {
+    const known = positions.get(value);
+    if (known !== undefined) return known;
+    positions.set(value, strings.length);
+    strings.push(value);
+    return strings.length - 1;
+  };
+  const parts: string[] = [];
+  let sliceStart = performance.now();
+  for (const [file, entry] of entries) {
+    const rows = entry.records.map((item) => [
+      item.at,
+      position(item.model),
+      position(item.sessionId),
+      position(item.project),
+      item.cwd === null ? -1 : position(item.cwd),
+      item.read,
+      item.fresh,
+      item.cacheRead,
+      item.cacheWrite,
+      item.output,
+      item.thinking,
+      item.sidechain ? 1 : 0,
+    ]);
+    parts.push(JSON.stringify({ path: file, provider: entry.provider, size: entry.size, mtimeMs: entry.mtimeMs, offset: entry.offset, meta: entry.meta, records: rows }));
+    if (performance.now() - sliceStart > YIELD_AFTER_MS) {
+      await yieldToLoop();
+      sliceStart = performance.now();
+    }
+  }
+  const body = `{"version":${CACHE_VERSION},"savedAt":${Date.now()},"strings":${JSON.stringify(strings)},"files":[${parts.join(",")}]}`;
+  const temp = `${path}.${process.pid}.tmp`;
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(temp, body);
+  await rename(temp, path);
+}
+
+function writePersisted(): void {
+  persistTimer = null;
+  const path = cachePath;
+  if (!persistDirty || path === null) return;
+  persistDirty = false;
+  lastPersistAt = Date.now();
+  persisting = persisting.then(() => persistCache(path)).catch(() => undefined);
+}
+
+function markPersistDirty(): void {
+  if (cachePath === null) return;
+  persistDirty = true;
+  if (persistTimer) return;
+  persistTimer = setTimeout(writePersisted, Math.max(0, lastPersistAt + PERSIST_MIN_INTERVAL_MS - Date.now()));
+  persistTimer.unref();
+}
+
+export function flushUsageCache(): Promise<void> {
+  cancelPersistTimer();
+  writePersisted();
+  return persisting;
 }
 
 async function entriesOf(dir: string): Promise<import("node:fs").Dirent[]> {
@@ -456,22 +691,50 @@ function parserFor(file: SourceFile): FileParser {
     : codexParser(file.fallbackSession);
 }
 
+function resumableParser(file: SourceFile, cached: CacheEntry | undefined): FileParser | null {
+  if (!cached || file.size <= cached.size) return null;
+  if (cached.parser) return cached.parser;
+  const parser = parserFor(file);
+  return parser.restore(cached.meta, cached.records) ? parser : null;
+}
+
 async function refresh(file: SourceFile): Promise<boolean> {
   const cached = fileCache.get(file.path);
   if (cached && cached.size === file.size && cached.mtimeMs === file.mtimeMs) return false;
-  const resume = cached !== undefined && file.size > cached.size;
-  const parser = resume ? cached.parser : parserFor(file);
+  const resumed = resumableParser(file, cached);
+  const parser = resumed ?? parserFor(file);
   scanStats.parses += 1;
-  const offset = await feedFile(file.path, resume ? cached.offset : 0, parser);
-  fileCache.set(file.path, { size: file.size, mtimeMs: file.mtimeMs, offset, parser, records: parser.records() });
+  const offset = await feedFile(file.path, resumed && cached ? cached.offset : 0, parser);
+  fileCache.set(file.path, {
+    size: file.size,
+    mtimeMs: file.mtimeMs,
+    offset,
+    provider: file.provider,
+    parser,
+    meta: parser.snapshot(),
+    records: parser.records(),
+  });
   return true;
 }
 
 async function scan(options: CollectOptions): Promise<UsageScan> {
+  scanProgress = { startedAt: Date.now(), files: null };
+  try {
+    return await runScan(options);
+  } finally {
+    scanProgress = null;
+  }
+}
+
+async function runScan(options: CollectOptions): Promise<UsageScan> {
   const started = performance.now();
   const generation = scanStats.generation;
   const now = options.now ?? Date.now();
   const from = windowStart(options.days, now);
+  if (!cacheLoaded) {
+    cacheLoaded = true;
+    if (fileCache.size === 0) await loadPersistedCache();
+  }
   const listing = [
     ...(await listClaude(options.claudeDir ?? config.claudeProjectsDir)),
     ...(await listCodex(options.codexDir ?? config.codexSessionsDir)),
@@ -479,11 +742,12 @@ async function scan(options: CollectOptions): Promise<UsageScan> {
   const files = await statAll(listing);
   const seen = new Set<string>();
   const records: UsageRecord[] = [];
+  const windowed = files.filter((file) => file.mtimeMs >= from);
+  if (scanProgress) scanProgress.files = windowed.length;
   let considered = 0;
   let parsed = 0;
-  for (const file of files) {
-    seen.add(file.path);
-    if (file.mtimeMs < from) continue;
+  for (const file of files) seen.add(file.path);
+  for (const file of windowed) {
     considered += 1;
     try {
       if (fileHook) await fileHook(file.path);
@@ -495,12 +759,19 @@ async function scan(options: CollectOptions): Promise<UsageScan> {
     if (!entry) continue;
     for (const record of entry.records) if (record.at >= from) records.push(record);
   }
-  for (const path of fileCache.keys()) if (!seen.has(path)) fileCache.delete(path);
+  let pruned = 0;
+  for (const path of Array.from(fileCache.keys())) {
+    if (!seen.has(path)) {
+      fileCache.delete(path);
+      pruned += 1;
+    }
+  }
   const ms = Math.round(performance.now() - started);
   if (parsed > 0) {
     scanStats.lastScan = { files: considered, parsed, ms };
     console.log(`[usage] scanned ${considered} files (${parsed} parsed) in ${ms}ms`);
   }
+  if ((parsed > 0 || pruned > 0) && generation === scanStats.generation) markPersistDirty();
   return { records, files: considered, parsed, ms, generation };
 }
 
@@ -527,7 +798,7 @@ export function collectUsage(options: CollectOptions): Promise<UsageScan> {
 }
 
 export function rescanUsage(options: CollectOptions): Promise<UsageScan> {
-  return enqueue(options, resetUsageCache);
+  return enqueue(options, dropUsageCache);
 }
 
 interface SessionAccumulator {
