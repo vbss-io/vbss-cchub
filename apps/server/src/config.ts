@@ -52,6 +52,18 @@ function claudeDesktopConfigPath(): string {
   return join(homeDir, ".config", "Claude", "claude_desktop_config.json");
 }
 
+const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
+
+function claudeUsageUrl(raw: string | undefined): string {
+  if (!raw) return CLAUDE_USAGE_URL;
+  try {
+    const host = new URL(raw).hostname;
+    return host === "127.0.0.1" || host === "localhost" || host === "[::1]" ? raw : CLAUDE_USAGE_URL;
+  } catch {
+    return CLAUDE_USAGE_URL;
+  }
+}
+
 const codexHome = process.env.CODEX_HOME ?? join(homeDir, ".codex");
 
 export const config = {
@@ -86,5 +98,8 @@ export const config = {
   codexHome,
   codexConfigPath: join(codexHome, "config.toml"),
   codexSessionsDir: join(codexHome, "sessions"),
+  claudeCredentialsPath: process.env.HUB_CLAUDE_CREDENTIALS ?? join(homeDir, ".claude", ".credentials.json"),
+  claudeStatePath: process.env.HUB_CLAUDE_STATE ?? join(homeDir, ".claude.json"),
+  claudeUsageUrl: claudeUsageUrl(process.env.HUB_CLAUDE_USAGE_URL),
   claudeProjectsDir: process.env.HUB_CLAUDE_PROJECTS_DIR ?? join(homeDir, ".claude", "projects"),
 } as const;

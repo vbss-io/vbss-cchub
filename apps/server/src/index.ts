@@ -43,6 +43,8 @@ import { runtimeSnapshot } from "./runtimes.js";
 import { ensureExtension } from "./ensure-extension.js";
 import { abortActiveRuns, delegationRouter } from "./delegation-routes.js";
 import { usageRouter } from "./usage-routes.js";
+import { limitsRouter } from "./limits-routes.js";
+import { startLimitsPolling, stopLimitsPolling } from "./limits.js";
 import { resolveWorkspaceTarget } from "./delegation-launch.js";
 import { getSettings, markRunningAsInterrupted } from "./delegation-store.js";
 import { watchDaily } from "./daily.js";
@@ -53,7 +55,7 @@ import { abortAllAsks } from "./share-service.js";
 import { mergeHooks, windowsHooks, wslHooks } from "./hooks-control.js";
 import { readSessionName, readTranscript } from "./transcript.js";
 import { isHubRun, scheduleTrail } from "./trail.js";
-import { addClient, broadcast, clientCount } from "./sse.js";
+import { addClient, broadcast, clientCount, onBroadcast } from "./sse.js";
 import { HOOK_KINDS, type HookKind, type HookPayload, type SessionRecord } from "./types.js";
 import { whenBrainWritesIdle } from "./second-brain.js";
 
@@ -506,6 +508,7 @@ app.post("/api/hooks/uninstall", async (_req, res) => {
 
 app.use("/delegation", delegationRouter());
 app.use("/delegation/usage", usageRouter());
+app.use("/delegation/limits", limitsRouter());
 
 app.get("/api/events", (_req, res) => {
   res.writeHead(200, {
@@ -549,11 +552,16 @@ app.listen(config.port, config.host, () => {
     console.log("delegation enabled (loopback callers only)");
     const settings = getSettings();
     if (settings.features.daily && settings.secondBrainRoot) watchDaily(settings);
+    startLimitsPolling(settings);
+    onBroadcast((event) => {
+      if (event === "settings") startLimitsPolling(getSettings());
+    });
   }
 });
 
 function shutdown(reason: string): void {
   stopTunnel();
+  stopLimitsPolling();
   abortAllAsks(reason);
   abortActiveRuns(reason);
   const drained = whenBrainWritesIdle();
