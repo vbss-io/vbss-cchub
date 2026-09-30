@@ -42,6 +42,7 @@ import { sessionLive } from "./live.js";
 import { runtimeSnapshot } from "./runtimes.js";
 import { ensureExtension } from "./ensure-extension.js";
 import { abortActiveRuns, delegationRouter } from "./delegation-routes.js";
+import { usageRouter } from "./usage-routes.js";
 import { resolveWorkspaceTarget } from "./delegation-launch.js";
 import { getSettings, markRunningAsInterrupted } from "./delegation-store.js";
 import { watchDaily } from "./daily.js";
@@ -504,6 +505,7 @@ app.post("/api/hooks/uninstall", async (_req, res) => {
 });
 
 app.use("/delegation", delegationRouter());
+app.use("/delegation/usage", usageRouter());
 
 app.get("/api/events", (_req, res) => {
   res.writeHead(200, {
