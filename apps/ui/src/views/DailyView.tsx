@@ -3,6 +3,7 @@ import type { DailyStreamEvent } from "../api";
 import {
   carryOverFromYesterday,
   focusPreviewLines,
+  mergeTrailIntoSummary,
   parseMeetings,
   parseNewItems,
   shouldPersistWizardDraft,
@@ -257,6 +258,24 @@ function DailyWizard(props: DailyWizardProps) {
                       />
                     </div>
                   ))}
+                </div>
+              )}
+              {prepare.yesterdayTrail && prepare.yesterdayTrail.bullets.length > 0 && (
+                <div className="daily__trail">
+                  <div className="daily__trail-head">
+                    <h5>Yesterday's trail</h5>
+                    <button
+                      className="act"
+                      onClick={() => onYesterdayNotesChange(mergeTrailIntoSummary(yesterdayNotes, prepare.yesterdayTrail?.bullets ?? []))}
+                    >
+                      Use as summary
+                    </button>
+                  </div>
+                  <ul className="daily__trail-list">
+                    {prepare.yesterdayTrail.bullets.map((bullet, index) => (
+                      <li key={`${index}-${bullet}`}>{bullet}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
               <label className="field">

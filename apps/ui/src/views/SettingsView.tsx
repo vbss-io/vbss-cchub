@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { getDesktopNotifyStatus, sendToast, type DesktopNotifyStatus, type HooksStatus } from "../api";
+import { getDesktopNotifyStatus, sendToast, subscribe, type DesktopNotifyStatus, type HooksStatus } from "../api";
 import { GroupManager } from "../components/GroupManager";
-import type { ConnectStatus, DelegationSettings, McpClient, Runner, SettingsPatch, ShellKind } from "../delegation";
+import { flushTrail, getTrail } from "../delegation";
+import type { ConnectStatus, DelegationSettings, McpClient, Runner, SettingsPatch, ShellKind, TrailDetail, TrailStatus } from "../delegation";
 import { COFFEE_URL, GITHUB_URL, notify, openExternal, playSound } from "../notify";
 import type { SessionClient } from "../types";
 import type { Autonomy, AutostartStatus, TunnelStatus } from "../delegation";
@@ -18,6 +19,14 @@ export interface NotifSettings {
   events: Record<NotifEventKind, boolean>;
   clients: Record<SessionClient, boolean>;
 }
+
+const TRAIL_LEVELS: { key: TrailDetail; label: string; hint: string }[] = [
+  { key: "light", label: "Light", hint: "Key points only: outcomes, decisions, root causes; about 5 bullets per session per day." },
+  { key: "medium", label: "Medium", hint: "1-3 bullets every 80 turns, no cap." },
+  { key: "high", label: "High", hint: "3-6 bullets per window with files and commands touched." },
+];
+
+const TRAIL_REFRESH_MS = 30000;
 
 const NOTIF_STYLE_META: { key: NotifStyle; label: string; hint: string }[] = [
   { key: "cchub", label: "CC Hub window", hint: "Our own popup bottom-right, independent of Windows settings." },
@@ -172,6 +181,38 @@ export function SettingsView(props: Props) {
   const [dailyWikilinks, setDailyWikilinks] = useState(settings?.daily.wikilinks ?? false);
   const [dailyBusy, setDailyBusy] = useState(false);
 
+  const [trailDir, setTrailDir] = useState(settings?.trail?.dir ?? "");
+  const [trailDetail, setTrailDetail] = useState<TrailDetail>(settings?.trail?.detail ?? "light");
+  const [trailModel, setTrailModel] = useState(settings?.trail?.model ?? "");
+  const [trailPrompt, setTrailPrompt] = useState(settings?.trail?.prompt ?? "");
+  const [trailHubEvents, setTrailHubEvents] = useState(settings?.trail?.hubEvents ?? true);
+  const [trailBusy, setTrailBusy] = useState(false);
+  const [trailStatus, setTrailStatus] = useState<TrailStatus | null>(null);
+  const trailEnabled = settings?.features.trail ?? false;
+
+  useEffect(() => {
+    if (!trailEnabled) {
+      setTrailStatus(null);
+      return;
+    }
+    let alive = true;
+    const refresh = () => {
+      getTrail()
+        .then((status) => {
+          if (alive) setTrailStatus(status);
+        })
+        .catch(() => undefined);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, TRAIL_REFRESH_MS);
+    const unsubscribe = subscribe({ onSession: () => undefined, onTrail: refresh });
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      unsubscribe();
+    };
+  }, [trailEnabled]);
+
   useEffect(() => {
     setRoot(settings?.workspacesRoot ?? "");
     setEditor(settings?.editorCommand ?? "code");
@@ -185,7 +226,58 @@ export function SettingsView(props: Props) {
     setDailyHeadingSessions(settings?.daily.headings.sessions ?? "Sessions");
     setDailyClosedKey(settings?.daily.closedKey ?? "closed");
     setDailyWikilinks(settings?.daily.wikilinks ?? false);
+    setTrailDir(settings?.trail?.dir ?? "");
+    setTrailDetail(settings?.trail?.detail ?? "light");
+    setTrailModel(settings?.trail?.model ?? "");
+    setTrailPrompt(settings?.trail?.prompt ?? "");
+    setTrailHubEvents(settings?.trail?.hubEvents ?? true);
   }, [settings]);
+
+  const trailDirty =
+    trailDir.trim() !== (settings?.trail?.dir ?? "") ||
+    trailDetail !== (settings?.trail?.detail ?? "light") ||
+    trailModel.trim() !== (settings?.trail?.model ?? "") ||
+    trailPrompt !== (settings?.trail?.prompt ?? "") ||
+    trailHubEvents !== (settings?.trail?.hubEvents ?? true);
+
+  const saveTrail = async () => {
+    setTrailBusy(true);
+    try {
+      await props.onSaveSettings({
+        trail: {
+          dir: trailDir.trim() || null,
+          detail: trailDetail,
+          model: trailModel.trim() || null,
+          prompt: trailPrompt.trim() || null,
+          hubEvents: trailHubEvents,
+        },
+      });
+    } finally {
+      setTrailBusy(false);
+    }
+  };
+
+  const resetTrailPrompt = async () => {
+    setTrailBusy(true);
+    try {
+      setTrailPrompt("");
+      await props.onSaveSettings({ trail: { prompt: null } });
+    } finally {
+      setTrailBusy(false);
+    }
+  };
+
+  const summarizeNow = async () => {
+    setTrailBusy(true);
+    try {
+      await flushTrail();
+      setTrailStatus(await getTrail());
+    } catch {
+      return;
+    } finally {
+      setTrailBusy(false);
+    }
+  };
 
   const dailyDirty =
     dailyDir.trim() !== (settings?.daily.dir ?? "") ||
@@ -654,6 +746,89 @@ export function SettingsView(props: Props) {
                 Reset to default
               </button>
               <button className="act act--focus" disabled={!enabled || dailyBusy || !dailyDirty} onClick={() => void saveDaily()}>
+                Save
+              </button>
+            </div>
+          </div>
+        )}
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={trailEnabled}
+            disabled={!enabled}
+            onChange={(event) => void props.onSaveSettings({ features: { trail: event.target.checked } })}
+          />
+          Session trail
+        </label>
+        <small className="muted">
+          The hub summarizes each Claude Code session into a per-day file in your second brain and keeps its own trail there too; needs the Second brain path.
+        </small>
+        {trailEnabled && (
+          <div className="form">
+            <label className="field">
+              <span>Folder</span>
+              <input
+                className="in"
+                placeholder={settings?.secondBrainRoot ? `${settings.secondBrainRoot}/trail` : "<second brain>/trail"}
+                value={trailDir}
+                onChange={(event) => setTrailDir(event.target.value)}
+                disabled={!enabled}
+              />
+            </label>
+            <div className="field">
+              <span>Detail</span>
+              <div className="trail__levels" role="radiogroup" aria-label="Trail detail">
+                {TRAIL_LEVELS.map((level) => (
+                  <label key={level.key} className={`trail__level ${trailDetail === level.key ? "trail__level--on" : ""}`}>
+                    <span className="trail__level-name">
+                      <input
+                        type="radio"
+                        name="trail-detail"
+                        checked={trailDetail === level.key}
+                        disabled={!enabled}
+                        onChange={() => setTrailDetail(level.key)}
+                      />
+                      {level.label}
+                    </span>
+                    <span className="trail__level-desc">{level.hint}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <label className="field">
+              <span>Model</span>
+              <input className="in" placeholder="haiku" value={trailModel} onChange={(event) => setTrailModel(event.target.value)} disabled={!enabled} />
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={trailHubEvents} onChange={(event) => setTrailHubEvents(event.target.checked)} disabled={!enabled} />
+              Hub events in the same file
+            </label>
+            <label className="field">
+              <span>Prompt override</span>
+              <textarea className="in area" rows={6} value={trailPrompt} onChange={(event) => setTrailPrompt(event.target.value)} disabled={!enabled} />
+              <small>Replaces the built-in prompt for every level; leave empty to use the level defaults.</small>
+            </label>
+            <div className="trail__status">
+              {trailStatus ? (
+                <>
+                  <span>
+                    Today: {trailStatus.today.sessions} sessions · {trailStatus.today.hubLines} hub lines · queue {trailStatus.queue}
+                  </span>
+                  {trailStatus.running && <span>Summarizing {trailStatus.running.sessionId.slice(0, 8)}…</span>}
+                  {trailStatus.lastError && <span className="trail__status-error">{trailStatus.lastError}</span>}
+                </>
+              ) : (
+                <span>Status unavailable</span>
+              )}
+              <button className="act" disabled={!enabled || trailBusy} onClick={() => void summarizeNow()}>
+                Summarize now
+              </button>
+            </div>
+            <div className="actions">
+              <button className="act" disabled={!enabled || trailBusy} onClick={() => void resetTrailPrompt()}>
+                Reset to default
+              </button>
+              <button className="act act--focus" disabled={!enabled || trailBusy || !trailDirty} onClick={() => void saveTrail()}>
                 Save
               </button>
             </div>

@@ -164,6 +164,13 @@ export interface HubEvents {
   onToast?: (card: ToastCard) => void;
   onClaims?: (claims: ClaimRecord[]) => void;
   onDaily?: (event: DailyStreamEvent) => void;
+  onTrail?: (event: TrailStreamEvent) => void;
+}
+
+export interface TrailStreamEvent {
+  date: string;
+  sessionId: string;
+  bullets: string[];
 }
 
 export interface DailyStreamEvent {
@@ -214,6 +221,7 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("toast", (event) => handlers.onToast?.(data<ToastCard>(event)));
   source.addEventListener("claims", (event) => handlers.onClaims?.(data<ClaimRecord[]>(event)));
   source.addEventListener("daily", (event) => handlers.onDaily?.(data<DailyStreamEvent>(event)));
+  source.addEventListener("trail", (event) => handlers.onTrail?.(data<TrailStreamEvent>(event)));
   return () => source.close();
 }
 

@@ -51,3 +51,14 @@ export function carryOverFromYesterday(
     })
     .map((task) => ({ project: null, text: task.text, block: task.block }));
 }
+
+export function mergeTrailIntoSummary(current: string, bullets: string[], max = 3): string {
+  const picked = bullets
+    .map((bullet) => bullet.trim())
+    .filter((bullet) => bullet.length > 0)
+    .slice(0, max)
+    .join("\n");
+  const base = current.trim();
+  if (!picked) return current;
+  return base ? `${base}\n${picked}` : picked;
+}
