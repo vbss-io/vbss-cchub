@@ -54,6 +54,7 @@ import { readSessionName, readTranscript } from "./transcript.js";
 import { isHubRun, scheduleTrail } from "./trail.js";
 import { addClient, broadcast, clientCount } from "./sse.js";
 import { HOOK_KINDS, type HookKind, type HookPayload, type SessionRecord } from "./types.js";
+import { whenBrainWritesIdle } from "./second-brain.js";
 
 const isHookKind = (value: unknown): value is HookKind =>
   typeof value === "string" && (HOOK_KINDS as readonly string[]).includes(value);
@@ -553,7 +554,9 @@ function shutdown(reason: string): void {
   stopTunnel();
   abortAllAsks(reason);
   abortActiveRuns(reason);
-  process.exit(0);
+  const drained = whenBrainWritesIdle();
+  const deadline = new Promise<void>((resolve) => setTimeout(resolve, 2000).unref());
+  void Promise.race([drained, deadline]).then(() => process.exit(0));
 }
 
 process.on("SIGINT", () => shutdown("hub stopped"));
