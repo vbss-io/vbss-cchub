@@ -280,17 +280,81 @@ describe("claude fetch", () => {
 
   it("treats 401 and 403 as backoff too and other failures as a plain error without backoff", async () => {
     writeCredentials(T0 + 10 * 3_600_000);
-    const statuses = [401, 500];
+    const statuses = [401, 500, 500];
     const double = fetchDouble((call) => jsonResponse({}, statuses[call - 1] ?? 200));
-    const at = (offset: number) => ({ now: T0 + offset, fetchImpl: double.impl, credentialsPath, statePath });
+    const sleeps: number[] = [];
+    const at = (offset: number) => ({ now: T0 + offset, fetchImpl: double.impl, credentialsPath, statePath, sleep: async (ms: number) => void sleeps.push(ms) });
     assert.equal(await fetchClaudeLimits(at(0)), null);
     await fetchClaudeLimits(at(2 * MINUTE));
     assert.equal(double.calls.length, 1);
     const later = await fetchClaudeLimits(at(6 * MINUTE));
-    assert.equal(double.calls.length, 2);
+    assert.equal(double.calls.length, 3);
+    assert.deepEqual(sleeps, [20_000]);
     assert.equal(later, null);
     await fetchClaudeLimits(at(7 * MINUTE + 1));
-    assert.equal(double.calls.length, 3);
+    assert.equal(double.calls.length, 4);
+  });
+
+  it("retries a transient failure once after 20 seconds and reports no error when the retry succeeds", async () => {
+    writeCredentials(T0 + 10 * 3_600_000);
+    const sleeps: number[] = [];
+    let calls = 0;
+    const impl = (() => {
+      calls += 1;
+      return calls === 1 ? Promise.reject(new TypeError("fetch failed")) : Promise.resolve(jsonResponse(USAGE_FIXTURE));
+    }) as typeof fetch;
+    const value = await fetchClaudeLimits({ now: T0, fetchImpl: impl, credentialsPath, statePath, sleep: async (ms) => void sleeps.push(ms) });
+    assert.equal(calls, 2);
+    assert.deepEqual(sleeps, [20_000]);
+    assert.equal(value?.source, "api");
+    assert.equal(value?.error, null);
+    assert.equal(value?.fiveHour.utilization, 42.5);
+  });
+
+  it("keeps the last good API value with the time of that value after two transient failures, ignoring the cache file", async () => {
+    writeCredentials(T0 + 10 * 3_600_000);
+    writeState(T0 - 3_600_000, usageFixture(T0 - 3_600_000));
+    let calls = 0;
+    const impl = (() => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve(jsonResponse(USAGE_FIXTURE));
+      if (calls === 2) return Promise.reject(new TypeError("fetch failed"));
+      return Promise.resolve(jsonResponse({}, 503));
+    }) as typeof fetch;
+    const sleep = async () => undefined;
+    const good = await fetchClaudeLimits({ now: T0, fetchImpl: impl, credentialsPath, statePath, sleep });
+    assert.equal(good?.error, null);
+    const failed = await fetchClaudeLimits({ now: T0 + 2 * MINUTE, fetchImpl: impl, credentialsPath, statePath, sleep });
+    assert.equal(calls, 3);
+    const at = new Date(T0);
+    const label = `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
+    assert.equal(failed?.source, "api");
+    assert.equal(failed?.fetchedAt, T0);
+    assert.equal(failed?.fiveHour.utilization, 42.5);
+    assert.equal(failed?.error, `network error, showing the value from ${label}`);
+  });
+
+  it("falls back to the cache file after two transient failures when there is no API value yet", async () => {
+    writeCredentials(T0 + 10 * 3_600_000);
+    writeState(T0 - MINUTE);
+    let calls = 0;
+    const impl = (() => {
+      calls += 1;
+      return Promise.reject(new TypeError("fetch failed"));
+    }) as typeof fetch;
+    const value = await fetchClaudeLimits({ now: T0, fetchImpl: impl, credentialsPath, statePath, sleep: async () => undefined });
+    assert.equal(calls, 2);
+    assert.equal(value?.source, "cache");
+    assert.equal(value?.error, "usage request failed");
+  });
+
+  it("does not retry on 429 and 401", async () => {
+    writeCredentials(T0 + 10 * 3_600_000);
+    const sleeps: number[] = [];
+    const double = fetchDouble(() => jsonResponse({}, 429));
+    await fetchClaudeLimits({ now: T0, fetchImpl: double.impl, credentialsPath, statePath, sleep: async (ms) => void sleeps.push(ms) });
+    assert.equal(double.calls.length, 1);
+    assert.deepEqual(sleeps, []);
   });
 
   it("never calls faster than 60 seconds apart", async () => {
