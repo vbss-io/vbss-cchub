@@ -22,36 +22,45 @@ import {
   type LimitsPayload,
 } from "../src/limits.js";
 import { onBroadcast } from "../src/sse.js";
-import { makeSandbox, serverDir, startServer, waitFor, type RunningServer, type Sandbox } from "./helpers.js";
+import { fixtures, makeSandbox, serverDir, startServer, waitFor, type RunningServer, type Sandbox } from "./helpers.js";
 
 const TOKEN = "sk-ant-oat01-TESTTOKEN-do-not-leak-0123456789";
 const MINUTE = 60_000;
 const T0 = Date.parse("2026-09-30T12:00:00.000Z");
 
-const USAGE_FIXTURE = {
-  five_hour: { utilization: 42.5, resets_at: "2026-09-30T15:00:00.000000+00:00", limit_dollars: null },
-  seven_day: { utilization: 71, resets_at: "2026-10-03T09:00:00.000000+00:00" },
-  seven_day_opus: { utilization: 33, resets_at: "2026-10-03T09:00:00+00:00" },
-  seven_day_sonnet: null,
-  seven_day_oauth_apps: null,
-  seven_day_cowork: null,
-  seven_day_omelette: null,
-  extra_usage: { is_enabled: true, monthly_limit: 5000, used_credits: 1000, utilization: 20 },
-  limits: [
-    { kind: "session", group: "session", percent: 42.5, severity: "normal", resets_at: "2026-09-30T15:00:00+00:00", scope: null, is_active: true },
-    { kind: "weekly_all", group: "weekly", percent: 71, severity: "normal", resets_at: "2026-10-03T09:00:00+00:00", scope: null, is_active: true },
-    { kind: "weekly_scoped", group: "weekly", percent: 33, severity: "normal", resets_at: "2026-10-03T09:00:00+00:00", scope: { model: { id: null, display_name: "opus" } }, is_active: false },
-    { kind: "weekly_scoped", group: "weekly", percent: 57, severity: "normal", resets_at: "2026-10-03T09:00:00+00:00", scope: { model: { id: null, display_name: "Fable" } }, is_active: false },
-    { kind: "weekly_scoped", group: "weekly", percent: null, severity: "normal", resets_at: null, scope: { model: { id: null, display_name: "Ghost" } }, is_active: false },
-  ],
-  spend: { used: { amount_minor: 0 } },
-  seven_day_breakdown: { rows: [] },
-};
+const FIVE_HOURS_MS = 3 * 3_600_000;
+const SEVEN_DAYS_MS = 3 * 86_400_000;
 
-function settingsWith(overrides: { limits?: boolean; claude?: boolean; codex?: boolean; refreshMinutes?: number }): DelegationSettings {
+function usageFixture(base: number) {
+  const session = new Date(base + FIVE_HOURS_MS).toISOString();
+  const week = new Date(base + SEVEN_DAYS_MS).toISOString();
+  return {
+    five_hour: { utilization: 42.5, resets_at: session, limit_dollars: null },
+    seven_day: { utilization: 71, resets_at: week },
+    seven_day_opus: { utilization: 33, resets_at: week },
+    seven_day_sonnet: null,
+    seven_day_oauth_apps: null,
+    seven_day_cowork: null,
+    seven_day_omelette: null,
+    extra_usage: { is_enabled: true, monthly_limit: 5000, used_credits: 1000, utilization: 20 },
+    limits: [
+      { kind: "session", group: "session", percent: 42.5, severity: "normal", resets_at: session, scope: null, is_active: true },
+      { kind: "weekly_all", group: "weekly", percent: 71, severity: "normal", resets_at: week, scope: null, is_active: true },
+      { kind: "weekly_scoped", group: "weekly", percent: 33, severity: "normal", resets_at: week, scope: { model: { id: null, display_name: "opus" } }, is_active: false },
+      { kind: "weekly_scoped", group: "weekly", percent: 57, severity: "normal", resets_at: week, scope: { model: { id: null, display_name: "Fable" } }, is_active: false },
+      { kind: "weekly_scoped", group: "weekly", percent: null, severity: "normal", resets_at: null, scope: { model: { id: null, display_name: "Ghost" } }, is_active: false },
+    ],
+    spend: { used: { amount_minor: 0 } },
+    seven_day_breakdown: { rows: [] },
+  };
+}
+
+const USAGE_FIXTURE = usageFixture(T0);
+
+function settingsWith(overrides: { limits?: boolean; claude?: boolean; codex?: boolean; codexLive?: boolean; refreshMinutes?: number }): DelegationSettings {
   return {
     features: { daily: false, trail: false, usage: false, limits: overrides.limits ?? true },
-    limits: { claude: overrides.claude ?? true, codex: overrides.codex ?? true, refreshMinutes: overrides.refreshMinutes ?? 5 },
+    limits: { claude: overrides.claude ?? true, codex: overrides.codex ?? true, codexLive: overrides.codexLive ?? false, refreshMinutes: overrides.refreshMinutes ?? 5 },
   } as unknown as DelegationSettings;
 }
 
@@ -141,18 +150,17 @@ beforeEach(() => {
 
 afterEach(() => {
   stopLimitsPolling();
-  delete process.env.HUB_CODEX_LIVE_LIMITS;
 });
 
 describe("claude parsing", () => {
   it("converts utilization and resets_at and merges models from seven_day_* and limits[]", () => {
     const parsed = parseClaudeUsage(USAGE_FIXTURE);
     assert.ok(parsed);
-    assert.deepEqual(parsed.fiveHour, { utilization: 42.5, resetsAt: Date.parse("2026-09-30T15:00:00.000Z") });
-    assert.deepEqual(parsed.sevenDay, { utilization: 71, resetsAt: Date.parse("2026-10-03T09:00:00.000Z") });
+    assert.deepEqual(parsed.fiveHour, { utilization: 42.5, resetsAt: T0 + FIVE_HOURS_MS, reset: false });
+    assert.deepEqual(parsed.sevenDay, { utilization: 71, resetsAt: T0 + SEVEN_DAYS_MS, reset: false });
     assert.deepEqual(parsed.models, [
-      { name: "Opus", utilization: 33, resetsAt: Date.parse("2026-10-03T09:00:00.000Z") },
-      { name: "Fable", utilization: 57, resetsAt: Date.parse("2026-10-03T09:00:00.000Z") },
+      { name: "Opus", utilization: 33, resetsAt: T0 + SEVEN_DAYS_MS, reset: false },
+      { name: "Fable", utilization: 57, resetsAt: T0 + SEVEN_DAYS_MS, reset: false },
     ]);
     assert.deepEqual(parsed.extra, { enabled: true, utilization: 20 });
   });
@@ -163,8 +171,8 @@ describe("claude parsing", () => {
     assert.equal(parseClaudeUsage({}), null);
     const parsed = parseClaudeUsage({ five_hour: { utilization: 130, resets_at: "garbage" }, seven_day: null, extra_usage: null });
     assert.ok(parsed);
-    assert.deepEqual(parsed.fiveHour, { utilization: 100, resetsAt: null });
-    assert.deepEqual(parsed.sevenDay, { utilization: 0, resetsAt: null });
+    assert.deepEqual(parsed.fiveHour, { utilization: 100, resetsAt: null, reset: false });
+    assert.deepEqual(parsed.sevenDay, { utilization: 0, resetsAt: null, reset: false });
     assert.deepEqual(parsed.models, []);
     assert.equal(parsed.extra, null);
   });
@@ -236,7 +244,7 @@ describe("claude fetch", () => {
     const value = await fetchClaudeLimits({ now: T0, fetchImpl: double.impl, credentialsPath, statePath });
     assert.equal(double.calls.length, 0);
     assert.equal(value?.source, "cache");
-    assert.match(value?.error ?? "", /credentials/);
+    assert.equal(value?.error, "no Claude Code login found");
   });
 
   it("backs off 5 then 10 minutes on 429 without retrying, keeps the last value and recovers", async () => {
@@ -331,41 +339,28 @@ describe("codex rollout", () => {
 });
 
 describe("codex live", () => {
-  it("does nothing unless HUB_CODEX_LIVE_LIMITS=1", async () => {
-    const { readCodexLimitsLive } = await import("../src/limits.js");
-    delete process.env.HUB_CODEX_LIVE_LIMITS;
-    assert.equal(await readCodexLimitsLive(), null);
-  });
+  const fakeCodex = join(fixtures, "fake-codex.mjs");
 
-  it("talks initialize, initialized and account/rateLimits/read only, then kills the child", async () => {
-    const script = join(tmp, "fake-app-server.mjs");
-    const log = join(tmp, "app-server-methods.txt");
-    writeFileSync(
-      script,
-      `import { appendFileSync } from "node:fs";
-import { createInterface } from "node:readline";
-const log = process.env.FAKE_LOG;
-createInterface({ input: process.stdin }).on("line", (line) => {
-  const message = JSON.parse(line);
-  appendFileSync(log, message.method + "\\n");
-  if (message.method === "initialize") process.stdout.write(JSON.stringify({ id: message.id, result: { userAgent: "fake" } }) + "\\n");
-  if (message.method === "account/rateLimits/read") {
-    process.stdout.write(JSON.stringify({ id: message.id, result: { rateLimits: { limitId: "codex", limitName: null, primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: 1900000000 }, secondary: { usedPercent: 45, windowDurationMins: 10080, resetsAt: 1900500000 }, credits: null, planType: "pro" } } }) + "\\n");
+  interface LiveRun {
+    result: { source: string; primary: unknown; secondary: unknown; planType: string | null } | null;
+    methods: string[];
+    elapsedMs: number;
   }
-});
-`,
-    );
-    const runner = `import(${JSON.stringify(pathToFileURL(join(serverDir, "src", "limits.ts")).href)}).then(async (m) => { console.log(JSON.stringify(await m.readCodexLimitsLive())); process.exit(0); });`;
+
+  async function runLive(mode: string, timeoutMs: number): Promise<LiveRun> {
+    const capture = join(tmp, `app-server-${mode || "ok"}.txt`);
+    rmSync(capture, { force: true });
+    const runner = `import(${JSON.stringify(pathToFileURL(join(serverDir, "src", "limits.ts")).href)}).then(async (m) => { const at = Date.now(); const value = await m.readCodexLimitsLive(${timeoutMs}); console.log(JSON.stringify({ value, elapsed: Date.now() - at })); process.exit(0); });`;
     const output = await new Promise<string>((resolveOutput, reject) => {
       const child = spawn(process.execPath, ["--import", "tsx", "-e", runner], {
         cwd: serverDir,
         env: {
           ...process.env,
-          HUB_CODEX_LIVE_LIMITS: "1",
           HUB_CODEX_BIN: process.execPath,
-          HUB_CODEX_ARGS_PREFIX: JSON.stringify([script]),
+          HUB_CODEX_ARGS_PREFIX: JSON.stringify([fakeCodex]),
           HUB_DATA_DIR: join(tmp, "live-data"),
-          FAKE_LOG: log,
+          FAKE_CODEX_APP_MODE: mode,
+          FAKE_CODEX_APP_CAPTURE: capture,
         },
         stdio: ["ignore", "pipe", "inherit"],
       });
@@ -374,13 +369,35 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       child.on("error", reject);
       child.on("close", () => resolveOutput(out));
     });
-    const live = JSON.parse(output.trim().split("\n").pop() ?? "null") as { source: string; primary: unknown; secondary: unknown; planType: string } | null;
-    assert.ok(live);
-    assert.equal(live.source, "live");
-    assert.deepEqual(live.primary, { usedPercent: 12, resetsAt: 1_900_000_000_000, reset: false });
-    assert.deepEqual(live.secondary, { usedPercent: 45, resetsAt: 1_900_500_000_000, reset: false });
-    assert.equal(live.planType, "pro");
-    assert.deepEqual(readFileSync(log, "utf8").trim().split("\n"), ["initialize", "initialized", "account/rateLimits/read"]);
+    const parsed = JSON.parse(output.trim().split("\n").pop() ?? "null") as { value: LiveRun["result"]; elapsed: number };
+    let methods: string[] = [];
+    try {
+      methods = readFileSync(capture, "utf8").trim().split("\n").filter((line) => line.length > 0);
+    } catch {
+      methods = [];
+    }
+    return { result: parsed.value, methods, elapsedMs: parsed.elapsed };
+  }
+
+  it("asks the fake codex for initialize, initialized and account/rateLimits/read only and maps the snapshot", async () => {
+    const run = await runLive("", 8000);
+    assert.ok(run.result);
+    assert.equal(run.result.source, "live");
+    assert.deepEqual(run.result.primary, { usedPercent: 12, resetsAt: 1_900_000_000_000, reset: false });
+    assert.deepEqual(run.result.secondary, { usedPercent: 45, resetsAt: 1_900_500_000_000, reset: false });
+    assert.equal(run.result.planType, "pro");
+    assert.deepEqual(run.methods, ["initialize", "initialized", "account/rateLimits/read"]);
+  });
+
+  it("returns null when the child dies, answers with an error or never answers", async () => {
+    assert.equal((await runLive("fail", 8000)).result, null);
+    const errored = await runLive("error", 8000);
+    assert.equal(errored.result, null);
+    assert.deepEqual(errored.methods, ["initialize", "initialized", "account/rateLimits/read"]);
+    const hung = await runLive("hang", 600);
+    assert.equal(hung.result, null);
+    assert.ok(hung.elapsedMs >= 500 && hung.elapsedMs < 5000);
+    assert.deepEqual(hung.methods, ["initialize"]);
   });
 });
 
@@ -435,11 +452,9 @@ describe("refresh and snapshot", () => {
     assert.equal(failed.claude?.fiveHour.utilization, 42.5);
   });
 
-  it("uses the live source when opted in and falls back to the rollout snapshot with an error otherwise", async () => {
+  it("prefers the live source when codexLive is on and falls back to the rollout with an error when it fails", async () => {
     const dir = dayDir(sessionsDir, T0);
     writeFileSync(join(dir, "rollout-a.jsonl"), tokenCountLine(T0 - MINUTE, { used: 10, resetsAtSec: (T0 + 3_600_000) / 1000 }, { used: 20, resetsAtSec: (T0 + 86_400_000) / 1000 }) + "\n");
-    const settings = settingsWith({ claude: false });
-    process.env.HUB_CODEX_LIVE_LIMITS = "1";
     const live = {
       source: "live" as const,
       fetchedAt: T0,
@@ -449,13 +464,116 @@ describe("refresh and snapshot", () => {
       planType: "pro",
       error: null,
     };
-    const ok = await refreshLimits(settings, { now: T0, codexSessionsDir: sessionsDir, codexLive: () => Promise.resolve(live) });
+    let liveCalls = 0;
+    const answerLive = (): Promise<typeof live> => {
+      liveCalls += 1;
+      return Promise.resolve(live);
+    };
+    const settings = settingsWith({ claude: false, codexLive: true });
+    const ok = await refreshLimits(settings, { now: T0, codexSessionsDir: sessionsDir, codexLive: answerLive });
     assert.equal(ok.codex?.source, "live");
     assert.equal(ok.codex?.primary.usedPercent, 50);
-    resetLimitsState();
-    const failed = await refreshLimits(settings, { now: T0, codexSessionsDir: sessionsDir, codexLive: () => Promise.reject(new Error("boom")) });
+    assert.equal(ok.codex?.error, null);
+    await refreshLimits(settings, { now: T0 + MINUTE, codexSessionsDir: sessionsDir, codexLive: answerLive });
+    assert.equal(liveCalls, 2);
+
+    const failed = await refreshLimits(settings, { now: T0 + 2 * MINUTE, codexSessionsDir: sessionsDir, codexLive: () => Promise.reject(new Error("boom")) });
     assert.equal(failed.codex?.source, "rollout");
-    assert.match(failed.codex?.error ?? "", /live read failed/);
+    assert.equal(failed.codex?.primary.usedPercent, 10);
+    assert.equal(failed.codex?.error, "codex live limits unavailable");
+    assert.equal(failed.codex?.stale, true);
+
+    const nullLive = await refreshLimits(settings, { now: T0 + 3 * MINUTE, codexSessionsDir: sessionsDir, codexLive: () => Promise.resolve(null) });
+    assert.equal(nullLive.codex?.source, "rollout");
+    assert.equal(nullLive.codex?.error, "codex live limits unavailable");
+
+    resetLimitsState();
+    liveCalls = 0;
+    const off = await refreshLimits(settingsWith({ claude: false }), { now: T0, codexSessionsDir: sessionsDir, codexLive: answerLive });
+    assert.equal(liveCalls, 0);
+    assert.equal(off.codex?.source, "rollout");
+    assert.equal(off.codex?.error, null);
+  });
+
+  it("reports an enabled provider without any data as source none instead of null", async () => {
+    const double = fetchDouble(() => jsonResponse(USAGE_FIXTURE));
+    const both = await refreshLimits(settingsWith({}), { now: T0, fetchImpl: double.impl, credentialsPath, statePath, codexSessionsDir: sessionsDir });
+    assert.equal(double.calls.length, 0);
+    assert.equal(both.updatedAt, null);
+    assert.deepEqual(both.claude, {
+      source: "none",
+      fetchedAt: null,
+      stale: true,
+      fiveHour: { utilization: 0, resetsAt: null, reset: false },
+      sevenDay: { utilization: 0, resetsAt: null, reset: false },
+      models: [],
+      extra: null,
+      error: "no Claude Code login found",
+    });
+    assert.deepEqual(both.codex, {
+      source: "none",
+      fetchedAt: null,
+      stale: true,
+      primary: { usedPercent: 0, resetsAt: null, reset: false },
+      secondary: { usedPercent: 0, resetsAt: null, reset: false },
+      planType: null,
+      error: "no Codex session data found",
+    });
+    assert.equal(limitsSnapshot(settingsWith({ claude: false }), T0).claude, null);
+    assert.equal(limitsSnapshot(settingsWith({ codex: false }), T0).codex, null);
+
+    const liveDown = await refreshLimits(settingsWith({ claude: false, codexLive: true }), { now: T0, codexSessionsDir: sessionsDir, codexLive: () => Promise.resolve(null) });
+    assert.equal(liveDown.codex?.source, "none");
+    assert.equal(liveDown.codex?.error, "codex live limits unavailable");
+  });
+
+  it("reports windows of the cached Claude value whose resets_at already passed as reset", async () => {
+    writeState(T0 - 10 * 86_400_000, usageFixture(T0 - 10 * 86_400_000));
+    const past = await refreshLimits(settingsWith({ codex: false }), { now: T0, credentialsPath, statePath });
+    assert.equal(past.claude?.source, "cache");
+    assert.equal(past.claude?.fetchedAt, T0 - 10 * 86_400_000);
+    assert.deepEqual(past.claude?.fiveHour, { utilization: 0, resetsAt: null, reset: true });
+    assert.deepEqual(past.claude?.sevenDay, { utilization: 0, resetsAt: null, reset: true });
+    assert.deepEqual(past.claude?.models.map((model) => [model.name, model.utilization, model.resetsAt, model.reset]), [
+      ["Opus", 0, null, true],
+      ["Fable", 0, null, true],
+    ]);
+    assert.deepEqual(past.claude?.extra, { enabled: true, utilization: 20 });
+
+    resetLimitsState();
+    writeState(T0 - 4 * 3_600_000, usageFixture(T0 - 4 * 3_600_000));
+    const passed = await refreshLimits(settingsWith({ codex: false }), { now: T0, credentialsPath, statePath });
+    assert.deepEqual(passed.claude?.fiveHour, { utilization: 0, resetsAt: null, reset: true });
+    assert.deepEqual(passed.claude?.sevenDay, { utilization: 71, resetsAt: T0 - 4 * 3_600_000 + SEVEN_DAYS_MS, reset: false });
+
+    resetLimitsState();
+    writeState(T0 - 3_600_000, usageFixture(T0 - 3_600_000));
+    const running = await refreshLimits(settingsWith({ codex: false }), { now: T0, credentialsPath, statePath });
+    assert.deepEqual(running.claude?.fiveHour, { utilization: 42.5, resetsAt: T0 - 3_600_000 + FIVE_HOURS_MS, reset: false });
+  });
+
+  it("sets updatedAt to the newest successful fetchedAt and a failed provider never bumps it", async () => {
+    writeCredentials(T0 + 10 * 3_600_000);
+    const dir = dayDir(sessionsDir, T0);
+    writeFileSync(join(dir, "rollout-a.jsonl"), tokenCountLine(T0 - 30 * MINUTE, { used: 10, resetsAtSec: (T0 + 3_600_000) / 1000 }, { used: 20, resetsAtSec: (T0 + 86_400_000) / 1000 }) + "\n");
+    const double = fetchDouble((call) => (call === 1 ? jsonResponse(USAGE_FIXTURE) : jsonResponse({}, 429)));
+    const settings = settingsWith({});
+    const first = await refreshLimits(settings, { now: T0, fetchImpl: double.impl, credentialsPath, statePath, codexSessionsDir: sessionsDir });
+    assert.equal(first.claude?.fetchedAt, T0);
+    assert.equal(first.codex?.fetchedAt, T0 - 30 * MINUTE);
+    assert.equal(first.updatedAt, T0);
+
+    const codexOnly = await refreshLimits(settingsWith({ claude: false }), { now: T0 + 5 * MINUTE, codexSessionsDir: sessionsDir });
+    assert.equal(codexOnly.updatedAt, T0 - 30 * MINUTE);
+
+    const failedClaude = await refreshLimits(settings, { now: T0 + 5 * MINUTE, fetchImpl: double.impl, credentialsPath, statePath, codexSessionsDir: sessionsDir });
+    assert.equal(failedClaude.claude?.error, "usage API returned 429");
+    assert.equal(failedClaude.claude?.fetchedAt, T0);
+    assert.equal(failedClaude.updatedAt, T0);
+
+    writeFileSync(join(dir, "rollout-b.jsonl"), tokenCountLine(T0 + 4 * MINUTE, { used: 11, resetsAtSec: (T0 + 3_600_000) / 1000 }, { used: 21, resetsAtSec: (T0 + 86_400_000) / 1000 }) + "\n");
+    const bumped = await refreshLimits(settings, { now: T0 + 6 * MINUTE, fetchImpl: double.impl, credentialsPath, statePath, codexSessionsDir: sessionsDir });
+    assert.equal(bumped.updatedAt, T0 + 4 * MINUTE);
   });
 });
 
@@ -501,6 +619,8 @@ describe("limits routes", () => {
   let usagePort = 0;
   const requests: SeenRequest[] = [];
   let hubLog = "";
+  const routeBase = Date.now();
+  let appCapture = "";
 
   const http = async (method: string, path: string, body?: unknown): Promise<{ status: number; text: string; json: unknown }> => {
     const res = await fetch(`${hub.base}${path}`, {
@@ -523,7 +643,7 @@ describe("limits routes", () => {
     usageServer = createServer((req, res) => {
       requests.push({ url: req.url, headers: req.headers });
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(USAGE_FIXTURE));
+      res.end(JSON.stringify(usageFixture(routeBase)));
     });
     await new Promise<void>((resolveListen) => usageServer.listen(0, "127.0.0.1", resolveListen));
     const address = usageServer.address();
@@ -532,13 +652,15 @@ describe("limits routes", () => {
     const routeCredentials = join(box.tmp, "route-credentials.json");
     const routeState = join(box.tmp, "route-state.json");
     writeFileSync(routeCredentials, JSON.stringify({ claudeAiOauth: { accessToken: TOKEN, refreshToken: "REFRESH-SECRET", expiresAt: Date.now() + 10 * 3_600_000 } }));
-    writeFileSync(routeState, JSON.stringify({ accountUuid: "ACCOUNT-UUID-SECRET", cachedUsageUtilization: { fetchedAtMs: 1, accountUuid: "ACCOUNT-UUID-SECRET", utilization: USAGE_FIXTURE } }));
+    writeFileSync(routeState, JSON.stringify({ accountUuid: "ACCOUNT-UUID-SECRET", cachedUsageUtilization: { fetchedAtMs: 1, accountUuid: "ACCOUNT-UUID-SECRET", utilization: usageFixture(routeBase) } }));
     const now = Date.now();
     const dir = dayDir(join(box.codexHome, "sessions"), now);
     writeFileSync(join(dir, "rollout-limits.jsonl"), tokenCountLine(now - MINUTE, { used: 37, resetsAtSec: Math.floor((now + 3_600_000) / 1000) }, { used: 9, resetsAtSec: Math.floor((now + 86_400_000) / 1000) }) + "\n");
 
+    appCapture = join(box.tmp, "app-server-methods.txt");
     hub = await startServer(box, {
       HUB_DELEGATION: "1",
+      FAKE_CODEX_APP_CAPTURE: appCapture,
       HUB_CLAUDE_CREDENTIALS: routeCredentials,
       HUB_CLAUDE_STATE: routeState,
       HUB_CLAUDE_USAGE_URL: `http://127.0.0.1:${usagePort}/api/oauth/usage`,
@@ -590,7 +712,7 @@ describe("limits routes", () => {
     assert.equal(body.claude?.source, "api");
     assert.equal(body.claude?.stale, false);
     assert.equal(body.claude?.error, null);
-    assert.deepEqual(body.claude?.fiveHour, { utilization: 42.5, resetsAt: Date.parse("2026-09-30T15:00:00.000Z") });
+    assert.deepEqual(body.claude?.fiveHour, { utilization: 42.5, resetsAt: routeBase + FIVE_HOURS_MS, reset: false });
     assert.deepEqual(body.claude?.models.map((model) => model.name), ["Opus", "Fable"]);
     assert.deepEqual(body.claude?.extra, { enabled: true, utilization: 20 });
     assert.equal(body.codex?.source, "rollout");
@@ -623,11 +745,28 @@ describe("limits routes", () => {
     }
   });
 
+  it("prefers the live codex snapshot when limits.codexLive is on and only speaks the two allowed JSON-RPC methods", async () => {
+    const saved = await http("PUT", "/delegation/settings", { limits: { codexLive: true } });
+    assert.equal(saved.status, 200);
+    assert.equal((saved.json as { limits: { codexLive: boolean } }).limits.codexLive, true);
+    const get = (await http("GET", "/delegation/limits")).json as LimitsPayload;
+    assert.equal(get.codex?.source, "live");
+    assert.equal(get.codex?.error, null);
+    assert.deepEqual(get.codex?.primary, { usedPercent: 12, resetsAt: 1_900_000_000_000, reset: false });
+    assert.deepEqual(get.codex?.secondary, { usedPercent: 45, resetsAt: 1_900_500_000_000, reset: false });
+    assert.equal(get.codex?.planType, "pro");
+    assert.equal(get.updatedAt, Math.max(get.claude?.fetchedAt ?? 0, get.codex?.fetchedAt ?? 0));
+    const methods = readFileSync(appCapture, "utf8").trim().split("\n");
+    assert.deepEqual(methods.slice(0, 3), ["initialize", "initialized", "account/rateLimits/read"]);
+    for (const method of methods) assert.ok(["initialize", "initialized", "account/rateLimits/read"].includes(method));
+    assert.equal(requests.length, 1);
+  });
+
   it("nulls a provider disabled in settings and goes back to nulls when the feature is turned off", async () => {
     await http("PUT", "/delegation/settings", { limits: { claude: false } });
     const partial = (await http("GET", "/delegation/limits")).json as LimitsPayload;
     assert.equal(partial.claude, null);
-    assert.equal(partial.codex?.source, "rollout");
+    assert.equal(partial.codex?.source, "live");
     await http("PUT", "/delegation/settings", { features: { limits: false } });
     assert.deepEqual((await http("GET", "/delegation/limits")).json, { updatedAt: null, claude: null, codex: null });
     assert.equal(requests.length, 1);

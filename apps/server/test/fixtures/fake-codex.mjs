@@ -1,7 +1,42 @@
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
 
 const argv = process.argv.slice(2);
+
+function serveAppServer() {
+  const mode = process.env.FAKE_CODEX_APP_MODE ?? "";
+  const capture = process.env.FAKE_CODEX_APP_CAPTURE;
+  if (mode === "fail") process.exit(1);
+  const reply = (message) => process.stdout.write(`${JSON.stringify(message)}
+`);
+  createInterface({ input: process.stdin }).on("line", (line) => {
+    const message = JSON.parse(line);
+    if (capture) appendFileSync(capture, `${message.method}
+`);
+    if (mode === "hang") return;
+    if (message.method === "initialize") reply({ id: message.id, result: { userAgent: "fake-codex" } });
+    if (message.method !== "account/rateLimits/read") return;
+    if (mode === "error") {
+      reply({ id: message.id, error: { code: -32000, message: "not signed in" } });
+      return;
+    }
+    reply({
+      id: message.id,
+      result: {
+        rateLimits: {
+          limitId: "codex",
+          limitName: null,
+          primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: 1900000000 },
+          secondary: { usedPercent: 45, windowDurationMins: 10080, resetsAt: 1900500000 },
+          credits: null,
+          planType: "pro",
+        },
+      },
+    });
+  });
+}
+
 
 async function readStdin() {
   const chunks = [];
@@ -43,4 +78,5 @@ async function main() {
   emit({ type: "turn.completed", usage: { input_tokens: 10, cached_input_tokens: 0, output_tokens: 5 } });
 }
 
-main();
+if (argv[0] === "app-server") serveAppServer();
+else main();

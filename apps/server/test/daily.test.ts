@@ -48,7 +48,7 @@ function fixtureSettings(root: string, overrides: Partial<DelegationSettings> = 
     daily: defaultDaily,
     trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true },
     widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions", autostart: true },
-    limits: { claude: false, codex: false, refreshMinutes: 5 },
+    limits: { claude: false, codex: false, codexLive: false, refreshMinutes: 5 },
     usage: { days: 7 },
     ...overrides,
   };
