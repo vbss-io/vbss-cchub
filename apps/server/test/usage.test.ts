@@ -7,7 +7,10 @@ import {
   aggregateUsage,
   collectUsage,
   percentile,
+  rescanUsage,
   resetUsageCache,
+  setUsageFileHook,
+  usageGeneration,
   usageScanStats,
   type UsageAggregate,
   type UsageRecord,
@@ -285,6 +288,58 @@ describe("usage parsing", () => {
     assert.equal(usageScanStats().parses >= 1, true);
   });
 
+  it("makes a rescan wait for the running scan, then rebuilds a complete cache under a new generation", async () => {
+    const dirs = freshDirs();
+    const now = Date.now();
+    for (const [name, fresh] of [["a", 1], ["b", 2], ["c", 3]] as const) {
+      write(join(dirs.claudeDir, "proj-x", `${name}.jsonl`), `${claudeLine({ id: name, at: now - 1000, sessionId: name, usage: { input: fresh, output: 1 } })}
+`);
+    }
+    let reachedSecond: () => void = () => undefined;
+    const reached = new Promise<void>((resolve) => {
+      reachedSecond = resolve;
+    });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let seen = 0;
+    let armed = true;
+    setUsageFileHook(async () => {
+      seen += 1;
+      if (armed && seen === 2) {
+        armed = false;
+        reachedSecond();
+        await gate;
+      }
+    });
+    try {
+      const running = collectUsage({ days: 1, now, ...dirs });
+      await reached;
+      const rescan = rescanUsage({ days: 1, now, ...dirs });
+      assert.equal(collectUsage({ days: 1, now, ...dirs }), rescan);
+      const state = await Promise.race([rescan.then(() => "done"), new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 100))]);
+      assert.equal(state, "waiting");
+      release();
+      const [interrupted, clean] = await Promise.all([running, rescan]);
+      assert.equal(interrupted.records.length, 3);
+      assert.equal(interrupted.parsed, 3);
+      assert.equal(clean.records.length, 3);
+      assert.equal(clean.parsed, 3);
+      assert.equal(clean.generation, interrupted.generation + 1);
+      assert.equal(usageGeneration(), clean.generation);
+      assert.deepEqual(aggregateUsage(clean.records, { days: 1, now }).totals, aggregateUsage(interrupted.records, { days: 1, now }).totals);
+      assert.equal(aggregateUsage(clean.records, { days: 1, now }).totals.fresh, 6);
+      assert.equal(usageScanStats().cachedFiles, 3);
+      const again = await collectUsage({ days: 1, now, ...dirs });
+      assert.equal(again.parsed, 0);
+      assert.equal(again.records.length, 3);
+    } finally {
+      setUsageFileHook(null);
+      release();
+    }
+  });
+
   it("returns an empty scan when the source folders do not exist", async () => {
     const scan = await collectUsage({ days: 7, now: Date.now(), claudeDir: join(tmp, "missing-a"), codexDir: join(tmp, "missing-b") });
     assert.deepEqual(scan.records, []);
@@ -476,6 +531,7 @@ describe("usage routes", () => {
     const rescan = await call("POST", "/delegation/usage/rescan");
     assert.equal(rescan.status, 200);
     assert.ok(Number(rescan.json.files) >= 4);
+    assert.equal(typeof rescan.json.elapsedMs, "number");
     const after = (await call("GET", "/delegation/usage?days=7")).json as unknown as UsageAggregate;
     assert.equal(after.byProvider.claude.messages, 4);
 
@@ -490,5 +546,19 @@ describe("usage routes", () => {
     }
     controller.abort();
     assert.match(received, /event: usage\s+data: \{"at":\d+\}/);
+  });
+
+  it("never serves an undercounted response after a rescan raced with a running scan", async () => {
+    const baseline = (await call("GET", "/delegation/usage?days=7&fresh=1")).json as unknown as UsageAggregate;
+    write(join(claudeDir, "proj-z", "sess-d.jsonl"), `${claudeLine({ id: "d1", at: now - 800, sessionId: "sess-d", usage: { input: 4, output: 1 } })}
+`);
+    const [racing, rescan] = await Promise.all([call("GET", "/delegation/usage?days=7&fresh=1"), call("POST", "/delegation/usage/rescan")]);
+    assert.equal(racing.status, 200);
+    assert.equal(rescan.status, 200);
+    const settled = (await call("GET", "/delegation/usage?days=7")).json as unknown as UsageAggregate;
+    assert.equal(settled.byProvider.claude.messages, baseline.byProvider.claude.messages + 1);
+    assert.equal(settled.byProvider.codex.messages, baseline.byProvider.codex.messages);
+    const summary = (await call("GET", "/delegation/usage/summary")).json as unknown as { providers: { claude: { week: { read: number } } | null } };
+    assert.equal(summary.providers.claude?.week.read, settled.byProvider.claude.read);
   });
 });
