@@ -1,4 +1,5 @@
 import { hubBase } from "./api";
+import { usageResponseState } from "./usage-format";
 
 const base = `${hubBase}/delegation`;
 
@@ -300,7 +301,7 @@ export interface ProviderUsage {
 
 export interface UsageSummary {
   days: number;
-  providers: { claude: ProviderUsage | null; codex: ProviderUsage | null };
+  providers: { claude: ProviderUsage | null; codex: ProviderUsage | null } | null;
 }
 
 async function optionalJson<T>(path: string): Promise<T | null> {
@@ -317,7 +318,45 @@ export const fetchLimits = (): Promise<LimitsSnapshot | null> => optionalJson("/
 
 export const refreshLimits = (): Promise<LimitsSnapshot> => call("POST", "/limits/refresh");
 
-export const fetchUsageSummary = (): Promise<UsageSummary | null> => optionalJson("/usage/summary");
+export interface UsageScanning {
+  scanning: true;
+  startedAt: number | null;
+  files: number | null;
+}
+
+export const isScanning = (value: unknown): value is UsageScanning =>
+  typeof value === "object" && value !== null && (value as { scanning?: unknown }).scanning === true;
+
+const numberOrNull = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
+
+const scanningOf = (body: unknown): UsageScanning => {
+  const record = (typeof body === "object" && body !== null ? body : {}) as Record<string, unknown>;
+  return { scanning: true, startedAt: numberOrNull(record.startedAt), files: numberOrNull(record.files) };
+};
+
+async function usageJson(path: string): Promise<{ state: "scanning" | "ready" | "unavailable"; body: unknown; status: number }> {
+  const res = await fetch(`${base}${path}`);
+  const text = await res.text();
+  let body: unknown = null;
+  try {
+    body = text.length > 0 ? JSON.parse(text) : null;
+  } catch {
+    body = null;
+  }
+  return { state: usageResponseState(res.status, body), body, status: res.status };
+}
+
+export async function fetchUsageSummary(): Promise<UsageSummary | UsageScanning | null> {
+  try {
+    const { state, body } = await usageJson("/usage/summary");
+    if (state === "scanning") return scanningOf(body);
+    if (state !== "ready") return null;
+    const summary = body as UsageSummary;
+    return summary.providers == null ? scanningOf(null) : summary;
+  } catch {
+    return null;
+  }
+}
 
 export interface UsageTotals {
   read: number;
@@ -385,7 +424,15 @@ export interface UsageReport {
   costs: null;
 }
 
-export const fetchUsage = (days: number): Promise<UsageReport> => call("GET", `/usage?days=${days}`);
+export async function fetchUsage(days: number): Promise<UsageReport | UsageScanning> {
+  const { state, body, status } = await usageJson(`/usage?days=${days}`);
+  if (state === "scanning") return scanningOf(body);
+  if (state === "unavailable") {
+    const message = (body as { error?: string } | null)?.error ?? `request failed (${status})`;
+    throw new Error(message);
+  }
+  return body as UsageReport;
+}
 
 export const rescanUsage = (): Promise<{ files: number }> => call("POST", "/usage/rescan");
 

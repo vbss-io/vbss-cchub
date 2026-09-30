@@ -4082,6 +4082,13 @@ h6.md__h {
   min-width: 0;
 }
 
+.usage__scanning {
+  padding: 8px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
 .usage__head {
   display: flex;
   flex-wrap: wrap;

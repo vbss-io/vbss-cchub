@@ -80,3 +80,14 @@ export function shortProject(project: string, cwd: string | null = null): string
   }
   return project;
 }
+
+export type UsageResponseState = "scanning" | "ready" | "unavailable";
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+export function usageResponseState(status: number, body: unknown): UsageResponseState {
+  if (status === 202) return "scanning";
+  if (status < 200 || status >= 300) return "unavailable";
+  if (isRecord(body) && body.scanning === true) return "scanning";
+  return isRecord(body) ? "ready" : "unavailable";
+}
