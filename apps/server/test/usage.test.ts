@@ -1,21 +1,40 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
-import {
+import express from "express";
+import { makeSandbox, startServer, waitFor, type RunningServer } from "./helpers.js";
+import type { UsageAggregate, UsageRecord } from "../src/usage.js";
+
+const inProcessRoot = mkdtempSync(join(tmpdir(), "cch-usage-inproc-"));
+const inProcessClaudeDir = join(inProcessRoot, "claude-projects");
+const inProcessCodexHome = join(inProcessRoot, "codex-home");
+process.env.HUB_DATA_DIR = join(inProcessRoot, "data");
+process.env.HUB_CLAUDE_PROJECTS_DIR = inProcessClaudeDir;
+process.env.CODEX_HOME = inProcessCodexHome;
+process.env.HUB_DELEGATION = "1";
+delete process.env.HUB_RESOURCE_DIR;
+
+const {
   aggregateUsage,
   collectUsage,
+  flushUsageCache,
   percentile,
   rescanUsage,
   resetUsageCache,
+  setUsageCachePath,
   setUsageFileHook,
   usageGeneration,
   usageScanStats,
-  type UsageAggregate,
-  type UsageRecord,
-} from "../src/usage.js";
-import { makeSandbox, startServer, type RunningServer } from "./helpers.js";
+} = await import("../src/usage.js");
+const { usageRouter } = await import("../src/usage-routes.js");
+const { onBroadcast } = await import("../src/sse.js");
+const { db } = await import("../src/db.js");
+
+setUsageCachePath(null);
 
 interface ClaudeUsage {
   input: number;
@@ -113,6 +132,10 @@ function record(at: number, overrides: Partial<UsageRecord> & { fresh: number; c
 }
 
 const tmp = mkdtempSync(join(tmpdir(), "cch-usage-"));
+after(() => {
+  db.close();
+  rmSync(inProcessRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
+});
 after(() => rmSync(tmp, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 }));
 
 let counter = 0;
@@ -347,6 +370,160 @@ describe("usage parsing", () => {
   });
 });
 
+describe("usage persistent cache", () => {
+  const cacheFile = (name: string): string => join(tmp, `${name}.json`);
+
+  beforeEach(() => {
+    resetUsageCache();
+  });
+
+  after(() => {
+    setUsageCachePath(null);
+  });
+
+  const waitForFile = async (path: string): Promise<string> =>
+    waitFor(async () => {
+      try {
+        return readFileSync(path, "utf8");
+      } catch {
+        return null;
+      }
+    }, 5000);
+
+  it("reloads the per-file cache after a restart and parses nothing, then resumes appended files with the dedupe state", async () => {
+    const dirs = freshDirs();
+    const now = Date.now();
+    const path = cacheFile("roundtrip");
+    setUsageCachePath(path);
+    const claudeFile = join(dirs.claudeDir, "proj-x", "live.jsonl");
+    const codexFile = join(dirs.codexDir, "2026", "09", "30", "rollout-a.jsonl");
+    write(
+      claudeFile,
+      `${[
+        claudeLine({ id: "m1", at: now - 5000, sessionId: "live", usage: { input: 10, cacheRead: 1000, output: 1 } }),
+        claudeLine({ id: "m1", at: now - 4900, sessionId: "live", usage: { input: 10, cacheRead: 1000, output: 5 } }),
+        claudeLine({ id: "m2", at: now - 3000, sessionId: "live", usage: { input: 20, output: 8 } }),
+      ].join("\n")}\n`,
+    );
+    const turns: CodexTurnOptions[] = [
+      { at: now - 50_000, total: 1100, last: { input: 1000, cached: 600, output: 100, reasoning: 30 } },
+      { at: now - 40_000, total: 2400, last: { input: 1200, cached: 1000, output: 100, reasoning: 0 } },
+    ];
+    write(codexFile, codexLines("codex-1", "C:\\work\\codex-app", "gpt-fixture", now - 60_000, turns));
+
+    const first = await collectUsage({ days: 7, now, ...dirs });
+    assert.equal(first.parsed, 2);
+    await flushUsageCache();
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).files.length, 2);
+
+    resetUsageCache();
+    assert.equal(usageScanStats().cachedFiles, 0);
+    const parses = usageScanStats().parses;
+    const seen: string[] = [];
+    setUsageFileHook(async (file) => {
+      seen.push(file);
+    });
+    try {
+      const second = await collectUsage({ days: 7, now, ...dirs });
+      assert.equal(seen.length, 2);
+      assert.equal(second.parsed, 0);
+      assert.equal(usageScanStats().parses, parses);
+      assert.deepEqual(aggregateUsage(second.records, { days: 7, now }), aggregateUsage(first.records, { days: 7, now }));
+      assert.deepEqual(second.records, first.records);
+    } finally {
+      setUsageFileHook(null);
+    }
+
+    appendFileSync(
+      claudeFile,
+      `${claudeLine({ id: "m1", at: now - 4800, sessionId: "live", usage: { input: 10, cacheRead: 1000, output: 9 } })}\n${claudeLine({ id: "m3", at: now - 2000, sessionId: "live", usage: { input: 3, output: 1 } })}\n`,
+    );
+    write(
+      codexFile,
+      codexLines("codex-1", "C:\\work\\codex-app", "gpt-fixture", now - 60_000, [
+        ...turns,
+        { at: now - 39_000, total: 2400, last: { input: 1200, cached: 1000, output: 100, reasoning: 0 } },
+        { at: now - 30_000, total: 3000, last: { input: 500, cached: 100, output: 50, reasoning: 5 } },
+      ]),
+    );
+    const grown = await collectUsage({ days: 7, now, ...dirs });
+    assert.equal(grown.parsed, 2);
+    const claude = grown.records.filter((item) => item.provider === "claude");
+    const codex = grown.records.filter((item) => item.provider === "codex");
+    assert.equal(claude.length, 3);
+    assert.equal(claude.find((item) => item.fresh === 10)?.output, 9);
+    assert.equal(codex.length, 3);
+    assert.equal(codex[0]?.sessionId, "codex-1");
+    assert.equal(codex[0]?.project, "codex-app");
+
+    await flushUsageCache();
+    resetUsageCache();
+    const rebuilt = await collectUsage({ days: 7, now, ...dirs });
+    assert.equal(rebuilt.parsed, 0);
+    assert.equal(rebuilt.records.length, 6);
+  });
+
+  it("writes at most once per 10 s", async () => {
+    const dirs = freshDirs();
+    const now = Date.now();
+    const path = cacheFile("debounce");
+    setUsageCachePath(path);
+    write(join(dirs.claudeDir, "proj-x", "a.jsonl"), `${claudeLine({ id: "a", at: now - 1000, sessionId: "a", usage: { input: 5, output: 2 } })}\n`);
+    await collectUsage({ days: 1, now, ...dirs });
+    const written = await waitForFile(path);
+    write(join(dirs.claudeDir, "proj-x", "b.jsonl"), `${claudeLine({ id: "b", at: now - 900, sessionId: "b", usage: { input: 6, output: 2 } })}\n`);
+    const second = await collectUsage({ days: 1, now, ...dirs });
+    assert.equal(second.parsed, 1);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(readFileSync(path, "utf8"), written);
+    await flushUsageCache();
+    assert.equal(JSON.parse(readFileSync(path, "utf8")).files.length, 2);
+  });
+
+  it("ignores a missing, corrupt or malformed cache file and scans everything", async () => {
+    const now = Date.now();
+    const variants: Array<[string, string | null]> = [
+      ["missing", null],
+      ["garbage", "{not json"],
+      ["truncated", '{"version":1,"strings":["a"],"files":[{"path":"x"'],
+      ["wrong-version", '{"version":99,"strings":[],"files":[]}'],
+      [
+        "bad-record",
+        '{"version":1,"strings":[],"files":[{"path":"p","provider":"claude","size":1,"mtimeMs":1,"offset":1,"meta":{"kind":"claude","keys":["k"],"anonymous":0},"records":[[1,2,3]]}]}',
+      ],
+    ];
+    for (const [name, content] of variants) {
+      resetUsageCache();
+      const dirs = freshDirs();
+      const path = cacheFile(`corrupt-${name}`);
+      if (content !== null) writeFileSync(path, content);
+      setUsageCachePath(path);
+      write(join(dirs.claudeDir, "proj-x", "a.jsonl"), `${claudeLine({ id: "a", at: now - 1000, sessionId: "a", usage: { input: 5, output: 2 } })}\n`);
+      const scan = await collectUsage({ days: 1, now, ...dirs });
+      assert.equal(scan.parsed, 1, name);
+      assert.equal(scan.records.length, 1, name);
+    }
+  });
+
+  it("drops files older than 45 days from the persisted cache", async () => {
+    const dirs = freshDirs();
+    const now = Date.now();
+    const path = cacheFile("cap");
+    setUsageCachePath(path);
+    const old = join(dirs.claudeDir, "proj-x", "old.jsonl");
+    write(old, `${claudeLine({ id: "o", at: now - 50 * 86_400_000, sessionId: "old", usage: { input: 5, output: 2 } })}\n`);
+    const past = new Date(now - 50 * 86_400_000);
+    utimesSync(old, past, past);
+    write(join(dirs.claudeDir, "proj-x", "new.jsonl"), `${claudeLine({ id: "n", at: now - 1000, sessionId: "new", usage: { input: 5, output: 2 } })}\n`);
+    const scan = await collectUsage({ days: 60, now, ...dirs });
+    assert.equal(scan.records.length, 2);
+    await flushUsageCache();
+    const files = JSON.parse(readFileSync(path, "utf8")).files as Array<{ path: string }>;
+    assert.equal(files.length, 1);
+    assert.match(files[0]?.path ?? "", /new\.jsonl$/);
+  });
+});
+
 describe("usage aggregation", () => {
   const now = new Date(2026, 8, 30, 12, 0, 0).getTime();
   const at = (day: number, hour: number, minute = 0): number => new Date(2026, 8, day, hour, minute, 0).getTime();
@@ -456,6 +633,15 @@ describe("usage routes", () => {
     return { status: res.status, json: text ? (JSON.parse(text) as Record<string, unknown>) : {} };
   };
 
+  const ready = async (path: string): Promise<{ status: number; json: Record<string, unknown> }> => {
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      const res = await call("GET", path);
+      if (res.status !== 202 || Date.now() > deadline) return res;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
   before(async () => {
     write(
       join(claudeDir, "proj-x", "sess-a.jsonl"),
@@ -482,7 +668,7 @@ describe("usage routes", () => {
   });
 
   it("serves the aggregation with days validation", async () => {
-    const res = await call("GET", "/delegation/usage?days=7");
+    const res = await ready("/delegation/usage?days=7");
     assert.equal(res.status, 200);
     const body = res.json as unknown as UsageAggregate;
     assert.equal(body.days, 7);
@@ -497,14 +683,14 @@ describe("usage routes", () => {
     assert.equal(codexModel?.model, "gpt-fixture");
     assert.ok(body.byProject.some((item) => item.provider === "claude" && item.project === "proj-x"));
     assert.ok(body.bySession.some((item) => item.sessionId === "sess-a" && item.provider === "claude"));
-    assert.equal((await call("GET", "/delegation/usage")).json.days, 7);
+    assert.equal((await ready("/delegation/usage")).json.days, 7);
     for (const bad of ["0", "31", "abc", "1.5"]) {
       assert.equal((await call("GET", `/delegation/usage?days=${bad}`)).status, 400);
     }
   });
 
   it("summarizes today and the week per provider", async () => {
-    const res = await call("GET", "/delegation/usage/summary");
+    const res = await ready("/delegation/usage/summary");
     assert.equal(res.status, 200);
     const summary = res.json as unknown as { days: number; providers: { claude: { today: { read: number; output: number; messages: number }; week: { read: number; output: number } } | null; codex: { week: { read: number } } | null } };
     assert.equal(summary.days, 7);
@@ -521,7 +707,7 @@ describe("usage routes", () => {
 
     write(join(claudeDir, "proj-y", "sess-b.jsonl"), `${claudeLine({ id: "b1", at: now - 1000, sessionId: "sess-b", usage: { input: 7, output: 1 } })}
 `);
-    const stale = (await call("GET", "/delegation/usage?days=7")).json as unknown as UsageAggregate;
+    const stale = (await ready("/delegation/usage?days=7")).json as unknown as UsageAggregate;
     assert.equal(stale.byProvider.claude.messages, 2);
     const fresh = (await call("GET", "/delegation/usage?days=7&fresh=1")).json as unknown as UsageAggregate;
     assert.equal(fresh.byProvider.claude.messages, 3);
@@ -532,7 +718,7 @@ describe("usage routes", () => {
     assert.equal(rescan.status, 200);
     assert.ok(Number(rescan.json.files) >= 4);
     assert.equal(typeof rescan.json.elapsedMs, "number");
-    const after = (await call("GET", "/delegation/usage?days=7")).json as unknown as UsageAggregate;
+    const after = (await ready("/delegation/usage?days=7")).json as unknown as UsageAggregate;
     assert.equal(after.byProvider.claude.messages, 4);
 
     const stream = await streamPromise;
@@ -555,10 +741,126 @@ describe("usage routes", () => {
     const [racing, rescan] = await Promise.all([call("GET", "/delegation/usage?days=7&fresh=1"), call("POST", "/delegation/usage/rescan")]);
     assert.equal(racing.status, 200);
     assert.equal(rescan.status, 200);
-    const settled = (await call("GET", "/delegation/usage?days=7")).json as unknown as UsageAggregate;
+    const settled = (await ready("/delegation/usage?days=7")).json as unknown as UsageAggregate;
     assert.equal(settled.byProvider.claude.messages, baseline.byProvider.claude.messages + 1);
     assert.equal(settled.byProvider.codex.messages, baseline.byProvider.codex.messages);
-    const summary = (await call("GET", "/delegation/usage/summary")).json as unknown as { providers: { claude: { week: { read: number } } | null } };
+    const summary = (await ready("/delegation/usage/summary")).json as unknown as { providers: { claude: { week: { read: number } } | null } };
     assert.equal(summary.providers.claude?.week.read, settled.byProvider.claude.read);
+  });
+});
+
+describe("usage routes that never make the caller wait", () => {
+  let server: Server;
+  let base = "";
+  const now = Date.now();
+  const events: unknown[] = [];
+  let stopListening: () => void = () => undefined;
+
+  const hold = (): { reached: Promise<void>; release: () => void } => {
+    let reachedFirst: () => void = () => undefined;
+    const reached = new Promise<void>((resolve) => {
+      reachedFirst = resolve;
+    });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let armed = true;
+    setUsageFileHook(async () => {
+      if (!armed) return;
+      armed = false;
+      reachedFirst();
+      await gate;
+    });
+    return { reached, release };
+  };
+
+  const timed = async (path: string, method = "GET"): Promise<{ status: number; ms: number; json: Record<string, unknown> }> => {
+    const started = performance.now();
+    const res = await fetch(`${base}${path}`, { method });
+    const ms = performance.now() - started;
+    const text = await res.text();
+    return { status: res.status, ms, json: text ? (JSON.parse(text) as Record<string, unknown>) : {} };
+  };
+
+  before(async () => {
+    write(
+      join(inProcessClaudeDir, "proj-h", "sess-h.jsonl"),
+      `${claudeLine({ id: "h1", at: now - 5000, sessionId: "sess-h", usage: { input: 10, cacheRead: 1000, cacheWrite: 100, output: 3 } })}\n`,
+    );
+    resetUsageCache();
+    const app = express();
+    app.use("/delegation/usage", usageRouter());
+    await new Promise<void>((resolve) => {
+      server = app.listen(0, "127.0.0.1", () => resolve());
+    });
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    stopListening = onBroadcast((event, data) => {
+      if (event === "usage") events.push(data);
+    });
+  });
+
+  after(async () => {
+    stopListening();
+    setUsageFileHook(null);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it("answers 202 at once while the first scan is held, then 200 and an SSE usage event after release", async () => {
+    const held = hold();
+    try {
+      const summary = await timed("/delegation/usage/summary");
+      assert.equal(summary.status, 202);
+      assert.ok(summary.ms < 200, `summary took ${summary.ms}ms`);
+      assert.deepEqual(summary.json, { days: 7, scanning: true, providers: null });
+      await held.reached;
+
+      const report = await timed("/delegation/usage?days=7");
+      assert.equal(report.status, 202);
+      assert.ok(report.ms < 200, `usage took ${report.ms}ms`);
+      assert.equal(report.json.scanning, true);
+      assert.equal(typeof report.json.startedAt, "number");
+      assert.equal(report.json.files, 1);
+      assert.equal(events.length, 0);
+
+      held.release();
+      await waitFor(async () => (events.length > 0 ? true : null), 5000);
+      assert.equal(typeof (events[0] as { at: number }).at, "number");
+
+      const done = await timed("/delegation/usage/summary");
+      assert.equal(done.status, 200);
+      assert.ok(done.ms < 200);
+      const providers = done.json.providers as { claude: { week: { read: number; output: number } } | null; codex: unknown };
+      assert.equal(providers.claude?.week.read, 1110);
+      assert.equal(providers.codex, null);
+      assert.equal((await timed("/delegation/usage?days=7")).status, 200);
+    } finally {
+      held.release();
+      setUsageFileHook(null);
+    }
+  });
+
+  it("keeps every other route responsive while a rescan is waiting for its scan", async () => {
+    const held = hold();
+    try {
+      const rescan = fetch(`${base}/delegation/usage/rescan`, { method: "POST" });
+      await held.reached;
+      const report = await timed("/delegation/usage?days=7");
+      assert.equal(report.status, 202);
+      assert.ok(report.ms < 200, `usage took ${report.ms}ms`);
+      const invalid = await timed("/delegation/usage?days=0");
+      assert.equal(invalid.status, 400);
+      assert.ok(invalid.ms < 200);
+      const state = await Promise.race([rescan.then(() => "done"), new Promise<string>((resolve) => setTimeout(() => resolve("waiting"), 100))]);
+      assert.equal(state, "waiting");
+      held.release();
+      const finished = await rescan;
+      assert.equal(finished.status, 200);
+      assert.equal(((await finished.json()) as { files: number }).files, 1);
+      assert.equal((await timed("/delegation/usage?days=7")).status, 200);
+    } finally {
+      held.release();
+      setUsageFileHook(null);
+    }
   });
 });

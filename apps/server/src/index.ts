@@ -42,7 +42,7 @@ import { sessionLive } from "./live.js";
 import { runtimeSnapshot } from "./runtimes.js";
 import { ensureExtension } from "./ensure-extension.js";
 import { abortActiveRuns, delegationRouter } from "./delegation-routes.js";
-import { usageRouter } from "./usage-routes.js";
+import { usageRouter, warmUsage } from "./usage-routes.js";
 import { limitsRouter } from "./limits-routes.js";
 import { startLimitsPolling, stopLimitsPolling } from "./limits.js";
 import { resolveWorkspaceTarget } from "./delegation-launch.js";
@@ -553,6 +553,7 @@ app.listen(config.port, config.host, () => {
     const settings = getSettings();
     if (settings.features.daily && settings.secondBrainRoot) watchDaily(settings);
     startLimitsPolling(settings);
+    if (settings.features.usage) setTimeout(warmUsage, USAGE_WARMUP_DELAY_MS).unref();
     onBroadcast((event) => {
       if (event === "settings") startLimitsPolling(getSettings());
     });
@@ -573,6 +574,7 @@ process.on("SIGINT", () => shutdown("hub stopped"));
 process.on("SIGTERM", () => shutdown("hub stopped"));
 
 const PURGE_INTERVAL_MS = 3_600_000;
+const USAGE_WARMUP_DELAY_MS = 3000;
 
 function purgeEmpty(): void {
   const removed = purgeEmptySessions(config.emptyTtlMs);
