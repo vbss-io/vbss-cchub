@@ -132,6 +132,10 @@ function newSession(id: string, turns: number, client: string | null = "terminal
   return path;
 }
 
+function seedState(id: string, lastTurns = 0): void {
+  db.saveTrailState({ sessionId: id, lastTurns, firstStarted: Date.now() - 3_600_000, lastUpdate: Date.now() - 3_600_000, bulletsToday: 0, day: today() });
+}
+
 const trailFile = (): string => join(brain, "trail", `${today()}.md`);
 
 async function summarize(id: string, kind: "stop" | "session_end", force = false): Promise<boolean> {
@@ -350,11 +354,11 @@ describe("throttle decisions", () => {
 
   it("exposes the level constants", () => {
     assert.deepEqual(
-      Object.entries(trail.TRAIL_LEVELS).map(([level, rules]) => [level, rules.window, rules.throttleMinutes, rules.throttleTurns, rules.maxBullets, rules.cap]),
+      Object.entries(trail.TRAIL_LEVELS).map(([level, rules]) => [level, rules.window, rules.throttleMinutes, rules.throttleTurns, rules.maxBullets, rules.cap, rules.maxWindows]),
       [
-        ["light", 120, 30, 20, 1, 5],
-        ["medium", 80, 10, 5, 3, null],
-        ["high", 60, 0, 0, 6, null],
+        ["light", 120, 30, 20, 1, 5, 3],
+        ["medium", 80, 10, 5, 3, null, 3],
+        ["high", 60, 0, 0, 6, null, 6],
       ],
     );
   });
@@ -468,6 +472,7 @@ describe("summarization with the fake model", () => {
   it("summarizes a long delta in windows of the level size", async () => {
     const id = "s2222222-bbbb";
     newSession(id, 170);
+    seedState(id);
     const baseline = calls().length;
     await summarize(id, "session_end");
     const made = calls().slice(baseline);
@@ -480,6 +485,7 @@ describe("summarization with the fake model", () => {
   it("checkpoints at the last good window and resumes from there after a failure", async () => {
     const id = "s3333333-cccc";
     newSession(id, 170);
+    seedState(id);
     const baseline = calls().length;
     setMode(`failat:${baseline + 2},${baseline + 3}`);
     await summarize(id, "session_end");
@@ -619,6 +625,60 @@ describe("summarization with the fake model", () => {
     await summarize(busy, "session_end");
     assert.equal(calls().length - baseline, 1);
     assert.equal(sb.readBlockBullets(readFileSync(trailFile(), "utf8"), busy).length, 1);
+    store.updateSettings({ trail: { detail: "medium" } });
+  });
+
+  it("on first sight summarizes only the most recent window and persists that checkpoint", async () => {
+    store.updateSettings({ trail: { detail: "light" } });
+    const id = "sDDDDDDD-8888";
+    const path = newSession(id, 300);
+    const baseline = calls().length;
+    await summarize(id, "stop");
+    const made = calls().slice(baseline);
+    assert.equal(made.length, 1);
+    assert.equal((made[0]!.stdin.match(/<user>|<assistant>/g) ?? []).length, 120);
+    assert.ok(made[0]!.stdin.includes(`${id} question 180\n`));
+    assert.ok(!made[0]!.stdin.includes(`${id} answer 179\n`));
+    assert.ok(made[0]!.stdin.includes(`${id} answer 299\n`));
+    const state = db.getTrailState(id)!;
+    assert.equal(state.lastTurns, 300);
+    assert.equal(state.firstStarted, db.getSession(id)!.startedAt);
+    assert.match(readFileSync(trailFile(), "utf8"), /· 300 turns\n/);
+    appendFileSync(path, transcriptOf(2, "later"));
+    const flushBaseline = calls().length;
+    assert.equal(trail.flushTrail(id), 1);
+    await trail.whenTrailIdle();
+    assert.equal(calls().length - flushBaseline, 1);
+    assert.equal(db.getTrailState(id)!.lastTurns, 302);
+
+    const flushed = "sEEEEEEE-9999";
+    newSession(flushed, 300);
+    const forceBaseline = calls().length;
+    await summarize(flushed, "stop", true);
+    assert.equal(calls().length - forceBaseline, 1);
+    assert.equal(db.getTrailState(flushed)!.lastTurns, 300);
+    store.updateSettings({ trail: { detail: "medium" } });
+  });
+
+  it("processes at most three windows per trigger and resumes from the checkpoint on the next one", async () => {
+    store.updateSettings({ trail: { detail: "light" } });
+    const id = "sFFFFFFF-0000";
+    newSession(id, 510);
+    seedState(id, 10);
+    const baseline = calls().length;
+    await summarize(id, "stop");
+    assert.equal(calls().length - baseline, 3);
+    assert.equal(db.getTrailState(id)!.lastTurns, 370);
+    assert.match(readFileSync(trailFile(), "utf8"), /· 510 turns · parcial até turn 370\n/);
+    assert.equal(sb.readBlockBullets(readFileSync(trailFile(), "utf8"), id).length, 3);
+
+    const nextBaseline = calls().length;
+    await summarize(id, "stop");
+    assert.equal(calls().length - nextBaseline, 2);
+    assert.equal(db.getTrailState(id)!.lastTurns, 510);
+    const content = readFileSync(trailFile(), "utf8");
+    assert.equal(sb.readBlockBullets(content, id).length, 5);
+    assert.doesNotMatch(content.split(`session:${id} END`)[0]!.split(`session:${id} START`)[1]!, /parcial/);
     store.updateSettings({ trail: { detail: "medium" } });
   });
 

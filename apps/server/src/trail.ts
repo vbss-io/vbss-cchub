@@ -30,12 +30,13 @@ export interface TrailLevel {
   minBullets: number;
   maxBullets: number;
   cap: number | null;
+  maxWindows: number;
 }
 
 export const TRAIL_LEVELS: Record<TrailDetail, TrailLevel> = {
-  light: { window: 120, throttleMinutes: 30, throttleTurns: 20, everyStop: false, minBullets: 1, maxBullets: 1, cap: 5 },
-  medium: { window: 80, throttleMinutes: 10, throttleTurns: 5, everyStop: false, minBullets: 1, maxBullets: 3, cap: null },
-  high: { window: 60, throttleMinutes: 0, throttleTurns: 0, everyStop: true, minBullets: 1, maxBullets: 6, cap: null },
+  light: { window: 120, throttleMinutes: 30, throttleTurns: 20, everyStop: false, minBullets: 1, maxBullets: 1, cap: 5, maxWindows: 3 },
+  medium: { window: 80, throttleMinutes: 10, throttleTurns: 5, everyStop: false, minBullets: 1, maxBullets: 3, cap: null, maxWindows: 3 },
+  high: { window: 60, throttleMinutes: 0, throttleTurns: 0, everyStop: true, minBullets: 1, maxBullets: 6, cap: null, maxWindows: 6 },
 };
 
 export const TRAIL_TURN_CLIP = 4000;
@@ -476,14 +477,15 @@ async function summarizeSession(job: TrailJob): Promise<void> {
     return;
   }
   const state = getTrailState(job.sessionId);
-  const { turns: delta, totalRaw } = readTurns(raw, state?.lastTurns ?? 0);
-  const now = Date.now();
   const level = settings.trail.detail;
+  const rules = TRAIL_LEVELS[level];
+  const startFrom = state ? state.lastTurns : Math.max(0, readTurns(raw, Number.MAX_SAFE_INTEGER).totalRaw - rules.window);
+  const { turns: delta, totalRaw } = readTurns(raw, startFrom);
+  const now = Date.now();
   const due = job.force ? !state || totalRaw > state.lastTurns : shouldSummarize(state, now, totalRaw, job.kind, level);
   if (!due) return;
-  const rules = TRAIL_LEVELS[level];
   const today = localDate(new Date(now));
-  const firstStarted = state?.firstStarted ?? now;
+  const firstStarted = state?.firstStarted ?? session.startedAt ?? now;
   const checkpoint = (lastTurns: number, bullets: number): void =>
     saveTrailState({
       sessionId: job.sessionId,
@@ -503,10 +505,15 @@ async function summarizeSession(job: TrailJob): Promise<void> {
   let anyRedacted = working.some((bullet) => bullet.includes("[REDACTED]"));
   const system = systemPromptFor(settings.trail);
   const schema = schemaFor(rules.minBullets, rules.maxBullets);
-  let processedThrough = state?.lastTurns ?? 0;
+  let processedThrough = startFrom;
   let successfulWindows = 0;
   let brokeEarly = false;
+  let capped = false;
   for (let index = 0; index < delta.length; index += rules.window) {
+    if (successfulWindows >= rules.maxWindows) {
+      capped = true;
+      break;
+    }
     const windowTurns = delta.slice(index, index + rules.window);
     const payload = await callModel(system, windowPrompt(windowTurns, session.cwd), schema, settings.trail.model);
     if (!payload) {
@@ -531,9 +538,10 @@ async function summarizeSession(job: TrailJob): Promise<void> {
     successfulWindows++;
     processedThrough = (windowTurns[windowTurns.length - 1]?.rawIdx ?? processedThrough) + 1;
   }
-  if (!brokeEarly) processedThrough = totalRaw;
+  const incomplete = brokeEarly || capped;
+  if (!incomplete) processedThrough = totalRaw;
   if (successfulWindows === 0) return;
-  if (!brokeEarly) lastError = null;
+  if (!incomplete) lastError = null;
   if (working.length > 0 || existingContent.includes(`<!-- session:${job.sessionId} START -->`)) {
     const startedHHMM =
       readBlockStart(existingContent, job.sessionId) ??
@@ -546,7 +554,7 @@ async function summarizeSession(job: TrailJob): Promise<void> {
       turns: totalRaw,
       bullets: working,
       redacted: anyRedacted,
-      partialThrough: brokeEarly ? processedThrough : 0,
+      partialThrough: incomplete ? processedThrough : 0,
     });
     mkdirSync(dirname(file), { recursive: true });
     withFileLockSync(file, () => upsertSessionBlock(file, job.sessionId, today, block));
