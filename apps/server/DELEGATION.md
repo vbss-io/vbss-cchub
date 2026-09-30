@@ -369,6 +369,16 @@ Local token analytics for this machine (Claude Code and Codex), behind the same 
 - Sources: `~/.claude/projects` (override `HUB_CLAUDE_PROJECTS_DIR`, subagent transcripts included) and `config.codexSessionsDir`. Files are streamed once, cached by path, size and mtime (appended files resume from the last newline), and files older than the window are not read.
 - Claude counts each `message.id` once (last streaming chunk); `read` = input + cache read + cache write. Codex uses `last_token_usage` per `token_count` (events repeating the previous `total_tokens` are dropped, so the deltas sum to the final total); `read` = `input_tokens`, which already includes cached input.
 
+## Limits
+
+How much of the account rate limits is used (Claude Code and Codex), read-only. Needs `features.limits` plus `limits.claude` / `limits.codex`; off means `GET` answers `{ updatedAt: null, claude: null, codex: null }` and nothing polls.
+
+- `GET /delegation/limits` returns `{ updatedAt, claude, codex }`; `POST /delegation/limits/refresh` forces a refresh (Claude never faster than 60 s apart). SSE `limits { updatedAt }` after each successful refresh. All `resetsAt` are epoch ms, percentages 0-100, `error` set when the last refresh failed but a previous value is still shown.
+- Claude: `GET api.anthropic.com/api/oauth/usage` (5 s timeout, `anthropic-beta: oauth-2025-04-20`) with the access token in `~/.claude/.credentials.json` (`HUB_CLAUDE_CREDENTIALS`). Windows: 5 h, 7 d, per model (Opus, Sonnet and scoped `limits[]`), `extra`. Fallback: `cachedUsageUtilization` in `~/.claude.json` (`HUB_CLAUDE_STATE`), `source: "cache"` with its real `fetchedAt`.
+- Backoff: 401, 403 or 429 pause the calls for 5 min, doubling up to 1 h; no retry, last value kept with `error`. No call when the token expires in under 5 min.
+- Codex: newest `token_count` `rate_limits` in `config.codexSessionsDir` (14 days back), zero network. A window whose `resets_at` passed reads `usedPercent: 0, reset: true`; `stale` flags an old record. Opt-in `HUB_CODEX_LIVE_LIMITS=1` asks `codex app-server` for `account/rateLimits/read` (only `initialize` and that call), falling back to the rollout.
+- Privacy: the hub never refreshes or writes credentials, never reads `~/.codex/auth.json`, never logs, stores, broadcasts or returns a token, `accountUuid` or e-mail, makes no inference call, and polls no faster than `limits.refreshMinutes`. `HUB_CLAUDE_USAGE_URL` is honoured only for loopback hosts (tests).
+
 ## Thin CLI
 
 ```bash

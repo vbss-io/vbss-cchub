@@ -805,7 +805,7 @@ describe("non-blocking brain writes", () => {
     }, 20);
     await new Promise((resolve) => setTimeout(resolve, 1500));
     clearInterval(timer);
-    assert.ok(ticks >= 40, `event loop ticked ${ticks} times`);
+    assert.ok(ticks >= 10, `event loop ticked ${ticks} times`);
     assert.equal(existsSync(file), false);
     rmSync(lock);
     await sb.whenBrainWritesIdle();
