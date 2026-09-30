@@ -27,21 +27,21 @@ describe("dockRect", () => {
   });
 
   it("anchors the expanded panel to the left edge, vertically centered", () => {
-    assert.deepEqual(dockRect("left", false, area, 0), { x: 0, y: 140, width: 560, height: 760 });
+    assert.deepEqual(dockRect("left", false, area, 0), { x: 0, y: 210, width: 440, height: 620 });
   });
 
   it("anchors the expanded panel to the right edge, vertically centered", () => {
-    assert.deepEqual(dockRect("right", false, area, 0), { x: 1360, y: 140, width: 560, height: 760 });
+    assert.deepEqual(dockRect("right", false, area, 0), { x: 1480, y: 210, width: 440, height: 620 });
   });
 
   it("anchors the expanded panel to the top edge, horizontally centered", () => {
-    assert.deepEqual(dockRect("top", false, area, 0), { x: 580, y: 0, width: 760, height: 560 });
+    assert.deepEqual(dockRect("top", false, area, 0), { x: 650, y: 0, width: 620, height: 440 });
   });
 
   it("respects a work area that does not start at the origin and excludes the taskbar", () => {
     const offsetArea: Rect = { x: 1920, y: 40, width: 1600, height: 900 };
     assert.deepEqual(dockRect("right", true, offsetArea, 0), { x: 3464, y: 358, width: 56, height: 264 });
-    assert.deepEqual(dockRect("top", false, offsetArea, 0), { x: 2340, y: 40, width: 760, height: 560 });
+    assert.deepEqual(dockRect("top", false, offsetArea, 0), { x: 2410, y: 40, width: 620, height: 440 });
   });
 
   it("shifts the collapsed tab along the edge and clamps it inside the work area", () => {

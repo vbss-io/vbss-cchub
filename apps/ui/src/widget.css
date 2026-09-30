@@ -10,7 +10,7 @@ html.widget-window #root {
   inset: 0;
   display: flex;
   pointer-events: none;
-  font-size: 15px;
+  font-size: 14px;
   color: var(--text);
 }
 
@@ -65,19 +65,19 @@ html.widget-window #root {
 .wgd[data-edge="left"] .wgd-tab,
 .wgd[data-edge="left"] .wgd-panel {
   border-left: none;
-  border-radius: 0 20px 20px 0;
+  border-radius: 0 16px 16px 0;
 }
 
 .wgd[data-edge="right"] .wgd-tab,
 .wgd[data-edge="right"] .wgd-panel {
   border-right: none;
-  border-radius: 20px 0 0 20px;
+  border-radius: 16px 0 0 16px;
 }
 
 .wgd[data-edge="top"] .wgd-tab,
 .wgd[data-edge="top"] .wgd-panel {
   border-top: none;
-  border-radius: 0 0 20px 20px;
+  border-radius: 0 0 16px 16px;
 }
 
 .wgd-arrow {
@@ -178,21 +178,21 @@ html.widget-window #root {
 .wgd-panel {
   display: flex;
   flex-direction: column;
-  width: min(560px, 100vw);
-  height: min(760px, 100vh);
+  width: min(440px, 100vw);
+  height: min(620px, 100vh);
   overflow: hidden;
 }
 
 .wgd[data-edge="top"] .wgd-panel {
-  width: min(760px, 100vw);
-  height: min(560px, 100vh);
+  width: min(620px, 100vw);
+  height: min(440px, 100vh);
 }
 
 .wgd-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
+  gap: 10px;
+  padding: 8px 12px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   user-select: none;
@@ -209,7 +209,7 @@ html.widget-window #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -231,8 +231,13 @@ html.widget-window #root {
   border: none;
   color: var(--muted);
   cursor: pointer;
-  padding: 6px 8px;
+  padding: 4px 6px;
   border-radius: 8px;
+}
+
+.wgd-collapse svg {
+  width: 16px;
+  height: 16px;
 }
 
 .wgd-collapse:hover {
@@ -242,8 +247,8 @@ html.widget-window #root {
 
 .wgd-tabs {
   display: flex;
-  gap: 4px;
-  padding: 8px 14px 0;
+  gap: 2px;
+  padding: 4px 12px 0;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -251,14 +256,14 @@ html.widget-window #root {
 .wgd-tabbtn {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: transparent;
   border: none;
   border-bottom: 3px solid transparent;
   color: var(--muted);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
-  padding: 8px 14px 9px;
+  padding: 6px 12px 7px;
   cursor: pointer;
 }
 
@@ -272,13 +277,13 @@ html.widget-window #root {
 }
 
 .wgd-tabn {
-  min-width: 22px;
-  padding: 0 6px;
+  min-width: 18px;
+  padding: 0 5px;
   border-radius: 999px;
   background: var(--hold);
   color: #1b1c26;
-  font-size: 13px;
-  line-height: 22px;
+  font-size: 12px;
+  line-height: 18px;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -288,14 +293,14 @@ html.widget-window #root {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 8px 12px 12px;
+  padding: 2px 0 6px;
 }
 
 .wgd-foot {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 16px;
+  gap: 8px;
+  padding: 8px 12px;
   background: var(--panel);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
@@ -305,10 +310,10 @@ html.widget-window #root {
   background: transparent;
   border: none;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border-radius: 8px;
 }
 
@@ -320,9 +325,9 @@ html.widget-window #root {
 .wgd-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 10px 2px 0;
-  padding: 14px 16px;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 10px 12px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -331,8 +336,8 @@ html.widget-window #root {
 .wgd-card-h {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 16px;
+  gap: 8px;
+  font-size: 15px;
   font-weight: 600;
 }
 
@@ -344,13 +349,13 @@ html.widget-window #root {
 .wgd-kv {
   display: flex;
   align-items: baseline;
-  gap: 12px;
-  font-size: 14px;
+  gap: 10px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
 .wgd-kv span {
-  flex: 0 0 60px;
+  flex: 0 0 52px;
   color: var(--muted);
 }
 
@@ -367,7 +372,7 @@ html.widget-window #root {
 
 .wgd-note {
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .wgd-note--warn {
@@ -381,10 +386,10 @@ html.widget-window #root {
 
 .wgd-gauge {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) minmax(44px, auto) minmax(0, 104px);
+  grid-template-columns: 30px minmax(0, 1fr) minmax(40px, auto) minmax(0, 92px);
   align-items: center;
-  gap: 12px;
-  font-size: 14px;
+  gap: 10px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -400,7 +405,7 @@ html.widget-window #root {
 
 .wgd-gauge-r {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -408,7 +413,7 @@ html.widget-window #root {
 
 .wgd-bar {
   display: block;
-  height: 10px;
+  height: 8px;
   border-radius: 999px;
   background: var(--border-2);
   overflow: hidden;
@@ -436,13 +441,13 @@ html.widget-window #root {
 }
 
 .wgd-chip {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--go);
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 0 10px;
-  line-height: 24px;
+  padding: 0 8px;
+  line-height: 20px;
 }
 
 .wgd-chip--pend {
@@ -454,19 +459,19 @@ html.widget-window #root {
 }
 
 .wg-sec {
-  margin-top: 10px;
+  margin-top: 4px;
 }
 
 .wg-sec:first-child {
-  margin-top: 4px;
+  margin-top: 0;
 }
 
 .wg-sec-h {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px 6px;
-  font-size: 12px;
+  gap: 8px;
+  padding: 6px 12px 2px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -492,15 +497,15 @@ html.widget-window #root {
 .wg-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
-  min-height: 40px;
+  min-height: 34px;
   background: transparent;
   border: none;
-  border-radius: 8px;
-  padding: 8px 12px;
+  border-radius: 6px;
+  padding: 4px 12px;
   color: var(--text);
-  font-size: 15px;
+  font-size: 14px;
   cursor: pointer;
   text-align: left;
 }
@@ -524,13 +529,13 @@ html.widget-window #root {
 }
 
 .wg-ico svg {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 }
 
 .wg-dot {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 999px;
   flex-shrink: 0;
   background: var(--ended);
@@ -573,23 +578,23 @@ html.widget-window #root {
 .wg-sub {
   flex-shrink: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
 .wg-pill {
   flex-shrink: 0;
-  max-width: 140px;
+  max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted);
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0 9px;
-  line-height: 22px;
+  line-height: 20px;
 }
 
 .wg-pill--branch {
@@ -606,9 +611,9 @@ html.widget-window #root {
 }
 
 .wg-more {
-  padding: 6px 12px 4px;
+  padding: 4px 12px 2px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .wg-open {
@@ -617,10 +622,10 @@ html.widget-window #root {
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  padding: 9px 14px;
+  padding: 7px 12px;
 }
 
 .wg-open:hover {
@@ -634,9 +639,9 @@ html.widget-window #root {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 15px;
+  font-size: 14px;
   text-align: center;
-  padding: 48px 16px;
+  padding: 32px 12px;
 }
 
 .wg-empty b {
