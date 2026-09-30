@@ -14,6 +14,7 @@ import {
   type UsageReport,
   type UsageSessionRow,
 } from "../delegation";
+import { IconClaude, IconOpenAI } from "../icons";
 import type { SessionRecord } from "../types";
 import { CONTEXT_WARN, contextTone, dayBarHeights, sharePercent, shortProject, sortRows, sourceNote, timeAgo, type SortDirection } from "../usage-format";
 import { clampPercent, formatTokens, resetCountdown, ringTone } from "../widget-layout";
@@ -31,6 +32,7 @@ const DAY_OPTIONS: readonly number[] = [7, 14, 30];
 const STORAGE_KEY = "hub.usage.days";
 const PROVIDER_NAME: Record<UsageProvider, string> = { claude: "Claude", codex: "Codex" };
 const ROW_LIMIT = 12;
+const BAR_MIN_WIDTH = 20;
 
 function readStoredDays(): number | null {
   try {
@@ -63,14 +65,18 @@ function formatWhen(ms: number): string {
 
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : "request failed");
 
-function ProviderDot({ provider }: { provider: UsageProvider }) {
-  return <span className={`usage__dot usage__dot--${provider}`} aria-hidden="true" />;
+function ProviderIcon({ provider, size }: { provider: UsageProvider; size: number }) {
+  return (
+    <span className={`usage__ico usage__ico--${provider}`} aria-hidden="true">
+      {provider === "claude" ? <IconClaude size={size} /> : <IconOpenAI size={size} />}
+    </span>
+  );
 }
 
-function ProviderLabel({ provider }: { provider: UsageProvider }) {
+function ProviderLabel({ provider, size = 14 }: { provider: UsageProvider; size?: number }) {
   return (
     <span className="usage__prov">
-      <ProviderDot provider={provider} />
+      <ProviderIcon provider={provider} size={size} />
       {PROVIDER_NAME[provider]}
     </span>
   );
@@ -90,7 +96,7 @@ function Gauge({ label, percent, resetsAt, reset, now }: GaugeProps) {
       <div className="usage__gauge usage__gauge--reset">
         <span className="usage__gauge-l">{label}</span>
         <span className="usage__meter" />
-        <span className="usage__gauge-v">reset</span>
+        <span className="usage__gauge-v">reset · 0%</span>
         <span className="usage__gauge-r" />
       </div>
     );
@@ -136,7 +142,7 @@ function ClaudeCard({ data, now }: { data: ClaudeLimits; now: number }) {
   return (
     <section className="usage__card">
       <header className="usage__card-h">
-        <ProviderLabel provider="claude" />
+        <ProviderLabel provider="claude" size={20} />
         <Freshness source={data.source} fetchedAt={data.fetchedAt} error={data.error} now={now} />
       </header>
       {none ? (
@@ -178,7 +184,7 @@ function CodexCard({ data, now }: { data: CodexLimits; now: number }) {
   return (
     <section className="usage__card">
       <header className="usage__card-h">
-        <ProviderLabel provider="codex" />
+        <ProviderLabel provider="codex" size={20} />
         {data.planType && <span className="chip">{data.planType}</span>}
         <Freshness source={data.source} fetchedAt={data.fetchedAt} error={data.error} now={now} />
       </header>
@@ -244,22 +250,27 @@ function DayBars({ report }: { report: UsageReport }) {
   const bars = dayBarHeights(report.byDay);
   return (
     <div className="usage__chart">
-      <div className="usage__bars" style={{ gridTemplateColumns: `repeat(${Math.max(1, bars.length)}, minmax(0, 1fr))` }}>
-        {bars.map((bar, index) => {
-          const entry = report.byDay[index];
-          const title = entry
-            ? `${bar.day}\nClaude ${formatTokens(entry.claude.read)} read, ${entry.claude.messages} msgs\nCodex ${formatTokens(entry.codex.read)} read, ${entry.codex.messages} msgs`
-            : bar.day;
-          return (
-            <div key={bar.day} className="usage__col" title={title}>
-              <div className="usage__stack">
-                <span className="usage__seg usage__seg--codex" style={{ height: `${bar.codex}%` }} />
-                <span className="usage__seg usage__seg--claude" style={{ height: `${bar.claude}%` }} />
+      <div className="usage__scrollx">
+        <div
+          className="usage__bars"
+          style={{ gridTemplateColumns: `repeat(${Math.max(1, bars.length)}, minmax(0, 1fr))`, minWidth: `${Math.max(1, bars.length) * BAR_MIN_WIDTH}px` }}
+        >
+          {bars.map((bar, index) => {
+            const entry = report.byDay[index];
+            const title = entry
+              ? `${bar.day}\nClaude ${formatTokens(entry.claude.read)} read, ${entry.claude.messages} msgs\nCodex ${formatTokens(entry.codex.read)} read, ${entry.codex.messages} msgs`
+              : bar.day;
+            return (
+              <div key={bar.day} className="usage__col" title={title}>
+                <div className="usage__stack">
+                  <span className="usage__seg usage__seg--codex" style={{ height: `${bar.codex}%` }} />
+                  <span className="usage__seg usage__seg--claude" style={{ height: `${bar.claude}%` }} />
+                </div>
+                <span className="usage__day">{bar.day.slice(8)}</span>
               </div>
-              <span className="usage__day">{bar.day.slice(8)}</span>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
       <div className="usage__legend">
         <ProviderLabel provider="claude" />

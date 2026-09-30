@@ -10,7 +10,7 @@ html.widget-window #root {
   inset: 0;
   display: flex;
   pointer-events: none;
-  font-size: 12px;
+  font-size: 15px;
   color: var(--text);
 }
 
@@ -42,9 +42,9 @@ html.widget-window #root {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-  width: 28px;
-  height: 132px;
+  gap: 18px;
+  width: 56px;
+  height: 264px;
   padding: 0;
   cursor: pointer;
   user-select: none;
@@ -54,8 +54,8 @@ html.widget-window #root {
 
 .wgd[data-edge="top"] .wgd-tab {
   flex-direction: row;
-  width: 132px;
-  height: 28px;
+  width: 264px;
+  height: 56px;
 }
 
 .wgd-tab:hover {
@@ -65,19 +65,19 @@ html.widget-window #root {
 .wgd[data-edge="left"] .wgd-tab,
 .wgd[data-edge="left"] .wgd-panel {
   border-left: none;
-  border-radius: 0 12px 12px 0;
+  border-radius: 0 20px 20px 0;
 }
 
 .wgd[data-edge="right"] .wgd-tab,
 .wgd[data-edge="right"] .wgd-panel {
   border-right: none;
-  border-radius: 12px 0 0 12px;
+  border-radius: 20px 0 0 20px;
 }
 
 .wgd[data-edge="top"] .wgd-tab,
 .wgd[data-edge="top"] .wgd-panel {
   border-top: none;
-  border-radius: 0 0 12px 12px;
+  border-radius: 0 0 20px 20px;
 }
 
 .wgd-arrow {
@@ -94,12 +94,12 @@ html.widget-window #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   border-radius: 999px;
   background: var(--ended);
   color: #1b1c26;
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -115,15 +115,15 @@ html.widget-window #root {
 
 .wgd-pip--hold {
   background: var(--hold);
-  width: 16px;
-  height: 16px;
+  width: 26px;
+  height: 26px;
 }
 
 .wgd-rings {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 10px;
 }
 
 .wgd[data-edge="top"] .wgd-rings {
@@ -133,8 +133,8 @@ html.widget-window #root {
 .wgd-ring {
   position: relative;
   display: flex;
-  width: 18px;
-  height: 18px;
+  width: 36px;
+  height: 36px;
   color: var(--go);
 }
 
@@ -145,7 +145,7 @@ html.widget-window #root {
 .wgd-ring-track,
 .wgd-ring-arc {
   fill: none;
-  stroke-width: 2.5;
+  stroke-width: 4;
 }
 
 .wgd-ring-track {
@@ -178,21 +178,21 @@ html.widget-window #root {
 .wgd-panel {
   display: flex;
   flex-direction: column;
-  width: min(340px, 100vw);
-  height: min(520px, 100vh);
+  width: min(560px, 100vw);
+  height: min(760px, 100vh);
   overflow: hidden;
 }
 
 .wgd[data-edge="top"] .wgd-panel {
-  width: min(520px, 100vw);
-  height: min(340px, 100vh);
+  width: min(760px, 100vw);
+  height: min(560px, 100vh);
 }
 
 .wgd-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 9px;
+  gap: 12px;
+  padding: 12px 16px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   user-select: none;
@@ -209,7 +209,7 @@ html.widget-window #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 14px;
   color: var(--muted);
 }
 
@@ -231,8 +231,8 @@ html.widget-window #root {
   border: none;
   color: var(--muted);
   cursor: pointer;
-  padding: 3px 5px;
-  border-radius: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
 }
 
 .wgd-collapse:hover {
@@ -242,8 +242,8 @@ html.widget-window #root {
 
 .wgd-tabs {
   display: flex;
-  gap: 2px;
-  padding: 5px 8px 0;
+  gap: 4px;
+  padding: 8px 14px 0;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -251,14 +251,14 @@ html.widget-window #root {
 .wgd-tabbtn {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-bottom: 3px solid transparent;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 600;
-  padding: 5px 9px 6px;
+  padding: 8px 14px 9px;
   cursor: pointer;
 }
 
@@ -272,13 +272,13 @@ html.widget-window #root {
 }
 
 .wgd-tabn {
-  min-width: 15px;
-  padding: 0 4px;
+  min-width: 22px;
+  padding: 0 6px;
   border-radius: 999px;
   background: var(--hold);
   color: #1b1c26;
-  font-size: 10px;
-  line-height: 15px;
+  font-size: 13px;
+  line-height: 22px;
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -288,14 +288,14 @@ html.widget-window #root {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 4px 6px 6px;
+  padding: 8px 12px 12px;
 }
 
 .wgd-foot {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 9px;
+  gap: 12px;
+  padding: 10px 16px;
   background: var(--panel);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
@@ -305,11 +305,11 @@ html.widget-window #root {
   background: transparent;
   border: none;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  padding: 5px 6px;
-  border-radius: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
 }
 
 .wgd-link:hover {
@@ -320,37 +320,37 @@ html.widget-window #root {
 .wgd-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin: 6px 2px 0;
-  padding: 9px 10px;
+  gap: 10px;
+  margin: 10px 2px 0;
+  padding: 14px 16px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
 }
 
 .wgd-card-h {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 10px;
+  font-size: 16px;
   font-weight: 600;
 }
 
 .wgd-card-ico {
   display: flex;
-  color: var(--muted);
+  color: var(--text);
 }
 
 .wgd-kv {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  font-size: 11px;
+  gap: 12px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
 
 .wgd-kv span {
-  flex: 0 0 40px;
+  flex: 0 0 60px;
   color: var(--muted);
 }
 
@@ -367,7 +367,7 @@ html.widget-window #root {
 
 .wgd-note {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .wgd-note--warn {
@@ -381,10 +381,10 @@ html.widget-window #root {
 
 .wgd-gauge {
   display: grid;
-  grid-template-columns: 26px minmax(0, 1fr) 34px 78px;
+  grid-template-columns: 34px minmax(0, 1fr) minmax(44px, auto) minmax(0, 104px);
   align-items: center;
-  gap: 8px;
-  font-size: 11px;
+  gap: 12px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -395,17 +395,20 @@ html.widget-window #root {
 .wgd-gauge-v {
   text-align: right;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .wgd-gauge-r {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 13px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .wgd-bar {
   display: block;
-  height: 6px;
+  height: 10px;
   border-radius: 999px;
   background: var(--border-2);
   overflow: hidden;
@@ -429,17 +432,17 @@ html.widget-window #root {
 .wgd-models {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
 }
 
 .wgd-chip {
-  font-size: 10px;
+  font-size: 13px;
   color: var(--go);
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 0 7px;
-  line-height: 16px;
+  padding: 0 10px;
+  line-height: 24px;
 }
 
 .wgd-chip--pend {
@@ -451,19 +454,19 @@ html.widget-window #root {
 }
 
 .wg-sec {
-  margin-top: 6px;
+  margin-top: 10px;
 }
 
 .wg-sec:first-child {
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .wg-sec-h {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 6px 3px;
-  font-size: 9.5px;
+  gap: 10px;
+  padding: 8px 10px 6px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -489,14 +492,15 @@ html.widget-window #root {
 .wg-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 12px;
   width: 100%;
+  min-height: 40px;
   background: transparent;
   border: none;
-  border-radius: 6px;
-  padding: 5px 7px;
+  border-radius: 8px;
+  padding: 8px 12px;
   color: var(--text);
-  font-size: 12px;
+  font-size: 15px;
   cursor: pointer;
   text-align: left;
 }
@@ -505,15 +509,28 @@ html.widget-window #root {
   background: var(--panel-2);
 }
 
+.wg-row--muted {
+  color: var(--muted);
+}
+
+.wg-row--muted .wg-title {
+  font-weight: 500;
+}
+
 .wg-ico {
   display: flex;
   flex-shrink: 0;
   color: var(--muted);
 }
 
+.wg-ico svg {
+  width: 20px;
+  height: 20px;
+}
+
 .wg-dot {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   border-radius: 999px;
   flex-shrink: 0;
   background: var(--ended);
@@ -535,6 +552,10 @@ html.widget-window #root {
   background: var(--ok);
 }
 
+.wg-dot--idle {
+  background: var(--ended);
+}
+
 .wg-star {
   color: var(--amber);
   flex-shrink: 0;
@@ -552,23 +573,23 @@ html.widget-window #root {
 .wg-sub {
   flex-shrink: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
 .wg-pill {
   flex-shrink: 0;
-  max-width: 96px;
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--muted);
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 0 6px;
-  line-height: 16px;
+  padding: 0 9px;
+  line-height: 22px;
 }
 
 .wg-pill--branch {
@@ -584,16 +605,22 @@ html.widget-window #root {
   color: var(--amber);
 }
 
+.wg-more {
+  padding: 6px 12px 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .wg-open {
   flex: 1;
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--text);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  padding: 5px 8px;
+  padding: 9px 14px;
 }
 
 .wg-open:hover {
@@ -605,11 +632,11 @@ html.widget-window #root {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 15px;
   text-align: center;
-  padding: 28px 12px;
+  padding: 48px 16px;
 }
 
 .wg-empty b {

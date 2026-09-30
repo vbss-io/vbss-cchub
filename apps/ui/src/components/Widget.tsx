@@ -16,7 +16,7 @@ import {
   type WidgetPanel,
 } from "../delegation";
 import { taskBranch, taskIsolation } from "../delegation-actions";
-import { IconChevron, IconCode, IconCodex, IconStar } from "../icons";
+import { IconChevron, IconClaude, IconCode, IconCodex, IconOpenAI, IconStar } from "../icons";
 import { isMock, MOCK_SESSIONS } from "../mock";
 import { folderPeers } from "../peers";
 import { isEmpty, isStale } from "../stale";
@@ -31,6 +31,7 @@ import {
   urgencyTone,
   type Rect,
 } from "../widget-layout";
+import { splitSessions } from "../widget-model";
 import { BrandMark } from "./BrandMark";
 import { inFlight, needsYou } from "./TaskCard";
 import "../widget.css";
@@ -237,10 +238,12 @@ function Arrow({ edge, closing }: { edge: WidgetEdge; closing: boolean }) {
   const rotation = (OPEN_ROTATION[edge] + (closing ? 180 : 0)) % 360;
   return (
     <span className="wgd-arrow" style={{ transform: `rotate(${rotation}deg)` }}>
-      <IconChevron size={14} />
+      <IconChevron size={22} />
     </span>
   );
 }
+
+const IDLE_ROW_LIMIT = 8;
 
 const PROVIDER_NAME = { claude: "Claude", codex: "Codex" } as const;
 
@@ -252,25 +255,25 @@ interface RingProps {
 }
 
 function Ring({ provider, percent, resetsAt, now }: RingProps) {
-  const radius = 7;
+  const radius = 15;
   const circumference = 2 * Math.PI * radius;
   const shown = clampPercent(percent);
   const reset = resetCountdown(resetsAt, now);
   const title = `${PROVIDER_NAME[provider]} 7d: ${Math.round(shown)}%${reset ? ` · resets in ${reset}` : ""}`;
   return (
     <span className={`wgd-ring wgd-ring--${ringTone(percent)}`} title={title}>
-      <svg width={18} height={18} viewBox="0 0 18 18" aria-hidden="true">
-        <circle className="wgd-ring-track" cx={9} cy={9} r={radius} />
+      <svg width={36} height={36} viewBox="0 0 36 36" aria-hidden="true">
+        <circle className="wgd-ring-track" cx={18} cy={18} r={radius} />
         <circle
           className="wgd-ring-arc"
-          cx={9}
-          cy={9}
+          cx={18}
+          cy={18}
           r={radius}
           strokeDasharray={`${(circumference * shown) / 100} ${circumference}`}
-          transform="rotate(-90 9 9)"
+          transform="rotate(-90 18 18)"
         />
       </svg>
-      <span className="wgd-ring-ico">{provider === "claude" ? <IconCode size={8} /> : <IconCodex size={8} />}</span>
+      <span className="wgd-ring-ico">{provider === "claude" ? <IconClaude size={17} /> : <IconOpenAI size={17} />}</span>
     </span>
   );
 }
@@ -289,7 +292,7 @@ function Gauge({ label, percent, resetsAt, reset, now }: GaugeProps) {
       <div className="wgd-gauge">
         <span className="wgd-gauge-l">{label}</span>
         <span className="wgd-bar" />
-        <span className="wgd-gauge-v wgd-gauge-v--muted">reset</span>
+        <span className="wgd-gauge-v wgd-gauge-v--muted">reset · 0%</span>
         <span className="wgd-gauge-r" />
       </div>
     );
@@ -346,7 +349,7 @@ function ProviderCard({ provider, usageEnabled, usage, limitsEnabled, limits, no
   return (
     <section className="wgd-card">
       <div className="wgd-card-h">
-        <span className="wgd-card-ico">{provider === "claude" ? <IconCode size={13} /> : <IconCodex size={13} />}</span>
+        <span className="wgd-card-ico">{provider === "claude" ? <IconClaude size={24} /> : <IconOpenAI size={24} />}</span>
         {PROVIDER_NAME[provider]}
       </div>
       {!usageEnabled ? (
@@ -654,10 +657,7 @@ export function Widget() {
   const model = useMemo(() => {
     const all = Object.values(sessions);
     const live = all.filter(liveSession);
-    const waiting = live.filter((s) => s.status === "waiting").sort((a, b) => b.updatedAt - a.updatedAt);
-    const running = live
-      .filter((s) => s.status === "active")
-      .sort((a, b) => Number(b.favoriteAt != null) - Number(a.favoriteAt != null) || b.updatedAt - a.updatedAt);
+    const { needsYou: waiting, running, idle } = splitSessions(live);
     const attentionTasks = tasks.filter((t) => t.archivedAt == null && needsYou(t.status)).sort((a, b) => b.updatedAt - a.updatedAt);
     const delegated = tasks.filter((t) => t.archivedAt == null && inFlight(t.status)).sort((a, b) => a.createdAt - b.createdAt);
     const doneRecent = tasks
@@ -669,6 +669,7 @@ export function Widget() {
       live,
       waiting,
       running,
+      idle,
       attentionTasks,
       delegated,
       doneRecent,
@@ -687,18 +688,18 @@ export function Widget() {
     void collapse();
   };
 
-  const sessionRow = (session: SessionRecord, tone: string, sub: string) => {
+  const sessionRow = (session: SessionRecord, tone: string, sub: string, muted = false) => {
     const peers = folderPeers(session.cwd, model.all, tasks, { sessionId: session.sessionId });
     return (
       <button
         key={session.sessionId}
-        className="wg-row"
+        className={muted ? "wg-row wg-row--muted" : "wg-row"}
         title={session.cwd ?? nameOf(session)}
         onClick={() => goSession(session.sessionId)}
       >
         <span className="wg-ico">{sessionClient(session).icon}</span>
         <span className={`wg-dot wg-dot--${tone}`} />
-        {session.favoriteAt != null && <IconStar size={12} filled />}
+        {session.favoriteAt != null && <IconStar size={18} filled />}
         <span className="wg-title">{nameOf(session)}</span>
         {(session.agentsRunning ?? 0) > 0 && (
           <span className="wg-pill wg-pill--agents" title="Subagents running">
@@ -726,7 +727,7 @@ export function Widget() {
   );
 
   const hasRows =
-    model.waiting.length + model.attentionTasks.length + model.running.length + model.delegated.length + model.doneRecent.length > 0;
+    model.waiting.length + model.attentionTasks.length + model.running.length + model.idle.length + model.delegated.length + model.doneRecent.length > 0;
 
   const tone = urgencyTone({ needYou: model.needYou, delegated: model.delegated.length, live: model.live.length });
   const claudeWeek = config.rings.claude ? limits?.claude?.sevenDay ?? null : null;
@@ -750,6 +751,16 @@ export function Widget() {
             Running <span className="wg-sec-n">{model.running.length}</span>
           </div>
           {model.running.map((session) => sessionRow(session, "go", "active"))}
+        </section>
+      )}
+
+      {model.idle.length > 0 && (
+        <section className="wg-sec wg-sec--idle">
+          <div className="wg-sec-h">
+            Idle <span className="wg-sec-n">{model.idle.length}</span>
+          </div>
+          {model.idle.slice(0, IDLE_ROW_LIMIT).map((session) => sessionRow(session, "idle", elapsedLabel(now - session.updatedAt), true))}
+          {model.idle.length > IDLE_ROW_LIMIT && <div className="wg-more">+{model.idle.length - IDLE_ROW_LIMIT} more</div>}
         </section>
       )}
 
@@ -815,16 +826,16 @@ export function Widget() {
         <section className="wgd-panel" onMouseEnter={onPanelEnter} onMouseMove={onPanelEnter} onMouseLeave={onPanelLeave}>
           <header className="wgd-head">
             <span className="wgd-brand">
-              <BrandMark size={15} />
+              <BrandMark size={28} />
             </span>
             <span className="wgd-state">
-              <b>{model.live.length}</b> live
+              <b>{model.live.length - model.idle.length}</b> live
+              {" · "}
+              <b>{model.idle.length}</b> idle
               {" · "}
               <span className={model.needYou > 0 ? "wgd-state-attn" : undefined}>
                 <b>{model.needYou}</b> need you
               </span>
-              {" · "}
-              <b>{model.delegated.length}</b> delegated
             </span>
             <button className="wgd-collapse" onClick={() => void collapse()} title="Collapse" aria-label="Collapse widget">
               <Arrow edge={config.edge} closing />
