@@ -216,15 +216,18 @@ async function applyDock(edge: WidgetEdge, collapsed: boolean, showNow: boolean)
   const win = getCurrentWindow();
   const monitor = await currentMonitorLike();
   const rect = dockRect(edge, collapsed, workAreaOf(monitor), readOffset(edge));
-  await win.setSize(new LogicalSize(rect.width, rect.height));
-  await win.setPosition(new LogicalPosition(rect.x, rect.y));
-  await win.setAlwaysOnTop(true);
-  try {
-    await win.setFocusable(!collapsed);
-  } catch {
-    return monitorKey(monitor);
-  }
-  if (showNow) await win.show();
+  const attempt = async (step: () => Promise<unknown>): Promise<void> => {
+    try {
+      await step();
+    } catch {
+      return;
+    }
+  };
+  await attempt(() => win.setSize(new LogicalSize(rect.width, rect.height)));
+  await attempt(() => win.setPosition(new LogicalPosition(rect.x, rect.y)));
+  await attempt(() => win.setAlwaysOnTop(true));
+  await attempt(() => win.setFocusable(!collapsed));
+  if (showNow) await attempt(() => win.show());
   return monitorKey(monitor);
 }
 

@@ -29,7 +29,7 @@ const expandedSize = (edge: WidgetEdge, area: Rect): { width: number; height: nu
 export function clampOffset(edge: WidgetEdge, area: Rect, offset: number): number {
   const size = collapsedSize(edge);
   const slack = isVertical(edge) ? area.height - size.height : area.width - size.width;
-  const half = Math.max(0, slack) / 2;
+  const half = Math.floor(Math.max(0, slack) / 2);
   return Math.round(clamp(offset, -half, half));
 }
 

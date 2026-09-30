@@ -69,6 +69,18 @@ describe("offsets", () => {
     assert.equal(clampOffset("top", area, 50.4), 50);
   });
 
+  it("never lets the tab cross the work area edge when the slack is odd", () => {
+    const odd: Rect = { x: 0, y: 30, width: 1919, height: 1039 };
+    assert.equal(clampOffset("left", odd, 9999), 453);
+    assert.equal(clampOffset("left", odd, -9999), -453);
+    for (const offset of [-9999, -1, 0, 1, 9999]) {
+      const side = dockRect("left", true, odd, offset);
+      assert.ok(side.y >= odd.y && side.y + side.height <= odd.y + odd.height);
+      const top = dockRect("top", true, odd, offset);
+      assert.ok(top.x >= odd.x && top.x + top.width <= odd.x + odd.width);
+    }
+  });
+
   it("recovers the offset from a dropped window position", () => {
     const dropped = dockRect("right", true, area, 120);
     assert.equal(offsetFromPosition("right", area, { x: dropped.x - 400, y: dropped.y }), 120);

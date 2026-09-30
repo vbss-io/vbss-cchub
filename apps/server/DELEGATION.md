@@ -403,7 +403,7 @@ and tasks), **Delegated** (follow, live log, continue, cancel, notes), **Workspa
 repos, create, delete), **Reports**, and **Settings** (paths, hooks, connections with MCP per
 client and the shell alias, notifications, groups, about). Notifications are per client: Claude Desktop
 spawns a short Claude Code session behind each chat step, so `claude-desktop`, `headless` and `hub` are
-silent by default. The always-on-top widget is unchanged.
+silent by default. The desktop widget is a small tab docked to the left, right or top screen edge that opens into a sessions and usage panel (Settings › Widget).
 
 ## Installers
 
