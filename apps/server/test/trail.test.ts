@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -31,6 +31,7 @@ let bullets;
 if (system.includes("compress the running bullet list")) bullets = ["merged-a", "merged-b"];
 else if (mode === "empty") bullets = [];
 else if (mode === "question") bullets = ["qual repo tem esse arquivo?"];
+else if (mode === "long") bullets = [Array(60).fill("palavra").join(" ")];
 else if (mode === "secret") bullets = ["set password: hunter2hunter2xyz in the env"];
 else if (max === 1) bullets = ["light-" + call];
 else if (max === 3) bullets = ["m" + call + "a", "m" + call + "b"];
@@ -248,7 +249,7 @@ describe("block format and upsert", () => {
     assert.match(block(A, ["x"]), /^<!-- session:aaaaaaaa-1111 START -->\n\n## `aaaaaaaa` · 09:05 → 10:20 · 42 turns\n\n/);
   });
 
-  it("creates, upserts in place and keeps the Hub section last", () => {
+  it("creates, upserts in place and keeps the Hub section last", async () => {
     const dir = mkdtempSync(join(dataDir, "upsert-"));
     const file = join(dir, "2026-09-30.md");
     const header = "---\ntype: fonte\ncreated: 2026-09-30\nupdated: 2026-09-30\ntags: [fonte, session]\n---\n\n# Sessions — 2026-09-30\n";
@@ -263,7 +264,9 @@ describe("block format and upsert", () => {
     assert.equal(readFileSync(file, "utf8"), `${header}\n${block(A, ["first", "again"])}\n\n${block(B, ["second"])}\n`);
 
     sb.appendHubSource(dir, "delegated x\nmultiline", new Date(2026, 8, 30, 9, 7), { dir, unified: true });
+    await sb.whenBrainWritesIdle();
     sb.appendHubSource(dir, "report y", new Date(2026, 8, 30, 9, 8), { dir, unified: true });
+    await sb.whenBrainWritesIdle();
     const withHub = `${header}\n${block(A, ["first", "again"])}\n\n${block(B, ["second"])}\n\n## Hub\n\n- 09:07 · delegated x multiline\n- 09:08 · report y\n`;
     assert.equal(readFileSync(file, "utf8"), withHub);
 
@@ -288,20 +291,23 @@ describe("reference file layout", () => {
   const header = (created: string, updated: string): string =>
     `---\ntype: fonte\ncreated: ${created}\nupdated: ${updated}\ntags: [fonte, session]\n---\n\n# Sessions — ${created}\n`;
 
-  it("new file with one block and two hub lines, blank lines exactly as the reference", () => {
+  it("new file with one block and two hub lines, blank lines exactly as the reference", async () => {
     const dir = mkdtempSync(join(dataDir, "layout-a-"));
     const file = join(dir, "2026-09-30.md");
     sb.upsertSessionBlock(file, A, "2026-09-30", block(A, "first"));
     sb.appendHubSource(dir, "delegated x", new Date(2026, 8, 30, 9, 7), { dir, unified: true });
+    await sb.whenBrainWritesIdle();
     sb.appendHubSource(dir, "report y", new Date(2026, 8, 30, 9, 8), { dir, unified: true });
+    await sb.whenBrainWritesIdle();
     assert.equal(readFileSync(file, "utf8"), `${header("2026-09-30", "2026-09-30")}\n${block(A, "first")}\n\n## Hub\n\n- 09:07 · delegated x\n- 09:08 · report y\n`);
   });
 
-  it("a second block lands after the first and the Hub section stays last", () => {
+  it("a second block lands after the first and the Hub section stays last", async () => {
     const dir = mkdtempSync(join(dataDir, "layout-b-"));
     const file = join(dir, "2026-09-30.md");
     sb.upsertSessionBlock(file, A, "2026-09-30", block(A, "first"));
     sb.appendHubSource(dir, "delegated x", new Date(2026, 8, 30, 9, 7), { dir, unified: true });
+    await sb.whenBrainWritesIdle();
     sb.upsertSessionBlock(file, B, "2026-09-30", block(B, "second"));
     assert.equal(
       readFileSync(file, "utf8"),
@@ -309,14 +315,16 @@ describe("reference file layout", () => {
     );
   });
 
-  it("a file born from a hub line gets the same header and refreshes updated on every write", () => {
+  it("a file born from a hub line gets the same header and refreshes updated on every write", async () => {
     const dir = mkdtempSync(join(dataDir, "layout-c-"));
     const file = join(dir, "2026-09-30.md");
     sb.appendHubSource(dir, "delegated x", new Date(2026, 8, 30, 9, 7), { dir, unified: true });
+    await sb.whenBrainWritesIdle();
     assert.equal(readFileSync(file, "utf8"), `${header("2026-09-30", "2026-09-30")}\n## Hub\n\n- 09:07 · delegated x\n`);
     sb.upsertSessionBlock(file, A, "2026-10-01", block(A, "first"));
     assert.equal(readFileSync(file, "utf8"), `${header("2026-09-30", "2026-10-01")}\n${block(A, "first")}\n\n## Hub\n\n- 09:07 · delegated x\n`);
     sb.appendHubSource(dir, "report y", new Date(2026, 8, 30, 10, 0), { dir, unified: true });
+    await sb.whenBrainWritesIdle();
     assert.match(readFileSync(file, "utf8"), /^---\ntype: fonte\ncreated: 2026-09-30\nupdated: 2026-09-30\n/);
     assert.match(readFileSync(file, "utf8"), /\n## Hub\n\n- 09:07 · delegated x\n- 10:00 · report y\n$/);
   });
@@ -427,12 +435,12 @@ describe("summarization with the fake model", () => {
       required: ["language", "bullets", "redacted"],
       properties: {
         language: { type: "string" },
-        bullets: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 3 },
+        bullets: { type: "array", items: { type: "string", maxLength: 140 }, minItems: 1, maxItems: 3 },
         redacted: { type: "boolean" },
       },
       additionalProperties: false,
     });
-    assert.match(argOf(call, "--system-prompt")!, /1-3 bullets, each <= 100 chars/);
+    assert.match(argOf(call, "--system-prompt")!, /1-3 bullets, each at most 100 characters, one clause, no trailing details/);
     assert.match(call.stdin, /^Session cwd: repo-a\n\nNew turns:\n<user>\ns1111111-aaaa question 0\n<\/user>/);
     assert.match(call.stdin, /<assistant>\ns1111111-aaaa answer 1\n\[tool Bash\]\n<\/assistant>/);
     assert.equal(call.env.HUB_SKIP, "1");
@@ -551,8 +559,29 @@ describe("summarization with the fake model", () => {
     await summarize(id, "session_end");
     const call = calls()[baseline]!;
     assert.equal(argOf(call, "--system-prompt"), "CUSTOM SYSTEM PROMPT");
-    assert.equal(call.argv.includes("--model"), false);
+    assert.equal(argOf(call, "--model"), "haiku");
     store.updateSettings({ trail: { prompt: null, model: "haiku" } });
+  });
+
+  it("hard-clips over-long bullets at a word boundary and sends a per-bullet maxLength", async () => {
+    const id = "sGGGGGGG-1212";
+    newSession(id, 6);
+    setMode("long");
+    const baseline = calls().length;
+    await summarize(id, "session_end");
+    setMode("ok");
+    const call = calls()[baseline]!;
+    const items = (JSON.parse(argOf(call, "--json-schema")!) as { properties: { bullets: { items: { maxLength: number } } } }).properties.bullets.items;
+    assert.equal(items.maxLength, 140);
+    const [bullet] = sb.readBlockBullets(readFileSync(trailFile(), "utf8"), id);
+    assert.ok(bullet!.length <= 161, String(bullet!.length));
+    assert.ok(bullet!.endsWith("…"));
+    assert.ok(bullet!.length > 100);
+    assert.equal(bullet!.slice(0, -1).split(" ").every((word) => word === "palavra"), true);
+    assert.equal(trail.clipBullet("short one", 160), "short one");
+    assert.equal(trail.clipBullet("x".repeat(300), 160), `${"x".repeat(160)}…`);
+    assert.equal(trail.TRAIL_LEVELS.high.schemaChars, 200);
+    assert.equal(trail.TRAIL_LEVELS.high.clipChars, 220);
   });
 
   it("uses the level prompt and schema for light and high", async () => {
@@ -564,7 +593,7 @@ describe("summarization with the fake model", () => {
     let baseline = calls().length;
     await summarize(light, "session_end");
     let call = calls()[baseline]!;
-    assert.match(argOf(call, "--system-prompt")!, /Exactly 1 bullet, <= 100 chars/);
+    assert.match(argOf(call, "--system-prompt")!, /Exactly 1 bullet, at most 100 characters, one clause, no trailing details/);
     assert.equal((JSON.parse(argOf(call, "--json-schema")!) as { properties: { bullets: { maxItems: number; minItems: number } } }).properties.bullets.maxItems, 1);
     assert.equal((JSON.parse(argOf(call, "--json-schema")!) as { properties: { bullets: { minItems: number } } }).properties.bullets.minItems, 1);
     assert.match(argOf(call, "--system-prompt")!, /Always return exactly ONE bullet: when the window had no concrete outcome, describe what was being worked on, phrased as in-progress/);
@@ -704,14 +733,16 @@ describe("unified hub section", () => {
     store.updateSettings({ secondBrainRoot: brain, features: { trail: true }, trail: { hubEvents: true, dir: null } });
   });
 
-  it("writes hub events under the trailing Hub section instead of fontes/hub", () => {
+  it("writes hub events under the trailing Hub section instead of fontes/hub", async () => {
     const file = sb.appendHubSource(brain, "task completed · vbss · fix", new Date());
+    await sb.whenBrainWritesIdle();
     assert.equal(file, trailFile());
     assert.equal(existsSync(sb.hubSourcePath(brain, today())), false);
     const content = readFileSync(trailFile(), "utf8");
     assert.match(content, /\n## Hub\n\n- \d\d:\d\d · task completed · vbss · fix\n$/);
     assert.equal(content.match(/^## Hub$/gm)?.length, 1);
     sb.appendHubSource(brain, "report note · hello", new Date());
+    await sb.whenBrainWritesIdle();
     const status = trail.trailStatus();
     assert.equal(status.today.hubLines, 2);
     assert.equal(status.today.exists, true);
@@ -751,6 +782,55 @@ describe("unified hub section", () => {
     const off = sb.appendHubSource(brain, "off line", new Date());
     assert.equal(off, sb.hubSourcePath(brain, today()));
     assert.equal(sb.brainToday(brain).sessionsPath, null);
+  });
+});
+
+describe("non-blocking brain writes", () => {
+  it("a foreign lock delays but never loses hub lines and leaves the event loop free", async () => {
+    store.updateSettings({ secondBrainRoot: brain, features: { trail: true }, trail: { hubEvents: true, dir: "locktrail" } });
+    const dir = join(brain, "locktrail");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${today()}.md`);
+    const lock = `${file}.lock`;
+    writeFileSync(lock, "999999");
+    const started = performance.now();
+    const first = sb.appendHubSource(brain, "locked one", new Date());
+    const second = sb.appendHubSource(brain, "locked two", new Date());
+    assert.ok(performance.now() - started < 100);
+    assert.equal(first, file);
+    assert.equal(second, file);
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks++;
+    }, 20);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    clearInterval(timer);
+    assert.ok(ticks >= 40, `event loop ticked ${ticks} times`);
+    assert.equal(existsSync(file), false);
+    rmSync(lock);
+    await sb.whenBrainWritesIdle();
+    const content = readFileSync(file, "utf8");
+    assert.ok(content.indexOf("locked one") > 0 && content.indexOf("locked one") < content.indexOf("locked two"));
+    assert.equal(existsSync(lock), false);
+    const brainNow = sb.brainToday(brain);
+    assert.equal(brainNow.sessionsPath, file);
+    assert.match(brainNow.hub ?? "", /locked one/);
+    assert.match(brainNow.hub ?? "", /locked two/);
+    store.updateSettings({ trail: { dir: null } });
+  });
+
+  it("takes over a stale foreign lock", async () => {
+    store.updateSettings({ trail: { dir: "staletrail" } });
+    const dir = join(brain, "staletrail");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${today()}.md`);
+    writeFileSync(`${file}.lock`, "999999");
+    const old = new Date(Date.now() - 6 * 60_000);
+    utimesSync(`${file}.lock`, old, old);
+    sb.appendHubSource(brain, "after stale", new Date());
+    await sb.whenBrainWritesIdle();
+    assert.match(readFileSync(file, "utf8"), /after stale/);
+    store.updateSettings({ trail: { dir: null } });
   });
 });
 
@@ -869,6 +949,26 @@ describe("trail HTTP routes", () => {
     assert.match(brainNow.hub, /hello from the hub/);
     assert.match(brainNow.sessions, /http-s1/);
     assert.equal(existsSync(join(box.brain, "fontes", "hub", `${sb.localDate()}.md`)), false);
+  });
+
+  it("answers reports and status without waiting on a foreign lock and keeps the hub line", async () => {
+    const lock = `${trailPath()}.lock`;
+    writeFileSync(lock, "999999");
+    const started = performance.now();
+    const report = await http("POST", "/delegation/reports", { text: "written under a lock", kind: "note", source: "test" });
+    const reportMs = performance.now() - started;
+    assert.equal(report.status, 201);
+    assert.ok(reportMs < 200, `report took ${reportMs} ms`);
+    const statusStarted = performance.now();
+    assert.equal((await http("GET", "/delegation/trail")).status, 200);
+    assert.ok(performance.now() - statusStarted < 200);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.doesNotMatch(readFileSync(trailPath(), "utf8"), /written under a lock/);
+    rmSync(lock);
+    await waitFor(async () => (readFileSync(trailPath(), "utf8").includes("written under a lock") ? true : null), 10000);
+    const brainNow = (await http("GET", "/delegation/brain/today")).json as { hub: string };
+    assert.match(brainNow.hub, /written under a lock/);
+    assert.equal(existsSync(lock), false);
   });
 
   it("flushes one session or all live sessions past the throttle", async () => {

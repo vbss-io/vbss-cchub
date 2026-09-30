@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, isAbsolute, join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { config } from "./config.js";
 import { getSession, getTrailState, listSessions, saveTrailState, type TrailStateRecord } from "./db.js";
 import { getSettings } from "./delegation-store.js";
@@ -14,8 +14,7 @@ import {
   readBlockBullets,
   registerTrailResolver,
   trailFilePath,
-  upsertSessionBlock,
-  withFileLockSync,
+  queueSessionBlock,
 } from "./second-brain.js";
 import { broadcast } from "./sse.js";
 import type { SessionRecord } from "./types.js";
@@ -31,15 +30,18 @@ export interface TrailLevel {
   maxBullets: number;
   cap: number | null;
   maxWindows: number;
+  schemaChars: number;
+  clipChars: number;
 }
 
 export const TRAIL_LEVELS: Record<TrailDetail, TrailLevel> = {
-  light: { window: 120, throttleMinutes: 30, throttleTurns: 20, everyStop: false, minBullets: 1, maxBullets: 1, cap: 5, maxWindows: 3 },
-  medium: { window: 80, throttleMinutes: 10, throttleTurns: 5, everyStop: false, minBullets: 1, maxBullets: 3, cap: null, maxWindows: 3 },
-  high: { window: 60, throttleMinutes: 0, throttleTurns: 0, everyStop: true, minBullets: 1, maxBullets: 6, cap: null, maxWindows: 6 },
+  light: { window: 120, throttleMinutes: 30, throttleTurns: 20, everyStop: false, minBullets: 1, maxBullets: 1, cap: 5, maxWindows: 3, schemaChars: 140, clipChars: 160 },
+  medium: { window: 80, throttleMinutes: 10, throttleTurns: 5, everyStop: false, minBullets: 1, maxBullets: 3, cap: null, maxWindows: 3, schemaChars: 140, clipChars: 160 },
+  high: { window: 60, throttleMinutes: 0, throttleTurns: 0, everyStop: true, minBullets: 1, maxBullets: 6, cap: null, maxWindows: 6, schemaChars: 200, clipChars: 220 },
 };
 
 export const TRAIL_TURN_CLIP = 4000;
+export const TRAIL_FALLBACK_MODEL = "haiku";
 export const TRAIL_MODEL_TIMEOUT_MS = 90 * 1000;
 export const TRAIL_MAX_BUDGET_USD = "0.10";
 const HUB_RUN_CLIENTS = new Set(["hub", "share", "headless"]);
@@ -62,7 +64,7 @@ const SYSTEM_PROMPTS: Record<TrailDetail, string> = {
     "Rules:",
     ...numbered([
       LANGUAGE_RULE,
-      "Exactly 1 bullet, <= 100 chars, plain text. Always return exactly ONE bullet: when the window had no concrete outcome, describe what was being worked on, phrased as in-progress (e.g. 'investigando o bug de timezone').",
+      "Exactly 1 bullet, at most 100 characters, one clause, no trailing details, plain text. Always return exactly ONE bullet: when the window had no concrete outcome, describe what was being worked on, phrased as in-progress (e.g. 'investigando o bug de timezone').",
       "Prefer concrete outcomes: finished fixes, milestones, deliverables, decisions, root causes, deploys.",
       VERB_RULE,
       REPO_RULE,
@@ -77,7 +79,7 @@ const SYSTEM_PROMPTS: Record<TrailDetail, string> = {
     "Rules:",
     ...numbered([
       LANGUAGE_RULE,
-      "1-3 bullets, each <= 100 chars, plain text. Always return at least ONE bullet.",
+      "1-3 bullets, each at most 100 characters, one clause, no trailing details, plain text. Always return at least ONE bullet.",
       "Prefer concrete outcomes: finished fixes, milestones, deliverables, decisions, root causes, deploys.",
       "If the window had NO concrete outcome (only reading/exploration/planning/intermediate steps), return exactly ONE bullet describing what was being worked on, phrased as in-progress, e.g. 'investigando o bug de timezone', 'explorando a config do hook'.",
       VERB_RULE,
@@ -112,7 +114,7 @@ const REWRITE_PROMPT = (cap: number): string =>
     "Rules:",
     ...numbered([
       LANGUAGE_RULE.replace("user's prompts", "bullets"),
-      `Rewrite everything into at most ${cap} bullets, chronological, each <= 100 chars, plain text. Always return at least ONE bullet.`,
+      `Rewrite everything into at most ${cap} bullets, chronological, each at most 100 characters, one clause, no trailing details, plain text. Always return at least ONE bullet.`,
       "Merge related bullets and keep the concrete outcomes: finished fixes, milestones, deliverables, decisions, root causes, deploys.",
       REDACT_RULE,
       JSON_RULE,
@@ -123,13 +125,13 @@ export function systemPromptFor(settings: TrailFeatureSettings): string {
   return settings.prompt ?? SYSTEM_PROMPTS[settings.detail];
 }
 
-export function schemaFor(minBullets: number, maxBullets: number): Record<string, unknown> {
+export function schemaFor(minBullets: number, maxBullets: number, maxChars: number): Record<string, unknown> {
   return {
     type: "object",
     required: ["language", "bullets", "redacted"],
     properties: {
       language: { type: "string" },
-      bullets: { type: "array", items: { type: "string" }, minItems: minBullets, maxItems: maxBullets },
+      bullets: { type: "array", items: { type: "string", maxLength: maxChars }, minItems: minBullets, maxItems: maxBullets },
       redacted: { type: "boolean" },
     },
     additionalProperties: false,
@@ -330,7 +332,7 @@ function runClaude(args: string[], stdin: string): Promise<ModelOutcome> {
   });
 }
 
-interface ModelPayload {
+export interface ModelPayload {
   language: string;
   bullets: string[];
   redacted: boolean;
@@ -375,8 +377,9 @@ async function callModel(
   model: string | null,
 ): Promise<ModelPayload | null> {
   const args = ["--print"];
-  if (model) args.push("--model", model);
   args.push(
+    "--model",
+    model ?? TRAIL_FALLBACK_MODEL,
     "--setting-sources",
     "",
     "--strict-mcp-config",
@@ -429,19 +432,26 @@ export function rewritePrompt(existing: string[], added: string[]): string {
   ].join("\n");
 }
 
-interface CleanBullets {
+export interface CleanBullets {
   bullets: string[];
   redacted: boolean;
 }
 
-function cleanBullets(payload: ModelPayload, limit: number): CleanBullets {
+export function clipBullet(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+}
+
+export function cleanBullets(payload: ModelPayload, limit: number, clipChars: number): CleanBullets {
   let redacted = payload.redacted;
   const bullets: string[] = [];
   for (const bullet of payload.bullets) {
     const result = redact(bullet.replace(/\s*\n\s*/g, " "));
     if (result.redacted) redacted = true;
     const text = result.text.trim();
-    if (text.length > 0) bullets.push(text);
+    if (text.length > 0) bullets.push(clipBullet(text, clipChars));
   }
   return { bullets: bullets.slice(0, limit), redacted };
 }
@@ -504,7 +514,7 @@ async function summarizeSession(job: TrailJob): Promise<void> {
   }
   let anyRedacted = working.some((bullet) => bullet.includes("[REDACTED]"));
   const system = systemPromptFor(settings.trail);
-  const schema = schemaFor(rules.minBullets, rules.maxBullets);
+  const schema = schemaFor(rules.minBullets, rules.maxBullets, rules.schemaChars);
   let processedThrough = startFrom;
   let successfulWindows = 0;
   let brokeEarly = false;
@@ -520,16 +530,16 @@ async function summarizeSession(job: TrailJob): Promise<void> {
       brokeEarly = true;
       break;
     }
-    const added = cleanBullets(payload, rules.maxBullets);
+    const added = cleanBullets(payload, rules.maxBullets, rules.clipChars);
     let next = working.concat(added.bullets);
     let redactedNow = added.redacted;
     if (rules.cap !== null && next.length > rules.cap) {
-      const rewritten = await callModel(REWRITE_PROMPT(rules.cap), rewritePrompt(working, added.bullets), schemaFor(1, rules.cap), settings.trail.model);
+      const rewritten = await callModel(REWRITE_PROMPT(rules.cap), rewritePrompt(working, added.bullets), schemaFor(1, rules.cap, rules.schemaChars), settings.trail.model);
       if (!rewritten) {
         brokeEarly = true;
         break;
       }
-      const compact = cleanBullets(rewritten, rules.cap);
+      const compact = cleanBullets(rewritten, rules.cap, rules.clipChars);
       next = compact.bullets.length > 0 ? compact.bullets : next.slice(-rules.cap);
       redactedNow = redactedNow || compact.redacted;
     }
@@ -556,8 +566,7 @@ async function summarizeSession(job: TrailJob): Promise<void> {
       redacted: anyRedacted,
       partialThrough: incomplete ? processedThrough : 0,
     });
-    mkdirSync(dirname(file), { recursive: true });
-    withFileLockSync(file, () => upsertSessionBlock(file, job.sessionId, today, block));
+    await queueSessionBlock(file, job.sessionId, today, block);
   }
   checkpoint(processedThrough, working.length);
   broadcast("trail", { date: today, sessionId: job.sessionId, bullets: working.length });

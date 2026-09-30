@@ -350,7 +350,7 @@ a small model summarizes the new turns into bullets in one file per day, `<trail
 Hub runs and share forks are skipped. `trail.detail`: `light` (120-turn windows, 30 min or 20 turns, 1 bullet
 per window, at most 5 per session and day, rewritten when the cap is hit), `medium` (80 turns, 10 min or 5
 turns, 1-3 bullets) or `high` (60 turns, every stop, 3-6 bullets with files and commands). `trail.model`
-(default `haiku`, `null` for the CLI default), `trail.prompt` (replaces the level prompt), `trail.hubEvents`
+(default `haiku`, `null` also means `haiku`), `trail.prompt` (replaces the level prompt), `trail.hubEvents`
 (default `true`): delegations, reports and share asks go to a trailing `## Hub` section of the same file
 instead of `fontes/hub/<date>.md`, and `GET /brain/today` serves the file as `sessions` and that section as
 `hub`. A session seen for the first time is summarized from its latest window only, and a trigger runs at most 3 windows (6 in `high`). One serial worker runs the model through `HUB_CLAUDE_BIN` (secrets redacted, failed windows retried
