@@ -459,7 +459,8 @@ export function SettingsView(props: Props) {
             <span>Second brain (Obsidian vault)</span>
             <input className="in" placeholder="optional: vault root" value={brain} onChange={(event) => setBrain(event.target.value)} disabled={!enabled} />
             <small>
-              When set, every delegation, finished run and report is appended to <code>fontes/hub/&lt;date&gt;.md</code> inside the vault, and{" "}
+              When set, every delegation, finished run and report is appended to the day's Session trail file when that feature is on, otherwise to{" "}
+              <code>fontes/hub/&lt;date&gt;.md</code> inside the vault, and{" "}
               <code>hub_brain_today</code> can read the day's diary. Leave empty to keep the hub away from your notes.
             </small>
           </label>
@@ -794,6 +795,7 @@ export function SettingsView(props: Props) {
                   </label>
                 ))}
               </div>
+              <small>Light is what most people want: about 5 key points per session per day.</small>
             </div>
             <label className="field">
               <span>Model</span>

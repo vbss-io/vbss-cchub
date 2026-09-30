@@ -53,12 +53,13 @@ export function carryOverFromYesterday(
 }
 
 export function mergeTrailIntoSummary(current: string, bullets: string[], max = 3): string {
+  const present = new Set(current.split("\n").map((line) => line.trim()));
   const picked = bullets
     .map((bullet) => bullet.trim())
-    .filter((bullet) => bullet.length > 0)
-    .slice(0, max)
-    .join("\n");
+    .filter((bullet) => bullet.length > 0 && !present.has(bullet))
+    .slice(0, max);
+  if (picked.length === 0) return current;
   const base = current.trim();
-  if (!picked) return current;
-  return base ? `${base}\n${picked}` : picked;
+  const joined = picked.join("\n");
+  return base ? `${base}\n${joined}` : joined;
 }
