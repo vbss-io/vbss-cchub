@@ -86,4 +86,5 @@ export const config = {
   codexHome,
   codexConfigPath: join(codexHome, "config.toml"),
   codexSessionsDir: join(codexHome, "sessions"),
+  claudeProjectsDir: process.env.HUB_CLAUDE_PROJECTS_DIR ?? join(homeDir, ".claude", "projects"),
 } as const;
