@@ -54,6 +54,13 @@ export function timeAgo(ms: number, now: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+export function sourceNote(source: string | undefined): string | null {
+  if (source === "api" || source === "live") return "live";
+  if (source === "cache") return "from local cache";
+  if (source === "rollout") return "from local session";
+  return null;
+}
+
 export function sharePercent(share: number): string {
   if (!Number.isFinite(share) || share <= 0) return "0";
   return String(Math.round(Math.min(1, share) * 100));

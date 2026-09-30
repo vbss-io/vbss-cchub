@@ -15,7 +15,7 @@ import {
   type UsageSessionRow,
 } from "../delegation";
 import type { SessionRecord } from "../types";
-import { CONTEXT_WARN, contextTone, dayBarHeights, sharePercent, shortProject, sortRows, timeAgo, type SortDirection } from "../usage-format";
+import { CONTEXT_WARN, contextTone, dayBarHeights, sharePercent, shortProject, sortRows, sourceNote, timeAgo, type SortDirection } from "../usage-format";
 import { clampPercent, formatTokens, resetCountdown, ringTone } from "../widget-layout";
 
 export type UsageEvent = "usage" | "limits";
@@ -80,12 +80,23 @@ interface GaugeProps {
   label: string;
   percent: number;
   resetsAt: number | null;
+  reset?: boolean;
   now: number;
 }
 
-function Gauge({ label, percent, resetsAt, now }: GaugeProps) {
+function Gauge({ label, percent, resetsAt, reset, now }: GaugeProps) {
+  if (reset) {
+    return (
+      <div className="usage__gauge usage__gauge--reset">
+        <span className="usage__gauge-l">{label}</span>
+        <span className="usage__meter" />
+        <span className="usage__gauge-v">reset</span>
+        <span className="usage__gauge-r" />
+      </div>
+    );
+  }
   const shown = clampPercent(percent);
-  const reset = resetCountdown(resetsAt, now);
+  const countdown = resetCountdown(resetsAt, now);
   return (
     <div className="usage__gauge">
       <span className="usage__gauge-l">{label}</span>
@@ -93,74 +104,92 @@ function Gauge({ label, percent, resetsAt, now }: GaugeProps) {
         <span className={`usage__meter-fill usage__meter-fill--${ringTone(percent)}`} style={{ width: `${shown}%` }} />
       </span>
       <span className="usage__gauge-v">{Math.round(shown)}%</span>
-      <span className="usage__gauge-r">{reset ? `resets in ${reset}` : ""}</span>
+      <span className="usage__gauge-r">{countdown ? `resets in ${countdown}` : ""}</span>
     </div>
   );
 }
 
 interface FreshnessProps {
-  stale: boolean | undefined;
+  source: string | undefined;
   fetchedAt: number | null | undefined;
-  cached: boolean;
   error: string | null | undefined;
   now: number;
 }
 
-function Freshness({ stale, fetchedAt, cached, error, now }: FreshnessProps) {
+function Freshness({ source, fetchedAt, error, now }: FreshnessProps) {
+  const note = sourceNote(source);
   return (
     <>
-      {stale && fetchedAt != null && <span className="usage__note">as of {timeAgo(fetchedAt, now)}</span>}
-      {cached && <span className="usage__note">from local cache</span>}
-      {error && <span className="usage__warn">{error}</span>}
+      {source !== "none" && fetchedAt != null && <span className="usage__note">as of {timeAgo(fetchedAt, now)}</span>}
+      {note && <span className="usage__note">{note}</span>}
+      {error && source !== "none" && <span className="usage__warn">{error}</span>}
     </>
   );
 }
 
+function NoData({ message }: { message: string | null | undefined }) {
+  return <p className="usage__warn">{message ?? ""}</p>;
+}
+
 function ClaudeCard({ data, now }: { data: ClaudeLimits; now: number }) {
+  const none = data.source === "none";
   return (
     <section className="usage__card">
       <header className="usage__card-h">
         <ProviderLabel provider="claude" />
-        <Freshness stale={data.stale} fetchedAt={data.fetchedAt} cached={data.source === "cache"} error={data.error} now={now} />
+        <Freshness source={data.source} fetchedAt={data.fetchedAt} error={data.error} now={now} />
       </header>
-      <Gauge label="5 h" percent={data.fiveHour.utilization} resetsAt={data.fiveHour.resetsAt} now={now} />
-      <Gauge label="7 d" percent={data.sevenDay.utilization} resetsAt={data.sevenDay.resetsAt} now={now} />
-      {data.models.length > 0 && (
-        <div className="usage__chips">
-          {data.models.map((model) => {
-            const reset = resetCountdown(model.resetsAt, now);
-            return (
-              <span
-                key={model.name}
-                className={`chip usage__tone usage__tone--${ringTone(model.utilization)}`}
-                title={reset ? `${model.name} resets in ${reset}` : model.name}
-              >
-                {model.name} {Math.round(clampPercent(model.utilization))}%
-              </span>
-            );
-          })}
-        </div>
-      )}
-      {data.extra?.enabled && (
-        <div className="usage__note">
-          Extra usage on
-          {data.extra.utilization != null && Number.isFinite(data.extra.utilization) ? `: ${Math.round(clampPercent(data.extra.utilization))}% used` : ""}
-        </div>
+      {none ? (
+        <NoData message={data.error || "no Claude Code login found"} />
+      ) : (
+        <>
+          <Gauge label="5 h" percent={data.fiveHour.utilization} resetsAt={data.fiveHour.resetsAt} reset={data.fiveHour.reset} now={now} />
+          <Gauge label="7 d" percent={data.sevenDay.utilization} resetsAt={data.sevenDay.resetsAt} reset={data.sevenDay.reset} now={now} />
+          {data.models.length > 0 && (
+            <div className="usage__chips">
+              {data.models.map((model) => {
+                const countdown = resetCountdown(model.resetsAt, now);
+                return (
+                  <span
+                    key={model.name}
+                    className={`chip usage__tone usage__tone--${ringTone(model.utilization)}`}
+                    title={countdown ? `${model.name} resets in ${countdown}` : model.name}
+                  >
+                    {model.name} {Math.round(clampPercent(model.utilization))}%
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {data.extra?.enabled && (
+            <div className="usage__note">
+              Extra usage on
+              {data.extra.utilization != null && Number.isFinite(data.extra.utilization) ? `: ${Math.round(clampPercent(data.extra.utilization))}% used` : ""}
+            </div>
+          )}
+        </>
       )}
     </section>
   );
 }
 
 function CodexCard({ data, now }: { data: CodexLimits; now: number }) {
+  const none = data.source === "none";
   return (
     <section className="usage__card">
       <header className="usage__card-h">
         <ProviderLabel provider="codex" />
         {data.planType && <span className="chip">{data.planType}</span>}
-        <Freshness stale={data.stale} fetchedAt={data.fetchedAt} cached={data.source === "rollout"} error={data.error} now={now} />
+        <Freshness source={data.source} fetchedAt={data.fetchedAt} error={data.error} now={now} />
       </header>
-      <Gauge label="5 h" percent={data.primary.usedPercent} resetsAt={data.primary.resetsAt} now={now} />
-      <Gauge label="7 d" percent={data.secondary.usedPercent} resetsAt={data.secondary.resetsAt} now={now} />
+      {none ? (
+        <NoData message={data.error || "no Codex session data found"} />
+      ) : (
+        <>
+          <Gauge label="5 h" percent={data.primary.usedPercent} resetsAt={data.primary.resetsAt} reset={data.primary.reset} now={now} />
+          <Gauge label="7 d" percent={data.secondary.usedPercent} resetsAt={data.secondary.resetsAt} reset={data.secondary.reset} now={now} />
+        </>
+      )}
     </section>
   );
 }
@@ -171,10 +200,11 @@ interface LimitsPanelProps {
   busy: boolean;
   error: string | null;
   now: number;
+  refreshedAt: number | null;
   onRefresh: () => void;
 }
 
-function LimitsPanel({ enabled, limits, busy, error, now, onRefresh }: LimitsPanelProps) {
+function LimitsPanel({ enabled, limits, busy, error, now, refreshedAt, onRefresh }: LimitsPanelProps) {
   if (!enabled) {
     return (
       <section className="panel">
@@ -188,7 +218,7 @@ function LimitsPanel({ enabled, limits, busy, error, now, onRefresh }: LimitsPan
       <div className="usage__panel-h">
         <h3>Plan limits</h3>
         <span className="spacer" />
-        {limits && limits.updatedAt != null && <span className="muted small">checked {timeAgo(limits.updatedAt, now)}</span>}
+        {refreshedAt != null && <span className="muted small">refreshed {timeAgo(refreshedAt, now)}</span>}
         <button type="button" className="act" disabled={busy || limits === null} onClick={onRefresh}>
           {busy ? "Refreshing..." : "Refresh"}
         </button>
@@ -480,6 +510,7 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
   const [limits, setLimits] = useState<LimitsSnapshot | null | undefined>(undefined);
   const [limitsBusy, setLimitsBusy] = useState(false);
   const [limitsError, setLimitsError] = useState<string | null>(null);
+  const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const requestId = useRef(0);
 
@@ -545,6 +576,7 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
     setLimitsError(null);
     try {
       setLimits(await refreshLimits());
+      setRefreshedAt(Date.now());
     } catch (error) {
       setLimitsError(errorMessage(error));
     } finally {
@@ -580,7 +612,7 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
         {report && <span className="muted small">scanned {timeAgo(report.to, now)}</span>}
       </div>
 
-      <LimitsPanel enabled={limitsEnabled} limits={limits} busy={limitsBusy} error={limitsError} now={now} onRefresh={() => void refresh()} />
+      <LimitsPanel enabled={limitsEnabled} limits={limits} busy={limitsBusy} error={limitsError} now={now} refreshedAt={refreshedAt} onRefresh={() => void refresh()} />
 
       {reportError && <p className="error">{missingHub ? "Usage needs a newer hub." : `Could not load usage: ${reportError}`}</p>}
       {!report && !reportError && <p className="hint">Scanning transcripts...</p>}

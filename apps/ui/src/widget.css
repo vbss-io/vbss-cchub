@@ -370,6 +370,15 @@ html.widget-window #root {
   font-size: 11px;
 }
 
+.wgd-note--warn {
+  color: var(--pend);
+}
+
+.wgd-gauge-v--muted {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .wgd-gauge {
   display: grid;
   grid-template-columns: 26px minmax(0, 1fr) 34px 78px;

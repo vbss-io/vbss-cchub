@@ -909,6 +909,15 @@ export function SettingsView(props: Props) {
               />
               Codex (from the local Codex session files)
             </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings.limits?.codexLive ?? false}
+                disabled={!enabled}
+                onChange={(event) => void props.onSaveSettings({ limits: { codexLive: event.target.checked } })}
+              />
+              Codex live (asks the Codex app-server for the account-wide numbers; otherwise the last local session snapshot)
+            </label>
             <label className="field">
               <span>Refresh every {settings.limits?.refreshMinutes ?? 5} minutes</span>
               <input

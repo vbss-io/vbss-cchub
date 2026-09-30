@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { UsageDay, UsageTotals } from "./delegation";
-import { contextTone, dayBarHeights, sharePercent, shortProject, sortRows, timeAgo } from "./usage-format";
+import { contextTone, dayBarHeights, sharePercent, shortProject, sortRows, sourceNote, timeAgo } from "./usage-format";
 
 const totals = (read: number): UsageTotals => ({ read, fresh: 0, cacheRead: 0, cacheWrite: 0, output: 0, messages: 0 });
 const day = (name: string, claude: number, codex: number): UsageDay => ({ day: name, claude: totals(claude), codex: totals(codex) });
@@ -66,4 +66,13 @@ test("shortProject prefers the cwd basename and falls back to the encoded folder
   assert.equal(shortProject("C--Users-vbss-Documentos-Projetos--workspaces-sn-equatorial", null), "sn-equatorial");
   assert.equal(shortProject("C--Users-vbss-Documentos-Projetos-VBSS-vbss-gameficare-hub"), "VBSS-vbss-gameficare-hub");
   assert.equal(shortProject("te"), "te");
+});
+
+test("sourceNote labels live, cache and local session sources", () => {
+  assert.equal(sourceNote("api"), "live");
+  assert.equal(sourceNote("live"), "live");
+  assert.equal(sourceNote("cache"), "from local cache");
+  assert.equal(sourceNote("rollout"), "from local session");
+  assert.equal(sourceNote("none"), null);
+  assert.equal(sourceNote(undefined), null);
 });

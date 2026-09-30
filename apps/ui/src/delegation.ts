@@ -93,6 +93,7 @@ export interface WidgetSettings {
 export interface LimitsSettings {
   claude: boolean;
   codex: boolean;
+  codexLive: boolean;
   refreshMinutes: number;
 }
 
@@ -251,16 +252,17 @@ export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily
 export interface ClaudeLimitWindow {
   utilization: number;
   resetsAt: number | null;
+  reset?: boolean;
 }
 
 export interface CodexLimitWindow {
   usedPercent: number;
   resetsAt: number | null;
-  reset?: string | null;
+  reset?: boolean;
 }
 
 export interface ClaudeLimits {
-  source?: "api" | "cache";
+  source?: "api" | "cache" | "none";
   fetchedAt?: number | null;
   stale?: boolean;
   fiveHour: ClaudeLimitWindow;
@@ -271,7 +273,7 @@ export interface ClaudeLimits {
 }
 
 export interface CodexLimits {
-  source?: "rollout" | "live";
+  source?: "rollout" | "live" | "none";
   fetchedAt?: number | null;
   stale?: boolean;
   primary: CodexLimitWindow;
