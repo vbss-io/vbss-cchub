@@ -279,12 +279,23 @@ interface GaugeProps {
   label: string;
   percent: number;
   resetsAt: number | null;
+  reset?: boolean;
   now: number;
 }
 
-function Gauge({ label, percent, resetsAt, now }: GaugeProps) {
+function Gauge({ label, percent, resetsAt, reset, now }: GaugeProps) {
+  if (reset) {
+    return (
+      <div className="wgd-gauge">
+        <span className="wgd-gauge-l">{label}</span>
+        <span className="wgd-bar" />
+        <span className="wgd-gauge-v wgd-gauge-v--muted">reset</span>
+        <span className="wgd-gauge-r" />
+      </div>
+    );
+  }
   const shown = clampPercent(percent);
-  const reset = resetCountdown(resetsAt, now);
+  const countdown = resetCountdown(resetsAt, now);
   return (
     <div className="wgd-gauge">
       <span className="wgd-gauge-l">{label}</span>
@@ -292,7 +303,7 @@ function Gauge({ label, percent, resetsAt, now }: GaugeProps) {
         <span className={`wgd-bar-fill wgd-bar-fill--${ringTone(percent)}`} style={{ width: `${shown}%` }} />
       </span>
       <span className="wgd-gauge-v">{Math.round(shown)}%</span>
-      <span className="wgd-gauge-r">{reset ? `resets ${reset}` : ""}</span>
+      <span className="wgd-gauge-r">{countdown ? `resets ${countdown}` : ""}</span>
     </div>
   );
 }
@@ -353,10 +364,14 @@ function ProviderCard({ provider, usageEnabled, usage, limitsEnabled, limits, no
         <div className="wgd-note">Loading limits...</div>
       ) : limits === null ? (
         <div className="wgd-note">Limits need a newer hub.</div>
+      ) : claude?.source === "none" ? (
+        <div className="wgd-note wgd-note--warn">{claude.error || "no Claude Code login found"}</div>
+      ) : codex?.source === "none" ? (
+        <div className="wgd-note wgd-note--warn">{codex.error || "no Codex session data found"}</div>
       ) : claude ? (
         <>
-          <Gauge label="5 h" percent={claude.fiveHour.utilization} resetsAt={claude.fiveHour.resetsAt} now={now} />
-          <Gauge label="7 d" percent={claude.sevenDay.utilization} resetsAt={claude.sevenDay.resetsAt} now={now} />
+          <Gauge label="5 h" percent={claude.fiveHour.utilization} resetsAt={claude.fiveHour.resetsAt} reset={claude.fiveHour.reset} now={now} />
+          <Gauge label="7 d" percent={claude.sevenDay.utilization} resetsAt={claude.sevenDay.resetsAt} reset={claude.sevenDay.reset} now={now} />
           {claude.models.length > 0 && (
             <div className="wgd-models">
               {claude.models.map((model) => (
@@ -369,8 +384,8 @@ function ProviderCard({ provider, usageEnabled, usage, limitsEnabled, limits, no
         </>
       ) : codex ? (
         <>
-          <Gauge label="5 h" percent={codex.primary.usedPercent} resetsAt={codex.primary.resetsAt} now={now} />
-          <Gauge label="7 d" percent={codex.secondary.usedPercent} resetsAt={codex.secondary.resetsAt} now={now} />
+          <Gauge label="5 h" percent={codex.primary.usedPercent} resetsAt={codex.primary.resetsAt} reset={codex.primary.reset} now={now} />
+          <Gauge label="7 d" percent={codex.secondary.usedPercent} resetsAt={codex.secondary.resetsAt} reset={codex.secondary.reset} now={now} />
         </>
       ) : (
         <div className="wgd-note">Limits are not tracked for {PROVIDER_NAME[provider]}.</div>

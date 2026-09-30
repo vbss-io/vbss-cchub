@@ -4199,6 +4199,11 @@ h6.md__h {
   overflow: hidden;
 }
 
+.usage__gauge--reset .usage__gauge-v {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .usage__meter-fill {
   display: block;
   height: 100%;
