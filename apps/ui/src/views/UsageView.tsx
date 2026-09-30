@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   fetchLimits,
   fetchUsage,
+  isScanning,
   refreshLimits,
   rescanUsage,
   type ClaudeLimits,
@@ -12,6 +13,7 @@ import {
   type UsageProjectRow,
   type UsageProvider,
   type UsageReport,
+  type UsageScanning,
   type UsageSessionRow,
 } from "../delegation";
 import { IconClaude, IconOpenAI } from "../icons";
@@ -33,6 +35,7 @@ const STORAGE_KEY = "hub.usage.days";
 const PROVIDER_NAME: Record<UsageProvider, string> = { claude: "Claude", codex: "Codex" };
 const ROW_LIMIT = 12;
 const BAR_MIN_WIDTH = 20;
+const SCAN_POLL_MS = 3000;
 
 function readStoredDays(): number | null {
   try {
@@ -517,6 +520,7 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
   const limitsEnabled = settings?.features.limits === true;
   const [report, setReport] = useState<UsageReport | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState<UsageScanning | null>(null);
   const [rescanning, setRescanning] = useState(false);
   const [limits, setLimits] = useState<LimitsSnapshot | null | undefined>(undefined);
   const [limitsBusy, setLimitsBusy] = useState(false);
@@ -530,6 +534,12 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
     try {
       const next = await fetchUsage(days);
       if (id !== requestId.current) return;
+      if (isScanning(next)) {
+        setScanning(next);
+        setReportError(null);
+        return;
+      }
+      setScanning(null);
       setReport(next);
       setReportError(null);
     } catch (error) {
@@ -545,6 +555,14 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
   useEffect(() => {
     void loadReport();
   }, [loadReport]);
+
+  const isScanningNow = scanning != null;
+
+  useEffect(() => {
+    if (!isScanningNow) return;
+    const timer = window.setInterval(() => void loadReport(), SCAN_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [isScanningNow, loadReport]);
 
   useEffect(() => {
     if (limitsEnabled) void loadLimits();
@@ -626,7 +644,13 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
       <LimitsPanel enabled={limitsEnabled} limits={limits} busy={limitsBusy} error={limitsError} now={now} refreshedAt={refreshedAt} onRefresh={() => void refresh()} />
 
       {reportError && <p className="error">{missingHub ? "Usage needs a newer hub." : `Could not load usage: ${reportError}`}</p>}
-      {!report && !reportError && <p className="hint">Scanning transcripts...</p>}
+      {scanning && (
+        <p className="hint usage__scanning" role="status">
+          Scanning transcripts… (first run after a hub restart takes a few seconds)
+          {scanning.files != null ? ` · ${scanning.files.toLocaleString()} files` : ""}
+        </p>
+      )}
+      {!report && !reportError && !scanning && <p className="hint">Scanning transcripts...</p>}
       {report && report.totals.messages === 0 && <p className="empty">No transcripts in the last {days} days</p>}
       {report && report.totals.messages > 0 && (
         <>

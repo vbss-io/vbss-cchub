@@ -4,6 +4,7 @@ import { sessionClient, isHubRun } from "../clients";
 import {
   fetchLimits,
   fetchUsageSummary,
+  isScanning,
   getSettings,
   listTasks,
   type DelegationSettings,
@@ -315,6 +316,7 @@ interface ProviderCardProps {
   provider: "claude" | "codex";
   usageEnabled: boolean;
   usage: UsageSummary | null | undefined;
+  usageScanning: boolean;
   limitsEnabled: boolean;
   limits: LimitsSnapshot | null | undefined;
   now: number;
@@ -342,8 +344,8 @@ function UsageLines({ data, days }: { data: ProviderUsage | null; days: number }
   );
 }
 
-function ProviderCard({ provider, usageEnabled, usage, limitsEnabled, limits, now }: ProviderCardProps) {
-  const providerUsage = usage ? usage.providers[provider] : null;
+function ProviderCard({ provider, usageEnabled, usage, usageScanning, limitsEnabled, limits, now }: ProviderCardProps) {
+  const providerUsage = usage?.providers ? usage.providers[provider] : null;
   const claude = provider === "claude" ? limits?.claude ?? null : null;
   const codex = provider === "codex" ? limits?.codex ?? null : null;
   return (
@@ -355,11 +357,14 @@ function ProviderCard({ provider, usageEnabled, usage, limitsEnabled, limits, no
       {!usageEnabled ? (
         <div className="wgd-note">Turn on Usage in Settings to see tokens.</div>
       ) : usage === undefined ? (
-        <div className="wgd-note">Loading usage...</div>
+        <div className="wgd-note">{usageScanning ? "scanning…" : "Loading usage..."}</div>
       ) : usage === null ? (
         <div className="wgd-note">Usage needs a newer hub.</div>
       ) : (
-        <UsageLines data={providerUsage} days={usage.days} />
+        <>
+          <UsageLines data={providerUsage} days={usage.days} />
+          {usageScanning && <div className="wgd-note">scanning…</div>}
+        </>
       )}
       {!limitsEnabled ? (
         <div className="wgd-note">Turn on Limits in Settings to see the quota.</div>
@@ -408,6 +413,8 @@ export function Widget() {
   const [limits, setLimits] = useState<LimitsSnapshot | null | undefined>(undefined);
   const [limitsTick, setLimitsTick] = useState(0);
   const [usage, setUsage] = useState<UsageSummary | null | undefined>(undefined);
+  const [usageScanning, setUsageScanning] = useState(false);
+  const [usageTick, setUsageTick] = useState(0);
   const openRef = useRef(false);
   const shown = useRef(false);
   const applying = useRef(false);
@@ -506,6 +513,7 @@ export function Widget() {
       onDelegation: reloadTasks,
       onSettings: (settings) => setConfig(configOf(settings)),
       onLimits: () => setLimitsTick((value) => value + 1),
+      onUsage: () => setUsageTick((value) => value + 1),
     });
     return () => {
       mounted = false;
@@ -598,16 +606,22 @@ export function Widget() {
     let alive = true;
     const load = () => {
       void fetchUsageSummary().then((summary) => {
-        if (alive) setUsage(summary);
+        if (!alive) return;
+        if (isScanning(summary)) {
+          setUsageScanning(true);
+          return;
+        }
+        setUsageScanning(false);
+        setUsage(summary);
       });
     };
     load();
-    const id = window.setInterval(load, 60_000);
+    const id = window.setInterval(load, usageScanning ? 3000 : 60_000);
     return () => {
       alive = false;
       window.clearInterval(id);
     };
-  }, [wantUsage]);
+  }, [wantUsage, usageScanning, usageTick]);
 
   useEffect(() => {
     if (!open) return;
@@ -805,6 +819,7 @@ export function Widget() {
         provider="claude"
         usageEnabled={config.usageFeature}
         usage={usage}
+        usageScanning={usageScanning}
         limitsEnabled={config.limitsFeature}
         limits={limits}
         now={now}
@@ -813,6 +828,7 @@ export function Widget() {
         provider="codex"
         usageEnabled={config.usageFeature}
         usage={usage}
+        usageScanning={usageScanning}
         limitsEnabled={config.limitsFeature}
         limits={limits}
         now={now}

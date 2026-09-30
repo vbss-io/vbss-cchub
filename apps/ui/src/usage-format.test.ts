@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { UsageDay, UsageTotals } from "./delegation";
-import { contextTone, dayBarHeights, sharePercent, shortProject, sortRows, sourceNote, timeAgo } from "./usage-format";
+import { contextTone, dayBarHeights, sharePercent, shortProject, sortRows, sourceNote, timeAgo, usageResponseState } from "./usage-format";
 
 const totals = (read: number): UsageTotals => ({ read, fresh: 0, cacheRead: 0, cacheWrite: 0, output: 0, messages: 0 });
 const day = (name: string, claude: number, codex: number): UsageDay => ({ day: name, claude: totals(claude), codex: totals(codex) });
@@ -75,4 +75,21 @@ test("sourceNote labels live, cache and local session sources", () => {
   assert.equal(sourceNote("rollout"), "from local session");
   assert.equal(sourceNote("none"), null);
   assert.equal(sourceNote(undefined), null);
+});
+
+test("usageResponseState maps a 202 to scanning regardless of the body", () => {
+  assert.equal(usageResponseState(202, { scanning: true, startedAt: 1, files: null }), "scanning");
+  assert.equal(usageResponseState(202, { days: 7, scanning: true, providers: null }), "scanning");
+  assert.equal(usageResponseState(202, null), "scanning");
+});
+
+test("usageResponseState treats a 200 report as ready and a 200 scanning body as scanning", () => {
+  assert.equal(usageResponseState(200, { days: 7, totals: {} }), "ready");
+  assert.equal(usageResponseState(200, { scanning: true }), "scanning");
+  assert.equal(usageResponseState(200, null), "unavailable");
+});
+
+test("usageResponseState treats other statuses as unavailable", () => {
+  assert.equal(usageResponseState(404, { error: "not found" }), "unavailable");
+  assert.equal(usageResponseState(500, null), "unavailable");
 });
