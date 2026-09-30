@@ -1,21 +1,15 @@
-import {
-  appendFileSync,
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-  writeSync,
-} from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdir, open, stat, unlink, type FileHandle } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 const MAX_CHARS = 6_000;
 const LOCK_RETRIES = 60;
 const LOCK_DELAY_MS = 100;
 const LOCK_STALE_MS = 5 * 60 * 1000;
+const LOCK_RETRY_BACKOFF_MS = 1000;
+const LOCK_RETRY_BACKOFF_MAX_MS = 60_000;
+const WRITE_MAX_FAILURES = 5;
 const HUB_HEADING_RE = /^## Hub[ \t]*$/m;
 const BULLET_RE = /^- (.+)$/;
 
@@ -71,40 +65,107 @@ export function trailHeader(date: string): string {
   return `---\ntype: fonte\ncreated: ${date}\nupdated: ${date}\ntags: [fonte, session]\n---\n\n# Sessions — ${date}\n`;
 }
 
-const sleepCell = new Int32Array(new SharedArrayBuffer(4));
+export class LockTimeoutError extends Error {
+  constructor(lockFile: string) {
+    super(`could not acquire lock: ${lockFile}`);
+  }
+}
 
-export function withFileLockSync<T>(target: string, fn: () => T): T {
+export async function withFileLock<T>(target: string, fn: () => T): Promise<T> {
   const lockFile = `${target}.lock`;
+  await mkdir(dirname(target), { recursive: true });
   for (let attempt = 0; attempt < LOCK_RETRIES; attempt++) {
-    let fd: number;
+    let handle: FileHandle;
     try {
-      fd = openSync(lockFile, "wx");
+      handle = await open(lockFile, "wx");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       try {
-        if (Date.now() - statSync(lockFile).mtimeMs > LOCK_STALE_MS) unlinkSync(lockFile);
-        else Atomics.wait(sleepCell, 0, 0, LOCK_DELAY_MS);
+        if (Date.now() - (await stat(lockFile)).mtimeMs > LOCK_STALE_MS) {
+          await unlink(lockFile);
+          continue;
+        }
       } catch {
         continue;
       }
+      await delay(LOCK_DELAY_MS);
       continue;
     }
     try {
-      writeSync(fd, String(process.pid));
+      await handle.write(String(process.pid));
     } finally {
-      closeSync(fd);
+      await handle.close();
     }
     try {
       return fn();
     } finally {
-      try {
-        unlinkSync(lockFile);
-      } catch {
-        void 0;
-      }
+      await unlink(lockFile).catch(() => undefined);
     }
   }
-  throw new Error(`could not acquire lock: ${lockFile}`);
+  throw new LockTimeoutError(lockFile);
+}
+
+interface WriteJob {
+  file: string;
+  apply: () => void;
+  resolve: () => void;
+  reject: (err: unknown) => void;
+  failures: number;
+}
+
+const writeQueue: WriteJob[] = [];
+let pumping = false;
+let writeIdleWaiters: (() => void)[] = [];
+let lockFailureLogged = false;
+
+async function pumpWrites(): Promise<void> {
+  if (pumping) return;
+  pumping = true;
+  let backoff = 0;
+  try {
+    while (writeQueue.length > 0) {
+      const job = writeQueue[0]!;
+      try {
+        await withFileLock(job.file, job.apply);
+        writeQueue.shift();
+        job.resolve();
+        backoff = 0;
+        lockFailureLogged = false;
+      } catch (err) {
+        if (err instanceof LockTimeoutError) {
+          if (!lockFailureLogged) console.error(`second brain write waiting on a foreign lock, will retry: ${err.message}`);
+          lockFailureLogged = true;
+          backoff = Math.min(backoff > 0 ? backoff * 2 : LOCK_RETRY_BACKOFF_MS, LOCK_RETRY_BACKOFF_MAX_MS);
+          await delay(backoff);
+          continue;
+        }
+        job.failures++;
+        if (job.failures >= WRITE_MAX_FAILURES) {
+          writeQueue.shift();
+          job.reject(err);
+        } else {
+          await delay(LOCK_DELAY_MS);
+        }
+      }
+    }
+  } finally {
+    pumping = false;
+    const waiters = writeIdleWaiters;
+    writeIdleWaiters = [];
+    for (const waiter of waiters) waiter();
+  }
+}
+
+export function enqueueFileWrite(file: string, apply: () => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    writeQueue.push({ file, apply, resolve, reject, failures: 0 });
+    void pumpWrites();
+  });
+}
+
+export function whenBrainWritesIdle(): Promise<void> {
+  if (!pumping && writeQueue.length === 0) return Promise.resolve();
+  return new Promise((resolve) => writeIdleWaiters.push(resolve));
 }
 
 const blockMarkers = (sessionId: string): { start: string; end: string } => ({
@@ -165,6 +226,13 @@ export function upsertSessionBlock(file: string, sessionId: string, date: string
   writeFileSync(file, touchUpdated(content, date));
 }
 
+export function queueSessionBlock(file: string, sessionId: string, date: string, block: string): Promise<void> {
+  return enqueueFileWrite(file, () => {
+    mkdirSync(dirname(file), { recursive: true });
+    upsertSessionBlock(file, sessionId, date, block);
+  });
+}
+
 function appendHubLine(file: string, date: string, line: string): void {
   let content = existsSync(file) ? readFileSync(file, "utf8") : trailHeader(date);
   if (!content.endsWith("\n")) content += "\n";
@@ -178,8 +246,11 @@ export function appendHubSource(root: string, text: string, now = new Date(), li
   const resolved = resolveTrail(root, link);
   if (resolved?.unified) {
     const file = trailFilePath(resolved.dir, date);
-    mkdirSync(dirname(file), { recursive: true });
-    withFileLockSync(file, () => appendHubLine(file, date, `- ${localTime(now)} · ${clean}`));
+    const line = `- ${localTime(now)} · ${clean}`;
+    enqueueFileWrite(file, () => {
+      mkdirSync(dirname(file), { recursive: true });
+      appendHubLine(file, date, line);
+    }).catch((err: unknown) => console.error(`second brain hub line dropped: ${String(err)}`));
     return file;
   }
   const path = hubSourcePath(root, date);
