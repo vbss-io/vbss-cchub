@@ -167,6 +167,7 @@ export interface HubEvents {
   onTrail?: (event: TrailStreamEvent) => void;
   onSettings?: (settings: DelegationSettings) => void;
   onLimits?: () => void;
+  onUsage?: () => void;
 }
 
 export interface TrailStreamEvent {
@@ -226,6 +227,7 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("trail", (event) => handlers.onTrail?.(data<TrailStreamEvent>(event)));
   source.addEventListener("settings", (event) => handlers.onSettings?.(data<DelegationSettings>(event)));
   source.addEventListener("limits", () => handlers.onLimits?.());
+  source.addEventListener("usage", () => handlers.onUsage?.());
   return () => source.close();
 }
 

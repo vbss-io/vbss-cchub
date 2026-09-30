@@ -7,7 +7,7 @@ import { RuntimeBar } from "./components/RuntimeBar";
 import { SessionDrawer } from "./components/SessionDrawer";
 import { WhatsNew } from "./components/WhatsNew";
 import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, getTask, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
-import { IconClose, IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconWorkspaces } from "./icons";
+import { IconClose, IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconUsage, IconWorkspaces } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { unlockAudio } from "./notify";
 import { DEFAULT_NOTIF_EVENTS, firedEvents, notifyEvent, resetFired, setNotifConfig } from "./notifications";
@@ -20,10 +20,11 @@ import { SessionsView } from "./views/SessionsView";
 import { SettingsView, type NotifSettings, type SettingsSection, type ThemeName } from "./views/SettingsView";
 import { ShareView } from "./views/ShareView";
 import { TasksView } from "./views/TasksView";
+import { UsageView, type UsageEvent } from "./views/UsageView";
 import { WorkspacesView } from "./views/WorkspacesView";
 import { workspaceOf } from "./wsmatch";
 
-type View = "sessions" | "daily" | "flow" | "tasks" | "workspaces" | "reports" | "share" | "settings";
+type View = "sessions" | "daily" | "usage" | "flow" | "tasks" | "workspaces" | "reports" | "share" | "settings";
 
 function IconDaily({ size = 20 }: { size?: number }) {
   return (
@@ -43,6 +44,7 @@ interface Route {
 const VIEWS: { key: View; label: string; icon: ReactElement; subtitle: string }[] = [
   { key: "sessions", label: "Sessions", icon: <IconSessions />, subtitle: "Every Claude Code session on this machine, plus Codex threads" },
   { key: "daily", label: "Daily", icon: <IconDaily />, subtitle: "Your day in the second brain: briefing, focus, meetings, sessions" },
+  { key: "usage", label: "Usage", icon: <IconUsage />, subtitle: "What burns your tokens on this machine, and how much of your plan is left" },
   { key: "flow", label: "Flow", icon: <IconFlow />, subtitle: "Workspaces, sessions, subagents and delegated tasks as a live map" },
   { key: "tasks", label: "Delegated", icon: <IconTasks />, subtitle: "Work handed to the hub by agents: follow, steer, cancel" },
   { key: "workspaces", label: "Workspaces", icon: <IconWorkspaces />, subtitle: "The same registry your wk alias uses" },
@@ -130,6 +132,7 @@ export function App() {
   const runListeners = useRef(new Set<(event: RunEventMessage) => void>());
   const shareListeners = useRef(new Set<(event: ShareStreamEvent) => void>());
   const dailyListeners = useRef(new Set<(event: DailyStreamEvent) => void>());
+  const usageListeners = useRef(new Set<(event: UsageEvent) => void>());
   const taskStatusRef = useRef(new Map<string, TaskStatus>());
 
   const navigate = useCallback((view: View, param?: string | null) => {
@@ -387,6 +390,12 @@ export function App() {
       onDaily: (event) => {
         for (const listener of dailyListeners.current) listener(event);
       },
+      onUsage: () => {
+        for (const listener of usageListeners.current) listener("usage");
+      },
+      onLimits: () => {
+        for (const listener of usageListeners.current) listener("limits");
+      },
     });
     return () => {
       mounted = false;
@@ -419,6 +428,13 @@ export function App() {
     dailyListeners.current.add(listener);
     return () => {
       dailyListeners.current.delete(listener);
+    };
+  }, []);
+
+  const subscribeUsage = useCallback((listener: (event: UsageEvent) => void) => {
+    usageListeners.current.add(listener);
+    return () => {
+      usageListeners.current.delete(listener);
     };
   }, []);
 
@@ -503,7 +519,9 @@ export function App() {
   };
 
   const dailyEnabled = settings?.features.daily === true;
-  const effectiveView: View = route.view === "daily" && !dailyEnabled ? "sessions" : route.view;
+  const usageEnabled = settings?.features.usage === true;
+  const effectiveView: View =
+    (route.view === "daily" && !dailyEnabled) || (route.view === "usage" && !usageEnabled) ? "sessions" : route.view;
   const current = VIEWS.find((item) => item.key === effectiveView) ?? VIEWS[0]!;
   const drawerSession = drawer ? (sessions[drawer] ?? null) : null;
   const codexDrawerThread = codexDrawer ? (codexSessions.find((thread) => thread.id === codexDrawer) ?? null) : null;
@@ -531,7 +549,7 @@ export function App() {
           </span>
         </div>
         <ul className="nav__list">
-          {VIEWS.filter((item) => item.key !== "daily" || dailyEnabled).map((item) => {
+          {VIEWS.filter((item) => (item.key !== "daily" || dailyEnabled) && (item.key !== "usage" || usageEnabled)).map((item) => {
             const badge =
               item.key === "sessions" ? attention : item.key === "tasks" ? hubRunning + hubAttention : item.key === "reports" ? 0 : 0;
             return (
@@ -610,6 +628,9 @@ export function App() {
           )}
           {effectiveView === "daily" && dailyEnabled && (
             <DailyView settings={settings} onOpenSession={openSession} onOpenTask={(id) => navigate("tasks", id)} subscribeDaily={subscribeDaily} />
+          )}
+          {effectiveView === "usage" && usageEnabled && (
+            <UsageView settings={settings} sessions={sessions} onOpenSession={openSession} subscribeUsage={subscribeUsage} />
           )}
           {effectiveView === "flow" && (
             <FlowView
