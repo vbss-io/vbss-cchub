@@ -645,7 +645,7 @@ describe("polling", () => {
   it("starts with an immediate refresh, stays a single timer, and stops with the settings", async () => {
     writeCredentials(T0 + 10 * 3_600_000);
     const double = fetchDouble(() => jsonResponse(USAGE_FIXTURE));
-    const sources = { fetchImpl: double.impl, credentialsPath, statePath, codexSessionsDir: sessionsDir };
+    const sources = { now: T0, fetchImpl: double.impl, credentialsPath, statePath, codexSessionsDir: sessionsDir };
     assert.equal(limitsPollingActive(), false);
 
     startLimitsPolling(settingsWith({ limits: false }), sources);
