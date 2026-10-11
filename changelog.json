@@ -1,18 +1,26 @@
 [
   {
     "version": "1.2.0",
-    "date": "2026-09-05",
+    "date": "2026-10-10",
     "highlights": [
-      "The hub is where every agent arrives and reports: Claude Code, Claude Desktop, Codex CLI and the Codex app connect through the new cchub MCP server (Connect tab)",
-      "Delegate work into a workspace from any agent; runs start in the workspace context with every repo attached and show up as regular sessions",
+      "The hub is where every agent arrives and reports: Claude Code, Claude Desktop, Codex CLI and the Codex app connect through the cchub MCP server (Settings › Connections)",
+      "Delegate work into a workspace from any agent; runs start in the workspace context with every repo attached, show up as regular sessions, and can be followed, steered or cancelled",
+      "When a repo is busy, a delegated task moves to its own git worktree automatically, gets a reserved port block for dev servers, and keeps off files that interactive sessions have claimed",
       "Workspaces come from your .code-workspace folder: list, create, edit, open, and install the wk alias for bash or PowerShell",
-      "Runtime bar and Codex group show everything running on the machine; session cards show running subagents",
-      "Reports from agents land in the Hub panel and, when linked, in the second brain (fontes/hub)",
+      "Flow: workspaces, sessions, subagents and delegated tasks as one live map",
+      "Sessions shows Claude Code, Claude Desktop, Codex CLI and Codex app threads with running subagents and favorites, and a runtime bar of everything running on the machine",
+      "Usage (opt-in): what burns tokens per day, project, session and model, split into cache reads, fresh input and output, with context-per-message stats; read from local transcripts and cached between restarts",
+      "Limits (opt-in): Claude 5-hour, weekly and per-model limits and Codex 5-hour and weekly windows, account-wide, read-only, refreshed at the interval you pick",
+      "The widget docks to the left, right or top edge as a small tab with weekly-limit rings for Claude and Codex; open it for sessions (needs you, running, idle, delegated) or usage",
+      "Daily (opt-in): a guided daily note in your Markdown or Obsidian vault (close yesterday, confirm today, compose from your template) with an indentation-true preview, task filters and two-way sync",
+      "Session trail (opt-in): the hub summarizes each session into key points in your second brain, light, medium or high detail, and agent reports land in the same day file",
       "Share: a link (on the LAN, or public through an ngrok tunnel the hub starts and installs itself) that lets another person and their assistant ask your Claude read-only questions about a workspace, or delegate work into it, with a key per link, expiry, rate limit, pause/revoke and a log of every question and answer",
       "Trust levels on shares: Low (read-only, plans), Medium (edits, no shell), High (edits + safe shell), Total (no blocks); every level can ask, delegate and follow tasks",
-      "Delegated runs are autonomous by default (bypass permissions / sandbox), hub runs show up in Sessions, and Settings › General can start the app with Windows",
+      "Persistent forks on shares: each asker keeps a live Claude session that remembers the conversation; askers identify themselves, answers can stream, and files travel both ways",
+      "Per-event desktop notifications in the hub's own toast window, with Windows toasts optional",
+      "Delegated runs are autonomous by default (bypass permissions / sandbox), and Settings › General can start the app with Windows",
       "Dracula theme (VS Code / Obsidian palette) with the previous Midnight look still available in Settings › Appearance",
-      "Persistent forks on shares: each asker keeps a live Claude session that remembers the conversation; askers identify themselves, the original session shows forks and asks, answers can stream, and files travel both ways (share-artifacts)"
+      "Fixes: no more freeze at startup when ngrok is a Microsoft Store alias, and plan limits work behind antivirus TLS inspection by trusting the system certificates"
     ]
   },
   {
