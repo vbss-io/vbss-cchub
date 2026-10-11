@@ -9,6 +9,15 @@ your phone on the same network.
 
 Site: <https://cchub.vbss.io>
 
+![CCHUB sessions board with Claude Code and Codex sessions, waiting, idle and active, grouped by workspace](apps/landing/public/shot-app.png)
+
+## Why
+
+It started as a way to see which of many parallel Claude Code sessions was waiting on you.
+It grew into the place where agents meet: Claude Code and Codex see each other, hand work off
+into isolated worktrees through MCP, and report back, while you keep sessions, usage and
+limits in view.
+
 ## Stack
 
 | Layer | Tech |
