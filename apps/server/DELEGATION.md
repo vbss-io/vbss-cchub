@@ -31,7 +31,7 @@ Nothing is configured twice:
   answers, tool calls, results) plus every subagent with its own transcript tail and last message.
   Delegated runs stream: assistant text deltas, tool calls and status changes are stored per run
   (`hub_run_events`) and broadcast as `run-event` on `/api/events`.
-- **Reports** land in `hub.db` and, when a vault is linked, in `fontes/hub/<date>.md`.
+- **Reports** land in `hub.db` and, when a vault is linked, under `## Hub` in the day's trail file (session trail on with `trail.hubEvents`), otherwise in `fontes/hub/<date>.md`.
 
 ## Enable
 
@@ -44,7 +44,7 @@ HUB_DELEGATION=1 npm run dev -w @cch/server
 | `HUB_DELEGATION` | unset | `1` mounts `/delegation`; otherwise every route answers `404` |
 | `HUB_WORKSPACES_ROOT` | unset | Default workspaces root; the value saved in Settings wins |
 | `HUB_EDITOR` | `code` | Default editor command used by "Open"; the saved setting wins |
-| `HUB_SECOND_BRAIN` | unset | Vault root for `fontes/hub/<date>.md`; the saved setting wins |
+| `HUB_SECOND_BRAIN` | unset | Default vault root for Daily, the session trail and reports; the saved setting wins |
 | `HUB_CLAUDE_BIN` | `claude` | Claude Code executable |
 | `HUB_CODEX_BIN` | newest `codex.exe` under `%LOCALAPPDATA%\OpenAI\Codex\bin` | Codex CLI executable |
 | `HUB_DELEGATION_TIMEOUT_MIN` | unset | Overrides the run timeout; when unset the `runTimeoutMinutes` setting wins (default 60, min 5, max 720). `0` disables |
@@ -55,12 +55,12 @@ HUB_DELEGATION=1 npm run dev -w @cch/server
 | `HUB_SHARE_HOST` | `0.0.0.0` | Bind address of the share endpoint; the tunnel forwards to `localhost:<port>`, so it must stay reachable on loopback |
 | `HUB_NGROK_BIN` | auto | ngrok executable; otherwise PATH, the WindowsApps alias or the copy the hub downloads |
 | `HUB_URL` | derived | CLI and MCP server: full hub URL override |
-| `HUB_HOME` / `CODEX_HOME` | user home | Where the Connect installers read and write client configs |
+| `HUB_HOME` / `CODEX_HOME` | user home | Home the hub reads from: client configs for the Connections installers, plus the Claude transcripts, credentials and state used by Usage and Limits (`CODEX_HOME` for Codex sessions and config) |
 
 ## Connect the clients
 
 The hub ships an MCP server (`dist/mcp.js` in dev, `sidecar/mcp.cjs` in the installed app). The
-Connect tab, `POST /delegation/connect/mcp` or `{"action":"connect-mcp","client":...}` registers it:
+Settings › Connections, `POST /delegation/connect/mcp` or `{"action":"connect-mcp","client":...}` registers it:
 
 | Client | File touched | Entry |
 | --- | --- | --- |
