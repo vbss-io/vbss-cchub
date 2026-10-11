@@ -289,3 +289,7 @@ ship by pushing `main` to `prd`, which builds the image and dispatches the deplo
 - **WSL focus**: opening/focusing WSL paths is best-effort; native Windows paths work best.
 - **Widget**: dragging across monitors with different scaling has not been validated on every
   setup; if the tab ends up off screen, pick the edge again in Settings › Widget.
+
+## License
+
+[MIT](LICENSE)
