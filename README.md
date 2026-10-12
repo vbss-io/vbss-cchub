@@ -299,6 +299,13 @@ ship by pushing `main` to `prd`, which builds the image and dispatches the deplo
 - **Widget**: dragging across monitors with different scaling has not been validated on every
   setup; if the tab ends up off screen, pick the edge again in Settings › Widget.
 
+## Support
+
+CC Hub is free and MIT licensed. If it saves you time, you can help keep it maintained:
+
+- Buy me a coffee: [buymeacoffee.com/vbss.io](https://www.buymeacoffee.com/vbss.io)
+- GitHub Sponsors: [github.com/sponsors/vbss-io](https://github.com/sponsors/vbss-io)
+
 ## License
 
 [MIT](LICENSE)

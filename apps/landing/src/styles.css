@@ -326,7 +326,11 @@ a {
   font-size: 14px;
 }
 
-.coffee-link:hover {
+.coffee-link a {
+  color: inherit;
+}
+
+.coffee-link a:hover {
   color: var(--amber);
 }
 

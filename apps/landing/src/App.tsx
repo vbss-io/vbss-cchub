@@ -6,6 +6,7 @@ const RELEASE_API = "https://api.github.com/repos/vbss-io/vbss-cchub/releases/la
 const GITHUB_URL = "https://github.com/vbss-io/vbss-cchub";
 const PORTFOLIO_URL = "https://vbss.io";
 const COFFEE_URL = "https://www.buymeacoffee.com/vbss.io";
+const SPONSORS_URL = "https://github.com/sponsors/vbss-io";
 const GITHUB_PROFILE = "https://github.com/vbss-io";
 const LINKEDIN_URL = "https://www.linkedin.com/in/vbss-io";
 
@@ -338,9 +339,16 @@ export function App() {
           <a className="btn btn--lg" href={downloadUrl}>
             Download for Windows{versionSuffix}
           </a>
-          <a className="coffee-link" href={COFFEE_URL} target="_blank" rel="noopener noreferrer">
-            ☕ Like it? Buy me a coffee
-          </a>
+          <div className="coffee-link">
+            ☕ Like it?{" "}
+            <a href={COFFEE_URL} target="_blank" rel="noopener noreferrer">
+              Buy me a coffee
+            </a>{" "}
+            or{" "}
+            <a href={SPONSORS_URL} target="_blank" rel="noopener noreferrer">
+              sponsor on GitHub
+            </a>
+          </div>
         </section>
       </main>
 
@@ -364,6 +372,9 @@ export function App() {
           </a>
           <a href={COFFEE_URL} target="_blank" rel="noopener noreferrer">
             Buy me a coffee
+          </a>
+          <a href={SPONSORS_URL} target="_blank" rel="noopener noreferrer">
+            GitHub Sponsors
           </a>
         </div>
       </footer>

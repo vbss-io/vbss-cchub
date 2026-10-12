@@ -11,6 +11,7 @@ export async function openExternal(url: string): Promise<void> {
 }
 
 export const COFFEE_URL = "https://www.buymeacoffee.com/vbss.io";
+export const SPONSORS_URL = "https://github.com/sponsors/vbss-io";
 export const GITHUB_URL = "https://github.com/vbss-io/vbss-cchub";
 
 export type NotifyOutcome = "hub" | "plugin" | "none";

@@ -3,7 +3,7 @@ import { getDesktopNotifyStatus, sendToast, subscribe, type DesktopNotifyStatus,
 import { GroupManager } from "../components/GroupManager";
 import { flushTrail, getTrail } from "../delegation";
 import type { ConnectStatus, DelegationSettings, McpClient, Runner, SettingsPatch, ShellKind, TrailDetail, TrailStatus, WidgetEdge, WidgetPanel } from "../delegation";
-import { COFFEE_URL, GITHUB_URL, notify, openExternal, playSound } from "../notify";
+import { COFFEE_URL, GITHUB_URL, SPONSORS_URL, notify, openExternal, playSound } from "../notify";
 import type { SessionClient } from "../types";
 import type { Autonomy, AutostartStatus, TunnelStatus } from "../delegation";
 import { claudeClient } from "../clients";
@@ -369,13 +369,16 @@ export function SettingsView(props: Props) {
 
       <section className="settings__section" id="settings-support">
         <h2>Support</h2>
-        <p className="hint">CC Hub is free and open source. Star the repo, open an issue, or buy a coffee to keep it going.</p>
+        <p className="hint">CC Hub is free and open source. Star the repo, open an issue, or sponsor it to keep it going.</p>
         <div className="frow">
           <button className="act" onClick={() => void openExternal(GITHUB_URL)}>
             GitHub
           </button>
           <button className="act" onClick={() => void openExternal(COFFEE_URL)}>
             Buy me a coffee
+          </button>
+          <button className="act" onClick={() => void openExternal(SPONSORS_URL)}>
+            GitHub Sponsors
           </button>
           <button className="act act--ghost" onClick={props.onWhatsNew}>
             What's new
