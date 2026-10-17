@@ -227,7 +227,8 @@ When several agents may edit the same repo at once, delegate with `isolation: "w
 and the hub decides: `worktree` when the repo already has a running/pending task in the shared checkout
 (reason `busy-repo`, with a `note` on the `POST /tasks` response), `shared` otherwise (reason `default`);
 the decision is stored as `isolationReason` on the task. The hub then runs
-`git -C <repo> worktree add -b hub/<task8> <ws>/.worktrees/<repo>/<task8> HEAD` before creating the task,
+`git -C <repo> worktree add -b hub/<task8> <ws>/.worktrees/<repo>/<task8> HEAD` (`<ws>/.local/.worktrees/...` when the
+workspace has a `.local/` folder) before creating the task,
 points the repo's `--add-dir` and the system-prompt map at the worktree, and links `node_modules` with a
 junction (Windows) or symlink so installs are reused. Worktree isolation needs a `repo` of the workspace
 and that repo must be a git checkout on a branch (400 otherwise).
@@ -252,7 +253,7 @@ and that repo must be a git checkout on a branch (400 otherwise).
 - **MCP**: `hub_delegate` takes `isolation`; `hub_task_merge` (taskId, `discard?`) merges or, with
   `discard: true`, discards. `hub_overview` lists `isolation`/`branch` per task and `crowdedFolders`
   (folders with 2+ live agents) to hint when a worktree is worth it.
-- Add `.worktrees/` to the workspace repo's `.gitignore` so the worktrees never get committed back.
+- Add `.worktrees/` (or `.local/`) to the workspace repo's `.gitignore` so the worktrees never get committed back.
 - **Only a task delegated with a `repo` marks that repo busy.** Workspace-level tasks (no `repo`) and
   tasks on another repo of the same workspace can still edit any attached repo in the shared checkout;
   pass `repo` (or `isolation: "worktree"`) when that matters.

@@ -81,6 +81,11 @@ function unlinkNodeModules(worktreePath: string): boolean {
   }
 }
 
+function worktreesDir(root: string): string {
+  const local = join(root, ".local");
+  return existsSync(local) ? join(local, ".worktrees") : join(root, ".worktrees");
+}
+
 export function createTaskWorktree(input: {
   repoPath: string;
   repoName: string;
@@ -98,7 +103,7 @@ export function createTaskWorktree(input: {
   if (!baseBranch || baseBranch === "HEAD") {
     throw new WorktreeError(`"${input.repoName}" is in detached HEAD; check out a branch before delegating in a worktree`, 400);
   }
-  const path = join(input.root, ".worktrees", input.repoName, task8);
+  const path = join(worktreesDir(input.root), input.repoName, task8);
   try {
     git(input.repoPath, ["worktree", "add", "-b", branch, path, "HEAD"]);
   } catch (err) {

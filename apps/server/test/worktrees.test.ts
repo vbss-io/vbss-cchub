@@ -144,6 +144,16 @@ describe("worktrees", () => {
     assert.equal(worktreeMainRepo(repo), repo.replace(/\\/g, "/"));
   });
 
+  it("creates the worktree under .local/.worktrees when the workspace keeps machine-local state in .local", async () => {
+    const localRoot = join(box, "ws-local");
+    mkdirSync(join(localRoot, ".local"), { recursive: true });
+    const id = "10ca1000-0000-4000-8000-000000000000";
+    const created = createTaskWorktree({ repoPath: repo, repoName: "repo", taskId: id, root: localRoot });
+    assert.equal(created.path, join(localRoot, ".local", ".worktrees", "repo", id.slice(0, 8)));
+    assert.equal(existsSync(join(localRoot, ".worktrees")), false);
+    await discardTaskWorktree(makeTask({ id, worktreePath: created.path, branch: created.branch, baseBranch: "main" }));
+  });
+
   it("discards a worktree whose folder was already emptied, given the main repo", async () => {
     const id = "0badf00d-0000-4000-8000-000000000000";
     const created = createTaskWorktree({ repoPath: repo, repoName: "repo", taskId: id, root });
