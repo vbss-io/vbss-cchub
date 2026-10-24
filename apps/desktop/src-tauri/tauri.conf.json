@@ -16,7 +16,8 @@
         "title": "VBSS CCHUB",
         "width": 1100,
         "height": 720,
-        "resizable": true
+        "resizable": true,
+        "dragDropEnabled": false
       },
       {
         "label": "widget",
@@ -70,5 +71,9 @@
       "icons/icon.ico"
     ]
   },
-  "plugins": {}
+  "plugins": {
+    "shell": {
+      "open": "^((mailto:\\w+)|(tel:\\w+)|(https?://\\w+)|(obsidian://\\w+)).+"
+    }
+  }
 }

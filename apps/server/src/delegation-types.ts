@@ -85,6 +85,7 @@ export interface DelegationFeatures {
   trail: boolean;
   usage: boolean;
   limits: boolean;
+  tasks: boolean;
 }
 
 export const WIDGET_EDGES = ["left", "right", "top"] as const;
@@ -144,6 +145,46 @@ export interface DailyFeatureSettings {
   wikilinks: boolean;
 }
 
+export interface TasksPrefixes {
+  blocked: string[];
+  hold: string[];
+  archived: string[];
+}
+
+export interface TasksFeatureSettings {
+  root: string | null;
+  section: string;
+  prefixes: TasksPrefixes;
+  separator: string;
+  exclude: string[];
+  workspaceKey: string;
+  parentKey: string;
+  delegatePrompt: string | null;
+  markDoingOnDelegate: boolean;
+  reasonSeparator: string;
+  doneSection: string;
+  doneStamp: string;
+  priorityTag: string;
+  priorityLevels: number;
+}
+
+export const TASKS_DEFAULT_SECTION = "Open loops";
+export const TASKS_DEFAULT_PREFIXES: TasksPrefixes = { blocked: ["BLOCK", "BLOCKED"], hold: ["HOLD"], archived: ["ARCHIVED"] };
+export const TASKS_DEFAULT_SEPARATOR = " - ";
+export const TASKS_DEFAULT_EXCLUDE: string[] = ["_*"];
+export const TASKS_DEFAULT_WORKSPACE_KEY = "workspace";
+export const TASKS_DEFAULT_PARENT_KEY = "parent";
+export const TASKS_DEFAULT_REASON_SEPARATOR = " - ";
+export const TASKS_DEFAULT_DONE_SECTION = "";
+export const TASKS_DEFAULT_DONE_STAMP = " ✅ {{date}}";
+export const TASKS_DEFAULT_PRIORITY_TAG = "p";
+export const TASKS_DEFAULT_PRIORITY_LEVELS = 4;
+export const TASKS_PRIORITY_LEVELS_MIN = 1;
+export const TASKS_PRIORITY_LEVELS_MAX = 10;
+export const TASKS_PRIORITY_TAG_RE = /^[A-Za-z0-9_-]+$/;
+export const TASKS_DATE_TOKEN = "{{date}}";
+export const TASKS_SEPARATOR_RE = /^\s*[-:–]\s+$/;
+
 export interface DelegationSettings {
   workspacesRoot: string | null;
   editorCommand: string;
@@ -153,6 +194,7 @@ export interface DelegationSettings {
   runTimeoutMinutes: number;
   features: DelegationFeatures;
   daily: DailyFeatureSettings;
+  tasks: TasksFeatureSettings;
   trail: TrailFeatureSettings;
   widget: WidgetSettings;
   limits: LimitsSettings;

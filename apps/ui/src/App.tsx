@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type DailyStreamEvent, type HooksStatus, type ShareStreamEvent } from "./api";
+import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type DailyStreamEvent, type HooksStatus, type ShareStreamEvent, type TasksBoardStreamEvent } from "./api";
 import { isHubRun } from "./clients";
 import { BrandMark, Wordmark } from "./components/BrandMark";
 import { CodexDrawer } from "./components/CodexDrawer";
@@ -7,12 +7,15 @@ import { RuntimeBar } from "./components/RuntimeBar";
 import { SessionDrawer } from "./components/SessionDrawer";
 import { WhatsNew } from "./components/WhatsNew";
 import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, getTask, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
-import { IconClose, IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconUsage, IconWorkspaces } from "./icons";
+import { IconBoard, IconClose, IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconUsage, IconWorkspaces } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { unlockAudio } from "./notify";
+import { HubOfflineBanner } from "./components/HubOfflineBanner";
+import { useHubConnection } from "./use-hub-connection";
 import { DEFAULT_NOTIF_EVENTS, firedEvents, notifyEvent, resetFired, setNotifConfig } from "./notifications";
 import { isEmpty, isStale } from "./stale";
 import type { CodexSessionRecord, GroupRecord, RunEventMessage, RuntimeSnapshot, SessionRecord, SessionClient } from "./types";
+import { BoardView } from "./views/BoardView";
 import { DailyView } from "./views/DailyView";
 import { FlowView } from "./views/FlowView";
 import { ReportsView } from "./views/ReportsView";
@@ -24,7 +27,7 @@ import { UsageView, type UsageEvent } from "./views/UsageView";
 import { WorkspacesView } from "./views/WorkspacesView";
 import { workspaceOf } from "./wsmatch";
 
-type View = "sessions" | "daily" | "usage" | "flow" | "tasks" | "workspaces" | "reports" | "share" | "settings";
+type View = "sessions" | "daily" | "board" | "usage" | "flow" | "tasks" | "workspaces" | "reports" | "share" | "settings";
 
 function IconDaily({ size = 20 }: { size?: number }) {
   return (
@@ -36,6 +39,11 @@ function IconDaily({ size = 20 }: { size?: number }) {
   );
 }
 
+interface ToastAction {
+  label: string;
+  run: () => void;
+}
+
 interface Route {
   view: View;
   param: string | null;
@@ -44,6 +52,7 @@ interface Route {
 const VIEWS: { key: View; label: string; icon: ReactElement; subtitle: string }[] = [
   { key: "sessions", label: "Sessions", icon: <IconSessions />, subtitle: "Every Claude Code session on this machine, plus Codex threads" },
   { key: "daily", label: "Daily", icon: <IconDaily />, subtitle: "Your day in the second brain: briefing, focus, meetings, sessions" },
+  { key: "board", label: "Tasks", icon: <IconBoard />, subtitle: "Tasks from your second brain as a board: filter by project, move them, hand one to an agent" },
   { key: "usage", label: "Usage", icon: <IconUsage />, subtitle: "What burns your tokens on this machine, and how much of your plan is left" },
   { key: "flow", label: "Flow", icon: <IconFlow />, subtitle: "Workspaces, sessions, subagents and delegated tasks as a live map" },
   { key: "tasks", label: "Delegated", icon: <IconTasks />, subtitle: "Work handed to the hub by agents: follow, steer, cancel" },
@@ -125,13 +134,14 @@ export function App() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("hub.theme", theme);
   }, [theme]);
-  const [toasts, setToasts] = useState<{ id: number; kind: "ok" | "error"; text: string }[]>([]);
+  const [toasts, setToasts] = useState<{ id: number; kind: "ok" | "error"; text: string; action?: ToastAction }[]>([]);
   const toastSeq = useRef(0);
   const [slotEl, setSlotEl] = useState<HTMLDivElement | null>(null);
   const notifRef = useRef(notifSettings);
   const runListeners = useRef(new Set<(event: RunEventMessage) => void>());
   const shareListeners = useRef(new Set<(event: ShareStreamEvent) => void>());
   const dailyListeners = useRef(new Set<(event: DailyStreamEvent) => void>());
+  const boardListeners = useRef(new Set<(event: TasksBoardStreamEvent) => void>());
   const usageListeners = useRef(new Set<(event: UsageEvent) => void>());
   const taskStatusRef = useRef(new Map<string, TaskStatus>());
 
@@ -196,6 +206,17 @@ export function App() {
       if (err instanceof DelegationDisabledError) setHubEnabled(false);
     }
   }, []);
+
+  const refreshAfterOutage = useCallback(() => {
+    void loadHub();
+    for (const listener of boardListeners.current) listener({ source: "hub", projectId: "" });
+    for (const listener of dailyListeners.current) listener({ date: "", updatedAt: null, source: "hub", writeId: null, recovered: true });
+    for (const listener of usageListeners.current) {
+      listener("usage");
+      listener("limits");
+    }
+  }, [loadHub]);
+  const connection = useHubConnection(refreshAfterOutage);
 
   const loadConnect = useCallback(async () => {
     try {
@@ -305,8 +326,12 @@ export function App() {
     };
     loadCore();
     const unsubscribe = subscribe({
+      onError: () => {
+        if (mounted) connection.streamError();
+      },
       onOpen: () => {
         if (!mounted) return;
+        connection.streamOpen();
         loadCore();
         void loadHub();
         void loadConnect();
@@ -390,6 +415,9 @@ export function App() {
       onDaily: (event) => {
         for (const listener of dailyListeners.current) listener(event);
       },
+      onTasksBoard: (event) => {
+        for (const listener of boardListeners.current) listener(event);
+      },
       onUsage: () => {
         for (const listener of usageListeners.current) listener("usage");
       },
@@ -431,6 +459,13 @@ export function App() {
     };
   }, []);
 
+  const subscribeBoard = useCallback((listener: (event: TasksBoardStreamEvent) => void) => {
+    boardListeners.current.add(listener);
+    return () => {
+      boardListeners.current.delete(listener);
+    };
+  }, []);
+
   const subscribeUsage = useCallback((listener: (event: UsageEvent) => void) => {
     usageListeners.current.add(listener);
     return () => {
@@ -464,10 +499,10 @@ export function App() {
     }
   };
 
-  const pushToast = useCallback((kind: "ok" | "error", text: string) => {
+  const pushToast = useCallback((kind: "ok" | "error", text: string, action?: ToastAction) => {
     const id = (toastSeq.current += 1);
-    setToasts((current) => [...current, { id, kind, text }]);
-    window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), kind === "error" ? 8_000 : 4_000);
+    setToasts((current) => [...current, { id, kind, text, ...(action ? { action } : {}) }]);
+    window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), kind === "error" || action ? 8_000 : 4_000);
   }, []);
   const dismissToast = useCallback((id: number) => setToasts((current) => current.filter((toast) => toast.id !== id)), []);
   const ok = useCallback((text: string) => pushToast("ok", text), [pushToast]);
@@ -520,8 +555,9 @@ export function App() {
 
   const dailyEnabled = settings?.features.daily === true;
   const usageEnabled = settings?.features.usage === true;
+  const boardEnabled = settings?.features.tasks === true;
   const effectiveView: View =
-    (route.view === "daily" && !dailyEnabled) || (route.view === "usage" && !usageEnabled) ? "sessions" : route.view;
+    (route.view === "daily" && !dailyEnabled) || (route.view === "board" && !boardEnabled) || (route.view === "usage" && !usageEnabled) ? "sessions" : route.view;
   const current = VIEWS.find((item) => item.key === effectiveView) ?? VIEWS[0]!;
   const drawerSession = drawer ? (sessions[drawer] ?? null) : null;
   const codexDrawerThread = codexDrawer ? (codexSessions.find((thread) => thread.id === codexDrawer) ?? null) : null;
@@ -540,6 +576,7 @@ export function App() {
 
   return (
     <div className={`shell ${drawerSession || codexDrawerThread || sharePanel ? "shell--panel" : ""}`}>
+      {connection.offline && !isMock && <HubOfflineBanner />}
       <nav className="nav" aria-label="Main">
         <div className="nav__brand">
           <BrandMark size={30} />
@@ -549,7 +586,7 @@ export function App() {
           </span>
         </div>
         <ul className="nav__list">
-          {VIEWS.filter((item) => (item.key !== "daily" || dailyEnabled) && (item.key !== "usage" || usageEnabled)).map((item) => {
+          {VIEWS.filter((item) => (item.key !== "daily" || dailyEnabled) && (item.key !== "board" || boardEnabled) && (item.key !== "usage" || usageEnabled)).map((item) => {
             const badge =
               item.key === "sessions" ? attention : item.key === "tasks" ? hubRunning + hubAttention : item.key === "reports" ? 0 : 0;
             return (
@@ -627,7 +664,25 @@ export function App() {
             />
           )}
           {effectiveView === "daily" && dailyEnabled && (
-            <DailyView settings={settings} onOpenSession={openSession} onOpenTask={(id) => navigate("tasks", id)} subscribeDaily={subscribeDaily} />
+            <DailyView
+              settings={settings}
+              onOpenSession={openSession}
+              onOpenTask={(id) => navigate("tasks", id)}
+              subscribeDaily={subscribeDaily}
+              subscribeBoard={subscribeBoard}
+            />
+          )}
+          {effectiveView === "board" && boardEnabled && (
+            <BoardView
+              workspaces={workspaces}
+              settings={settings}
+              subscribeBoard={subscribeBoard}
+              subscribeDaily={subscribeDaily}
+              onOpenSettings={() => navigate("settings", "features")}
+              onDelegated={(taskId, title) => pushToast("ok", `Delegated "${title}".`, { label: "Open task", run: () => navigate("tasks", taskId) })}
+              onNotice={ok}
+              onError={fail}
+            />
           )}
           {effectiveView === "usage" && usageEnabled && (
             <UsageView settings={settings} sessions={sessions} onOpenSession={openSession} subscribeUsage={subscribeUsage} />
@@ -776,6 +831,17 @@ export function App() {
           {toasts.map((toast) => (
             <div key={toast.id} className={`toast toast--${toast.kind}`} role="status">
               <span className="toast__text">{toast.text}</span>
+              {toast.action && (
+                <button
+                  className="act"
+                  onClick={() => {
+                    toast.action?.run();
+                    dismissToast(toast.id);
+                  }}
+                >
+                  {toast.action.label}
+                </button>
+              )}
               <button className="toast__close" onClick={() => dismissToast(toast.id)} aria-label="Dismiss">
                 <IconClose />
               </button>

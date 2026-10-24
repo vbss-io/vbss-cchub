@@ -54,6 +54,15 @@ async function send<T>(method: string, path: string, body?: unknown): Promise<T>
 
 export const fetchHealth = (): Promise<{ ok: boolean; hostname: string | null }> => getJson("/api/health");
 
+export async function probeHealth(): Promise<boolean> {
+  try {
+    const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(3000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export const fetchSessions = (): Promise<SessionRecord[]> => getJson("/api/sessions");
 
 export const fetchRuntimes = (): Promise<RuntimeSnapshot> => getJson("/api/runtimes");
@@ -149,6 +158,7 @@ export const releaseClaim = (id: string): Promise<void> => send("DELETE", `/api/
 
 export interface HubEvents {
   onOpen?: () => void;
+  onError?: () => void;
   onSession: (session: SessionRecord) => void;
   onCodex?: (sessions: CodexSessionRecord[]) => void;
   onRemoved?: (sessionId: string) => void;
@@ -164,6 +174,7 @@ export interface HubEvents {
   onToast?: (card: ToastCard) => void;
   onClaims?: (claims: ClaimRecord[]) => void;
   onDaily?: (event: DailyStreamEvent) => void;
+  onTasksBoard?: (event: TasksBoardStreamEvent) => void;
   onTrail?: (event: TrailStreamEvent) => void;
   onSettings?: (settings: DelegationSettings) => void;
   onLimits?: () => void;
@@ -181,6 +192,12 @@ export interface DailyStreamEvent {
   updatedAt: number | null;
   source: "disk" | "hub";
   writeId: string | null;
+  recovered?: boolean;
+}
+
+export interface TasksBoardStreamEvent {
+  source: "disk" | "hub";
+  projectId: string;
 }
 
 export interface ToastCard {
@@ -209,6 +226,7 @@ export function subscribe(handlers: HubEvents): () => void {
   const source = new EventSource(`${base}/api/events`);
   const data = <T>(event: Event): T => JSON.parse((event as MessageEvent<string>).data) as T;
   source.onopen = () => handlers.onOpen?.();
+  source.onerror = () => handlers.onError?.();
   source.addEventListener("session", (event) => handlers.onSession(data<SessionRecord>(event)));
   source.addEventListener("codex", (event) => handlers.onCodex?.(data<CodexSessionRecord[]>(event)));
   source.addEventListener("removed", (event) => handlers.onRemoved?.(data<{ sessionId: string }>(event).sessionId));
@@ -224,6 +242,7 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("toast", (event) => handlers.onToast?.(data<ToastCard>(event)));
   source.addEventListener("claims", (event) => handlers.onClaims?.(data<ClaimRecord[]>(event)));
   source.addEventListener("daily", (event) => handlers.onDaily?.(data<DailyStreamEvent>(event)));
+  source.addEventListener("tasks", (event) => handlers.onTasksBoard?.(data<TasksBoardStreamEvent>(event)));
   source.addEventListener("trail", (event) => handlers.onTrail?.(data<TrailStreamEvent>(event)));
   source.addEventListener("settings", (event) => handlers.onSettings?.(data<DelegationSettings>(event)));
   source.addEventListener("limits", () => handlers.onLimits?.());

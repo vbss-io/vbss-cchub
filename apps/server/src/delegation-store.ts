@@ -17,6 +17,8 @@ import type {
   RunKind,
   Runner,
   RunRecord,
+  TasksFeatureSettings,
+  TasksPrefixes,
   TaskDetail,
   TaskRecord,
   TaskStatus,
@@ -33,6 +35,20 @@ import {
   RUN_TIMEOUT_DEFAULT,
   RUN_TIMEOUT_MAX,
   RUN_TIMEOUT_MIN,
+  TASKS_DEFAULT_DONE_SECTION,
+  TASKS_DEFAULT_DONE_STAMP,
+  TASKS_DEFAULT_EXCLUDE,
+  TASKS_DEFAULT_PARENT_KEY,
+  TASKS_DEFAULT_PREFIXES,
+  TASKS_DEFAULT_PRIORITY_LEVELS,
+  TASKS_DEFAULT_PRIORITY_TAG,
+  TASKS_DEFAULT_REASON_SEPARATOR,
+  TASKS_DEFAULT_SECTION,
+  TASKS_DEFAULT_SEPARATOR,
+  TASKS_DEFAULT_WORKSPACE_KEY,
+  TASKS_PRIORITY_LEVELS_MAX,
+  TASKS_PRIORITY_LEVELS_MIN,
+  TASKS_PRIORITY_TAG_RE,
   TRAIL_DETAILS,
   USAGE_DAYS_DEFAULT,
   USAGE_DAYS_MAX,
@@ -315,6 +331,22 @@ function storedInt(stored: Map<string, string | null>, key: string, min: number,
   return raw == null ? fallback : clampInt(Number(raw), min, max, fallback);
 }
 
+function storedPriorityTag(raw: string | null | undefined): string {
+  return raw != null && TASKS_PRIORITY_TAG_RE.test(raw) ? raw : TASKS_DEFAULT_PRIORITY_TAG;
+}
+
+function storedStringArray(stored: Map<string, string | null>, key: string, fallback: string[]): string[] {
+  const raw = stored.get(key);
+  if (raw == null) return [...fallback];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every((item): item is string => typeof item === "string")) return parsed;
+  } catch {
+    return [...fallback];
+  }
+  return [...fallback];
+}
+
 function trailDetailOf(value: string | null | undefined): TrailDetail {
   return TRAIL_DETAILS.find((detail) => detail === value) ?? "light";
 }
@@ -335,6 +367,7 @@ export function getSettings(): DelegationSettings {
       trail: stored.get("features.trail") === "1",
       usage: stored.get("features.usage") === "1",
       limits: stored.get("features.limits") === "1",
+      tasks: stored.get("features.tasks") === "1",
     },
     daily: {
       dir: stored.get("daily.dir") ?? null,
@@ -348,6 +381,26 @@ export function getSettings(): DelegationSettings {
       },
       closedKey: stored.get("daily.closedKey") ?? "closed",
       wikilinks: stored.get("daily.wikilinks") === "1",
+    },
+    tasks: {
+      root: stored.get("tasks.root") ?? null,
+      section: stored.get("tasks.section") ?? TASKS_DEFAULT_SECTION,
+      prefixes: {
+        blocked: storedStringArray(stored, "tasks.prefixes.blocked", TASKS_DEFAULT_PREFIXES.blocked),
+        hold: storedStringArray(stored, "tasks.prefixes.hold", TASKS_DEFAULT_PREFIXES.hold),
+        archived: storedStringArray(stored, "tasks.prefixes.archived", TASKS_DEFAULT_PREFIXES.archived),
+      },
+      separator: stored.get("tasks.separator") ?? TASKS_DEFAULT_SEPARATOR,
+      exclude: storedStringArray(stored, "tasks.exclude", TASKS_DEFAULT_EXCLUDE),
+      workspaceKey: stored.get("tasks.workspaceKey") ?? TASKS_DEFAULT_WORKSPACE_KEY,
+      parentKey: stored.get("tasks.parentKey") ?? TASKS_DEFAULT_PARENT_KEY,
+      delegatePrompt: stored.get("tasks.delegatePrompt") ?? null,
+      markDoingOnDelegate: storedFlag(stored, "tasks.markDoingOnDelegate", true),
+      reasonSeparator: stored.get("tasks.reasonSeparator") ?? TASKS_DEFAULT_REASON_SEPARATOR,
+      doneSection: stored.get("tasks.doneSection") ?? TASKS_DEFAULT_DONE_SECTION,
+      doneStamp: stored.get("tasks.doneStamp") ?? TASKS_DEFAULT_DONE_STAMP,
+      priorityTag: storedPriorityTag(stored.get("tasks.priorityTag")),
+      priorityLevels: storedInt(stored, "tasks.priorityLevels", TASKS_PRIORITY_LEVELS_MIN, TASKS_PRIORITY_LEVELS_MAX, TASKS_DEFAULT_PRIORITY_LEVELS),
     },
     trail: {
       dir: stored.get("trail.dir") ?? null,
@@ -395,6 +448,7 @@ export interface UpdateSettingsInput {
   runTimeoutMinutes?: number;
   features?: Partial<DelegationSettings["features"]>;
   daily?: Partial<Omit<DelegationSettings["daily"], "headings">> & { headings?: Partial<DailyHeadings> };
+  tasks?: Partial<Omit<TasksFeatureSettings, "prefixes">> & { prefixes?: Partial<TasksPrefixes> };
   trail?: Partial<TrailFeatureSettings>;
   widget?: Partial<Omit<WidgetSettings, "rings">> & { rings?: Partial<WidgetSettings["rings"]> };
   limits?: Partial<LimitsSettings>;
@@ -415,6 +469,7 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     if (patch.features?.trail !== undefined) upsertSettingStmt.run("features.trail", patch.features.trail ? "1" : "0");
     if (patch.features?.usage !== undefined) upsertSettingStmt.run("features.usage", patch.features.usage ? "1" : "0");
     if (patch.features?.limits !== undefined) upsertSettingStmt.run("features.limits", patch.features.limits ? "1" : "0");
+    if (patch.features?.tasks !== undefined) upsertSettingStmt.run("features.tasks", patch.features.tasks ? "1" : "0");
     if (patch.daily?.dir !== undefined) upsertSettingStmt.run("daily.dir", patch.daily.dir);
     if (patch.daily?.template !== undefined) upsertSettingStmt.run("daily.template", patch.daily.template);
     if (patch.daily?.prompt !== undefined) upsertSettingStmt.run("daily.prompt", patch.daily.prompt);
@@ -424,6 +479,22 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     if (patch.daily?.headings?.sessions !== undefined) upsertSettingStmt.run("daily.headings.sessions", patch.daily.headings.sessions);
     if (patch.daily?.closedKey !== undefined) upsertSettingStmt.run("daily.closedKey", patch.daily.closedKey);
     if (patch.daily?.wikilinks !== undefined) upsertSettingStmt.run("daily.wikilinks", patch.daily.wikilinks ? "1" : "0");
+    if (patch.tasks?.root !== undefined) upsertSettingStmt.run("tasks.root", patch.tasks.root);
+    if (patch.tasks?.section !== undefined) upsertSettingStmt.run("tasks.section", patch.tasks.section);
+    if (patch.tasks?.prefixes?.blocked !== undefined) upsertSettingStmt.run("tasks.prefixes.blocked", JSON.stringify(patch.tasks.prefixes.blocked));
+    if (patch.tasks?.prefixes?.hold !== undefined) upsertSettingStmt.run("tasks.prefixes.hold", JSON.stringify(patch.tasks.prefixes.hold));
+    if (patch.tasks?.prefixes?.archived !== undefined) upsertSettingStmt.run("tasks.prefixes.archived", JSON.stringify(patch.tasks.prefixes.archived));
+    if (patch.tasks?.separator !== undefined) upsertSettingStmt.run("tasks.separator", patch.tasks.separator);
+    if (patch.tasks?.exclude !== undefined) upsertSettingStmt.run("tasks.exclude", JSON.stringify(patch.tasks.exclude));
+    if (patch.tasks?.workspaceKey !== undefined) upsertSettingStmt.run("tasks.workspaceKey", patch.tasks.workspaceKey);
+    if (patch.tasks?.parentKey !== undefined) upsertSettingStmt.run("tasks.parentKey", patch.tasks.parentKey);
+    if (patch.tasks?.delegatePrompt !== undefined) upsertSettingStmt.run("tasks.delegatePrompt", patch.tasks.delegatePrompt);
+    if (patch.tasks?.markDoingOnDelegate !== undefined) upsertSettingStmt.run("tasks.markDoingOnDelegate", patch.tasks.markDoingOnDelegate ? "1" : "0");
+    if (patch.tasks?.reasonSeparator !== undefined) upsertSettingStmt.run("tasks.reasonSeparator", patch.tasks.reasonSeparator);
+    if (patch.tasks?.doneSection !== undefined) upsertSettingStmt.run("tasks.doneSection", patch.tasks.doneSection);
+    if (patch.tasks?.doneStamp !== undefined) upsertSettingStmt.run("tasks.doneStamp", patch.tasks.doneStamp);
+    if (patch.tasks?.priorityTag !== undefined) upsertSettingStmt.run("tasks.priorityTag", patch.tasks.priorityTag);
+    if (patch.tasks?.priorityLevels !== undefined) upsertSettingStmt.run("tasks.priorityLevels", String(patch.tasks.priorityLevels));
     if (patch.trail?.dir !== undefined) upsertSettingStmt.run("trail.dir", patch.trail.dir);
     if (patch.trail?.detail !== undefined) upsertSettingStmt.run("trail.detail", patch.trail.detail);
     if (patch.trail?.model !== undefined) upsertSettingStmt.run("trail.model", patch.trail.model);

@@ -102,6 +102,29 @@ export interface UsageSettings {
   days: number;
 }
 
+export interface TasksPrefixes {
+  blocked: string[];
+  hold: string[];
+  archived: string[];
+}
+
+export interface TasksFeatureSettings {
+  root: string | null;
+  section: string;
+  prefixes: TasksPrefixes;
+  separator: string;
+  reasonSeparator: string;
+  doneSection: string;
+  doneStamp: string;
+  exclude: string[];
+  workspaceKey: string;
+  parentKey: string;
+  delegatePrompt: string | null;
+  markDoingOnDelegate: boolean;
+  priorityTag: string;
+  priorityLevels: number;
+}
+
 export interface DelegationSettings {
   workspacesRoot: string | null;
   editorCommand: string;
@@ -109,8 +132,9 @@ export interface DelegationSettings {
   autonomy: Autonomy;
   ownerName: string;
   runTimeoutMinutes: number;
-  features: { daily: boolean; trail: boolean; usage: boolean; limits: boolean };
+  features: { daily: boolean; trail: boolean; usage: boolean; limits: boolean; tasks: boolean };
   daily: DailySettings;
+  tasks: TasksFeatureSettings;
   trail: TrailSettings;
   widget: WidgetSettings;
   limits: LimitsSettings;
@@ -241,8 +265,9 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T;
 }
 
-export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily" | "trail" | "widget" | "limits" | "usage">> & {
+export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily" | "tasks" | "trail" | "widget" | "limits" | "usage">> & {
   features?: Partial<DelegationSettings["features"]>;
+  tasks?: Partial<Omit<TasksFeatureSettings, "prefixes">> & { prefixes?: Partial<TasksPrefixes> };
   daily?: Partial<Omit<DailySettings, "headings">> & { headings?: Partial<DailyHeadings> };
   trail?: Partial<TrailSettings>;
   widget?: Partial<Omit<WidgetSettings, "rings">> & { rings?: Partial<WidgetSettings["rings"]> };
@@ -709,9 +734,12 @@ export class DailyExistsError extends Error {
   }
 }
 
+export type DailyTaskState = "todo" | "doing" | "done";
+
 export interface DailyYesterdayTask {
   line: number;
   depth: number;
+  state: DailyTaskState;
   checked: boolean;
   text: string;
   raw: string;
@@ -816,6 +844,190 @@ export const generateDaily = (date: string, focus?: string, context?: string): P
 
 export const listDailySessions = (date: string): Promise<DailySession[]> =>
   call("GET", `/daily/sessions?date=${encodeURIComponent(date)}`);
+
+export type BoardStatus = "blocked" | "hold" | "todo" | "doing" | "done" | "archived";
+
+export type BoardCheckbox = "todo" | "doing" | "done";
+
+export type BoardSection = "open" | "done";
+
+export interface BoardNoteItem {
+  line: number;
+  raw: string;
+  text: string;
+}
+
+export interface BoardTask {
+  id: string;
+  projectId: string;
+  line: number;
+  raw: string;
+  depth: number;
+  checkbox: BoardCheckbox;
+  prefix: string | null;
+  status: BoardStatus;
+  title: string;
+  reason: string | null;
+  section: BoardSection;
+  doneAt: string | null;
+  group: string | null;
+  priority: number | null;
+  notes: string[];
+  noteItems: BoardNoteItem[];
+  subtasks: BoardTask[];
+}
+
+export interface BoardProject {
+  id: string;
+  name: string;
+  title: string;
+  parent: string | null;
+  depth: number;
+  path: string;
+  workspace: string | null;
+  workspaceSource: "own" | "inherited" | null;
+}
+
+export interface BoardToday {
+  date: string;
+  exists: boolean;
+  taskIds: string[];
+  states: Record<string, BoardCheckbox>;
+}
+
+export interface BoardPayload {
+  enabled: boolean;
+  root: string | null;
+  configured: boolean;
+  delegatePrompt: string;
+  projects: BoardProject[];
+  tasks: BoardTask[];
+  errors: { path: string; error: string }[];
+  today: BoardToday | null;
+}
+
+export interface BoardTarget {
+  projectId: string;
+  line: number;
+  raw: string;
+}
+
+export interface BoardDelegateInput extends BoardTarget {
+  workspace: string;
+  prompt: string;
+  repo?: string;
+  runner?: Runner;
+}
+
+export class BoardConflictError extends Error {
+  current: BoardTask | null;
+
+  constructor(message: string, current: BoardTask | null) {
+    super(message);
+    this.current = current;
+  }
+}
+
+async function callBoard<T>(method: string, path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${base}${path}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  const json: unknown = text.length > 0 ? JSON.parse(text) : null;
+  if (res.status === 409) {
+    const conflict = json as { error?: string; current?: BoardTask | null } | null;
+    throw new BoardConflictError(conflict?.error ?? "changed on disk", conflict?.current ?? null);
+  }
+  if (!res.ok) throw new Error((json as { error?: string } | null)?.error ?? `request failed (${res.status})`);
+  return json as T;
+}
+
+export const getTasksBoard = (): Promise<BoardPayload> => call("GET", "/tasks-board");
+
+export interface BoardChange {
+  status?: BoardStatus;
+  title?: string;
+  reason?: string | null;
+  priority?: number | null;
+}
+
+export const patchBoardItem = (target: BoardTarget, change: BoardChange): Promise<{ task: BoardTask; updatedAt: number; moved: boolean }> =>
+  callBoard("PATCH", "/tasks-board/item", { ...target, ...change });
+
+export interface BoardCreateInput {
+  projectId: string;
+  title: string;
+  status?: BoardStatus;
+  reason?: string;
+  priority?: number;
+  parentLine?: number;
+  parentRaw?: string;
+}
+
+export const createBoardItem = (input: BoardCreateInput): Promise<{ task: BoardTask; updatedAt: number }> =>
+  callBoard("POST", "/tasks-board/item", input);
+
+export const addBoardNote = (target: BoardTarget, text: string): Promise<{ task: BoardTask }> =>
+  callBoard("POST", "/tasks-board/note", { ...target, text });
+
+export const editBoardNote = (note: BoardTarget, text: string): Promise<{ task: BoardTask }> =>
+  callBoard("PATCH", "/tasks-board/note", { ...note, text });
+
+export const deleteBoardNote = (note: BoardTarget): Promise<{ task: BoardTask }> => callBoard("DELETE", "/tasks-board/note", note);
+
+export const openBoardProjectInEditor = (projectId: string): Promise<{ ok: boolean; error: string | null; command: string }> =>
+  callBoard("POST", "/tasks-board/open", { projectId });
+
+export const sweepBoardDone = (projectId?: string): Promise<{ moved: number; projects: string[] }> =>
+  callBoard("POST", "/tasks-board/sweep-done", projectId ? { projectId } : {});
+
+export interface DailyLinkItem {
+  line: number;
+  raw: string;
+  checkbox: BoardCheckbox;
+  label: string | null;
+  projectId: string | null;
+  text: string;
+  taskId: string | null;
+  candidates: string[];
+  taskStatus: BoardStatus | null;
+  taskPriority: number | null;
+  mismatch: boolean;
+}
+
+export interface DailyLinks {
+  date: string;
+  exists: boolean;
+  path: string;
+  items: DailyLinkItem[];
+  taskIds: string[];
+}
+
+export const getDailyLinks = (date: string): Promise<DailyLinks> => call("GET", `/tasks-board/daily-links?date=${encodeURIComponent(date)}`);
+
+export const addBoardTaskToDaily = (target: BoardTarget, date?: string): Promise<{ date: string; line: number; raw: string }> =>
+  callBoard("POST", "/tasks-board/add-to-daily", { ...target, ...(date ? { date } : {}) });
+
+export const delegateBoardTask = (input: BoardDelegateInput): Promise<{ taskId: string; task: BoardTask; warning?: string }> =>
+  callBoard("POST", "/tasks-board/delegate", input);
+
+export type BoardMoveDirection = "up" | "down";
+
+export interface BoardParentRef {
+  line: number;
+  raw: string;
+}
+
+export const moveBoardItem = (target: BoardTarget, direction: BoardMoveDirection): Promise<{ task: BoardTask }> =>
+  callBoard("POST", "/tasks-board/move", { ...target, direction });
+
+export const reparentBoardTask = (target: BoardTarget, parent: BoardParentRef | null): Promise<{ task: BoardTask }> =>
+  callBoard("POST", "/tasks-board/reparent", { ...target, parent });
+
+export const moveBoardTaskToProject = (target: BoardTarget, targetProjectId: string, parent: BoardParentRef | null): Promise<{ task: BoardTask }> =>
+  callBoard("POST", "/tasks-board/move-to-project", { ...target, targetProjectId, ...(parent ? { parent } : {}) });
 
 export interface TrailStatus {
   enabled: boolean;

@@ -40,7 +40,7 @@ const newTask = (title: string, runner: "claude" | "codex" = "claude") =>
 
 describe("settings", () => {
   it("falls back to environment defaults and persists updates", () => {
-    const dailyDefaults = { features: { daily: false, trail: false, usage: false, limits: false }, daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false }, trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true }, widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions", autostart: true }, limits: { claude: false, codex: false, codexLive: false, refreshMinutes: 5 }, usage: { days: 7 } };
+    const dailyDefaults = { features: { daily: false, trail: false, usage: false, limits: false, tasks: false }, tasks: { root: null, section: "Open loops", prefixes: { blocked: ["BLOCK", "BLOCKED"], hold: ["HOLD"], archived: ["ARCHIVED"] }, separator: " - ", exclude: ["_*"], workspaceKey: "workspace", parentKey: "parent", delegatePrompt: null, markDoingOnDelegate: true, reasonSeparator: " - ", doneSection: "", doneStamp: " ✅ {{date}}", priorityTag: "p", priorityLevels: 4 }, daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false }, trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true }, widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions", autostart: true }, limits: { claude: false, codex: false, codexLive: false, refreshMinutes: 5 }, usage: { days: 7 } };
     assert.deepEqual(store.getSettings(), { workspacesRoot: null, editorCommand: "code", secondBrainRoot: null, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60, ...dailyDefaults });
     const updated = store.updateSettings({ workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir });
     assert.deepEqual(updated, { workspacesRoot: dataDir, editorCommand: "cursor", secondBrainRoot: dataDir, autonomy: "full", ownerName: userInfo().username, runTimeoutMinutes: 60, ...dailyDefaults });
@@ -72,7 +72,7 @@ describe("widget, limits and usage settings", () => {
     const panel = store.updateSettings({ widget: { panel: "usage", autostart: false }, features: { usage: true } });
     assert.equal(panel.widget.panel, "usage");
     assert.equal(panel.widget.autostart, false);
-    assert.deepEqual(panel.features, { daily: false, trail: false, usage: true, limits: false });
+    assert.deepEqual(panel.features, { daily: false, trail: false, usage: true, limits: false, tasks: false });
     const limits = store.updateSettings({ limits: { claude: true }, features: { limits: true } });
     assert.deepEqual(limits.limits, { claude: true, codex: false, codexLive: false, refreshMinutes: 5 });
     assert.equal(limits.features.limits, true);

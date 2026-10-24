@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { listSessions } from "./db.js";
 import { BadRequestError, createInternalTask, startRun } from "./delegation-launch.js";
@@ -52,7 +52,7 @@ export const DEFAULT_DAILY_PROMPT =
   "You are working inside the second brain at {{root}}. Today is {{date}}. Create or refresh the daily diary {{file}}: " +
   "when {{template}} is a file, start from it; when the diary already exists, keep everything the user wrote. Fill in: " +
   "a briefing of what happened on {{yesterday}} in at most 3 lines (read the previous diary and any notes of that day you can find in the vault); today's focus as task items in the form `- [ ] Project - item`, " +
-  "taken from this input: {{focus}}, plus open items touched in the last two days; meetings when you can find them; " +
+  "taken from this input: {{focus}}, plus open items touched in the last two days; items written as `- [-]` are in progress (started, not finished): carry them over keeping `- [-]`; meetings when you can find them; " +
   "an empty captures section; and a sessions section listing today's sessions so far: {{sessions}}. Write the file, " +
   "do not ask questions, do not create or edit any other file, then stop.";
 
@@ -61,7 +61,8 @@ export function renderTemplate(text: string, date: string): string {
 }
 
 const LINE_SPLIT_RE = /\r\n|\n/;
-const TASK_LINE_RE = /^(\s*)[-*]\s+\[([ xX])\]\s?(.*)$/;
+const TASK_LINE_RE = /^(\s*)[-*]\s+\[([ xX-])\]\s?(.*)$/;
+const TASK_MARKER_RE = /^(\s*[-*]\s+)\[([ xX-])\]/;
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -77,12 +78,20 @@ function indentDepth(raw: string): number {
   return Math.floor(spaces / 2);
 }
 
+export type TaskState = "todo" | "doing" | "done";
+
 export interface TaskLine {
   line: number;
   depth: number;
+  state: TaskState;
   checked: boolean;
   text: string;
   raw: string;
+}
+
+function taskStateOf(marker: string): TaskState {
+  if (marker === "-") return "doing";
+  return marker.toLowerCase() === "x" ? "done" : "todo";
 }
 
 export function parseTaskLines(markdown: string): TaskLine[] {
@@ -91,10 +100,12 @@ export function parseTaskLines(markdown: string): TaskLine[] {
   lines.forEach((raw, index) => {
     const match = raw.match(TASK_LINE_RE);
     if (!match) return;
+    const state = taskStateOf(match[2]!);
     tasks.push({
       line: index,
       depth: indentDepth(raw),
-      checked: match[2]!.toLowerCase() === "x",
+      state,
+      checked: state === "done",
       text: match[3] ?? "",
       raw,
     });
@@ -133,7 +144,10 @@ export function setTaskChecked(markdown: string, line: number, checked: boolean)
   let counter = 0;
   for (let i = 0; i < parts.length; i += 2) {
     if (counter === line) {
-      parts[i] = (parts[i] ?? "").replace(/\[[ xX]\]/, checked ? "[x]" : "[ ]");
+      parts[i] = (parts[i] ?? "").replace(TASK_MARKER_RE, (whole, lead: string, marker: string) => {
+        if (checked) return `${lead}[x]`;
+        return marker.toLowerCase() === "x" ? `${lead}[ ]` : whole;
+      });
       break;
     }
     counter += 1;
@@ -208,12 +222,12 @@ export interface ComposeOptions {
   wikilinks: boolean;
 }
 
-function isPlaceholderLine(line: string): boolean {
+export function isPlaceholderLine(line: string): boolean {
   const trimmed = line.trim();
   return trimmed === "-" || trimmed === "- [ ]";
 }
 
-function findHeadingIndex(lines: string[], heading: string): number {
+export function findHeadingIndex(lines: string[], heading: string): number {
   const target = heading.trim().toLowerCase();
   return lines.findIndex((entry) => {
     const match = entry.match(/^##\s+(.*)$/);
@@ -260,7 +274,9 @@ function renderProjectLabel(project: string | null, wikilinks: boolean): string 
 function renderFocusItem(item: ComposeFocusItem, wikilinks: boolean): string[] {
   if (item.block) {
     const blockLines = item.block.split(LINE_SPLIT_RE);
-    blockLines[0] = (blockLines[0] ?? "").replace(/\[[ xX]\]/, "[ ]");
+    blockLines[0] = (blockLines[0] ?? "").replace(TASK_MARKER_RE, (whole, lead: string, marker: string) =>
+      marker === "-" ? whole : `${lead}[ ]`,
+    );
     return blockLines;
   }
   const label = renderProjectLabel(item.project, wikilinks);
@@ -497,6 +513,53 @@ export interface DailyWriteResult {
   updatedAt: number;
 }
 
+export interface AtomicWriteOps {
+  writeFileSync: (path: string, data: string, encoding: "utf8") => void;
+  renameSync: (from: string, to: string) => void;
+  copyFileSync: (from: string, to: string) => void;
+  unlinkSync: (path: string) => void;
+}
+
+const nodeAtomicOps: AtomicWriteOps = { writeFileSync, renameSync, copyFileSync, unlinkSync };
+const LOCK_ERROR_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+const RENAME_RETRIES = 3;
+
+function isLockError(err: unknown): boolean {
+  const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
+  return code !== undefined && LOCK_ERROR_CODES.has(code);
+}
+
+function removeQuietly(path: string, ops: AtomicWriteOps): void {
+  try {
+    ops.unlinkSync(path);
+  } catch {
+  }
+}
+
+function moveIntoPlace(tmpPath: string, target: string, ops: AtomicWriteOps): void {
+  for (let attempt = 0; attempt <= RENAME_RETRIES; attempt += 1) {
+    try {
+      ops.renameSync(tmpPath, target);
+      return;
+    } catch (err) {
+      if (!isLockError(err)) throw err;
+    }
+  }
+  ops.copyFileSync(tmpPath, target);
+  removeQuietly(tmpPath, ops);
+}
+
+export function writeFileAtomic(target: string, content: string, ops: AtomicWriteOps = nodeAtomicOps): void {
+  const tmpPath = `${target}.${randomUUID()}.tmp`;
+  try {
+    ops.writeFileSync(tmpPath, content, "utf8");
+    moveIntoPlace(tmpPath, target, ops);
+  } catch (err) {
+    removeQuietly(tmpPath, ops);
+    throw err;
+  }
+}
+
 export function writeDaily(
   settings: DelegationSettings,
   date: string,
@@ -517,9 +580,7 @@ export function writeDaily(
     }
   }
   mkdirSync(dirname(path), { recursive: true });
-  const tmpPath = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(tmpPath, content, "utf8");
-  renameSync(tmpPath, path);
+  writeFileAtomic(path, content);
   const stat = statSync(path);
   lastHubHash.set(path, hashOf(content));
   broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "hub", writeId: writeId ?? null });

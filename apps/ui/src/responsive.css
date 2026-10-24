@@ -154,3 +154,48 @@
     display: none;
   }
 }
+
+@media (max-width: 720px) {
+  .board-kanban {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    grid-template-columns: minmax(0, 1fr);
+    overflow-x: visible;
+  }
+
+  .board-card {
+    cursor: default;
+  }
+
+  .board-filters__project {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+  }
+
+  .board-filters__project .select {
+    flex: 1 1 200px;
+  }
+
+  .board-filters__search {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .view--board .toolbar__right {
+    width: 100%;
+  }
+
+  .view--board .search {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .view--board .search .in {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .modal__overlay {
+    padding: 12px;
+  }
+}

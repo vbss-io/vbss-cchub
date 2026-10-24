@@ -1,5 +1,21 @@
 [
   {
+    "version": "1.3.0",
+    "date": "2026-10-24",
+    "highlights": [
+      "Tasks (opt-in): a Kanban and Table board over the Markdown or Obsidian docs of your projects folder; every doc is a project, a folder doc is the parent of the other docs in its folder, and frontmatter can set the parent and the CC Hub workspace",
+      "Tasks are the checkbox lines of a configurable section (Open loops by default) with subtasks and notes: [ ] to-do, [-] doing, [x] done, BLOCK / HOLD / ARCHIVED prefixes with a reason after a configurable separator, and #p0..#p3 priority tags",
+      "Edit both ways: status, title, reason, priority, subtasks and notes written by the hub land in the .md file, and edits made in Obsidian show up on the board live",
+      "Organize from a details drawer: move tasks, subtasks and notes up or down, promote a subtask, make a task a subtask of another, or move it with its subtasks and notes to another project",
+      "Done loops (opt-in): a finished task whose subtasks are all done moves to a Done section with its date, from the hub or with Move done",
+      "Filters by project (with subprojects), status and priority, search, hide empty columns, expand all, sorting by priority, and a Reset filters button",
+      "Delegate a task to a workspace with a prompt built from the task, its subtasks and notes; the task turns Doing when it starts",
+      "Daily and Tasks together: in-progress [-] items carry over to the next day, the wizard can add tasks from the board, the Tasks check panel shows which focus items are missing from Tasks or out of sync, and the board marks what is in today's daily",
+      "The desktop app restarts the hub server if it stops, shows a Hub offline banner with a Restart button, and keeps a log of why it stopped",
+      "Fixes: drag and drop works in the desktop app, and writes retry when an antivirus or sync client holds the file"
+    ]
+  },
+  {
     "version": "1.2.0",
     "date": "2026-10-10",
     "highlights": [

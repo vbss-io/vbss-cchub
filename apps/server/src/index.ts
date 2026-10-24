@@ -48,6 +48,7 @@ import { startLimitsPolling, stopLimitsPolling } from "./limits.js";
 import { resolveWorkspaceTarget } from "./delegation-launch.js";
 import { getSettings, markRunningAsInterrupted } from "./delegation-store.js";
 import { watchDaily } from "./daily.js";
+import { watchTasksBoard } from "./tasks-board.js";
 import { createShareApp } from "./share-server.js";
 import { deleteOrphanShareForks, limitOf, listAsksForSession, listForksForSession, markInterruptedShareRequests } from "./share-store.js";
 import { markShareEndpoint, stopTunnel } from "./tunnel.js";
@@ -552,6 +553,7 @@ app.listen(config.port, config.host, () => {
     console.log("delegation enabled (loopback callers only)");
     const settings = getSettings();
     if (settings.features.daily && settings.secondBrainRoot) watchDaily(settings);
+    watchTasksBoard(settings);
     startLimitsPolling(settings);
     if (settings.features.usage) setTimeout(warmUsage, USAGE_WARMUP_DELAY_MS).unref();
     onBroadcast((event) => {

@@ -114,17 +114,27 @@ function stripBullet(stripped: string, kind: ListKind): string {
   return kind === "ul" ? stripped.replace(/^[-*]\s+/, "") : stripped.replace(/^\d+\.\s+/, "");
 }
 
-function parseTaskContent(content: string): { checked: boolean; rest: string } | null {
-  const match = content.match(/^\[([ xX])\]\s*(.*)$/);
+type TaskState = "todo" | "doing" | "done";
+
+interface ParsedTask {
+  state: TaskState;
+  checked: boolean;
+  rest: string;
+}
+
+function parseTaskContent(content: string): ParsedTask | null {
+  const match = content.match(/^\[([ xX-])\]\s*(.*)$/);
   if (!match) return null;
-  return { checked: match[1]!.toLowerCase() === "x", rest: match[2] ?? "" };
+  const marker = match[1]!;
+  const state: TaskState = marker === "-" ? "doing" : marker.toLowerCase() === "x" ? "done" : "todo";
+  return { state, checked: state === "done", rest: match[2] ?? "" };
 }
 
 const HR_RE = /^(-{3,}|\*{3,}|_{3,})$/;
 
 interface ParsedListItem {
   lineNo: number;
-  task: { checked: boolean; rest: string } | null;
+  task: ParsedTask | null;
   content: string;
   roughLoose: boolean;
   nested: { node: ReactNode; hasMatch: boolean } | null;
@@ -195,6 +205,7 @@ function parseListBlock(
     const inline = parseInline(body, ikey);
     if (parsed.task) {
       const classNames = ["md__task"];
+      if (parsed.task.state === "doing") classNames.push("md__task--doing");
       if (loose) classNames.push("md__item--loose");
       if (isContext) classNames.push("md__item--context");
       items.push(
@@ -202,6 +213,10 @@ function parseListBlock(
           <label>
             <input
               type="checkbox"
+              ref={(element) => {
+                if (element) element.indeterminate = parsed.task?.state === "doing";
+              }}
+              title={parsed.task.state === "doing" ? "In progress" : undefined}
               checked={parsed.task.checked}
               disabled={!onToggleTask}
               onChange={(event) => onToggleTask?.(parsed.lineNo, event.target.checked)}
@@ -350,7 +365,10 @@ export function toggleTaskLine(markdown: string, lineIndex: number, checked: boo
   let counter = 0;
   for (let i = 0; i < parts.length; i += 2) {
     if (counter === lineIndex) {
-      parts[i] = (parts[i] ?? "").replace(/\[[ xX]\]/, checked ? "[x]" : "[ ]");
+      parts[i] = (parts[i] ?? "").replace(/^(\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+)\[([ xX-])\]/, (whole, lead: string, marker: string) => {
+        if (checked) return `${lead}[x]`;
+        return marker.toLowerCase() === "x" ? `${lead}[ ]` : whole;
+      });
       break;
     }
     counter += 1;
@@ -363,7 +381,7 @@ export function countTasks(markdown: string): { open: number; done: number } {
   let open = 0;
   let done = 0;
   for (const raw of lines) {
-    const match = raw.match(/^\s*[-*]\s+\[([ xX])\]/);
+    const match = raw.match(/^\s*(?:>\s*)*(?:[-*+]|\d+[.)])\s+\[([ xX-])\]/);
     if (!match) continue;
     if (match[1]!.toLowerCase() === "x") done += 1;
     else open += 1;

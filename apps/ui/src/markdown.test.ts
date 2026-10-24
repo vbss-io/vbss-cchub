@@ -183,3 +183,77 @@ test("countTasks counts open and done task lines, nested included", () => {
   const source = "- [ ] a\n  - [x] b\n- [x] c\n- [ ] d";
   assert.deepEqual(countTasks(source), { open: 2, done: 2 });
 });
+
+test("toggleTaskLine turns [-] into [x] when checking", () => {
+  assert.equal(toggleTaskLine("- [ ] a\n- [-] b\n- [ ] c", 1, true), "- [ ] a\n- [x] b\n- [ ] c");
+});
+
+test("toggleTaskLine unchecking reopens [x] and never corrupts [-]", () => {
+  assert.equal(toggleTaskLine("- [x] a\n- [-] b", 0, false), "- [ ] a\n- [-] b");
+  assert.equal(toggleTaskLine("- [x] a\n- [-] b", 1, false), "- [x] a\n- [-] b");
+});
+
+test("toggleTaskLine only touches the leading checkbox of the line", () => {
+  assert.equal(toggleTaskLine("- [-] fix [ ] literal", 0, true), "- [x] fix [ ] literal");
+});
+
+test("countTasks counts [-] as open", () => {
+  assert.deepEqual(countTasks("- [ ] a\n- [-] b\n  - [x] c\n- [x] d"), { open: 2, done: 2 });
+});
+
+test("renders a [-] item as a task in the doing state", () => {
+  const html = render({ text: "- [-] started\n- [ ] todo\n- [x] finished" });
+  assert.match(html, /<li class="md__task md__task--doing"[^>]*>/);
+  assert.match(html, /started/);
+  assert.equal((html.match(/type="checkbox"/g) ?? []).length, 3);
+  assert.equal((html.match(/md__task--doing/g) ?? []).length, 1);
+  assert.doesNotMatch(html, /\[-\]/);
+});
+
+test("the open task filter keeps [-] items and the done filter hides them", () => {
+  const source = "- [-] started\n- [x] finished";
+  const open = render({ text: source, taskFilter: "open" });
+  assert.match(open, /started/);
+  assert.doesNotMatch(open, /finished/);
+  const done = render({ text: source, taskFilter: "done" });
+  assert.doesNotMatch(done, /started/);
+  assert.match(done, /finished/);
+});
+
+test("toggleTaskLine checks and unchecks every bullet marker", () => {
+  assert.equal(toggleTaskLine("+ [ ] a", 0, true), "+ [x] a");
+  assert.equal(toggleTaskLine("* [-] a", 0, true), "* [x] a");
+  assert.equal(toggleTaskLine("+ [x] a", 0, false), "+ [ ] a");
+});
+
+test("toggleTaskLine handles ordered list task lines", () => {
+  assert.equal(toggleTaskLine("1. [ ] ordered", 0, true), "1. [x] ordered");
+  assert.equal(toggleTaskLine("  12) [-] ordered", 0, true), "  12) [x] ordered");
+  assert.equal(toggleTaskLine("1. [x] ordered", 0, false), "1. [ ] ordered");
+  assert.equal(toggleTaskLine("1. [-] ordered", 0, false), "1. [-] ordered");
+});
+
+test("toggleTaskLine handles blockquote-prefixed task lines", () => {
+  assert.equal(toggleTaskLine("> - [ ] quoted", 0, true), "> - [x] quoted");
+  assert.equal(toggleTaskLine("> > - [-] nested", 0, true), "> > - [x] nested");
+  assert.equal(toggleTaskLine("> 1. [x] quoted", 0, false), "> 1. [ ] quoted");
+  assert.equal(toggleTaskLine(">> * [ ] tight", 0, true), ">> * [x] tight");
+});
+
+test("toggleTaskLine keeps only-leading-checkbox rule for ordered and quoted lines", () => {
+  assert.equal(toggleTaskLine("1. [-] fix [ ] literal", 0, true), "1. [x] fix [ ] literal");
+  assert.equal(toggleTaskLine("> - plain [ ] text", 0, true), "> - plain [ ] text");
+});
+
+test("countTasks counts +, ordered and blockquote-prefixed task lines like toggleTaskLine handles them", () => {
+  const source = ["+ [ ] plus open", "1. [x] ordered done", "2) [-] ordered doing", "> - [ ] quoted open", "> > * [x] nested quote done"].join("\n");
+  assert.deepEqual(countTasks(source), { open: 3, done: 2 });
+});
+
+test("countTasks ignores lines toggleTaskLine would not touch", () => {
+  assert.deepEqual(countTasks("- [] none\n- plain\nnot - [ ] mid\n1.[ ] tight"), { open: 0, done: 0 });
+});
+
+test("countTasks handles CRLF sources", () => {
+  assert.deepEqual(countTasks("- [ ] a\r\n1. [x] b\r\n"), { open: 1, done: 1 });
+});

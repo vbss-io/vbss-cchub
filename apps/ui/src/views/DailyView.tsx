@@ -1,8 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import type { DailyStreamEvent } from "../api";
+import type { DailyStreamEvent, TasksBoardStreamEvent } from "../api";
+import { BoardTaskPicker } from "../components/BoardTaskPicker";
+import { DailyTasksCheck } from "../components/DailyTasksCheck";
 import {
+  appendNewItem,
   carryOverFromYesterday,
+  defaultYesterdayCarry,
+  defaultYesterdayDone,
   focusPreviewLines,
+  hasFocusItem,
+  isDoingBlock,
+  keepPickedDoingItems,
   mergeTrailIntoSummary,
   parseMeetings,
   parseNewItems,
@@ -34,6 +42,7 @@ interface Props {
   onOpenSession: (sessionId: string) => void;
   onOpenTask: (taskId: string) => void;
   subscribeDaily: (listener: (event: DailyStreamEvent) => void) => () => void;
+  subscribeBoard: (listener: (event: TasksBoardStreamEvent) => void) => () => void;
 }
 
 type Mode = "preview" | "edit";
@@ -132,6 +141,7 @@ function clearDraft(date: string): void {
 
 interface DailyWizardProps {
   date: string;
+  tasksEnabled: boolean;
   step: WizardStep;
   onStepChange: (step: WizardStep) => void;
   prepare: DailyPrepare | null;
@@ -166,6 +176,7 @@ interface DailyWizardProps {
 function DailyWizard(props: DailyWizardProps) {
   const {
     date,
+    tasksEnabled,
     step,
     onStepChange,
     prepare,
@@ -245,15 +256,18 @@ function DailyWizard(props: DailyWizardProps) {
                   </div>
                   {prepare.yesterday.tasks.map((task) => (
                     <div className="daily__yesterday-row" key={task.line}>
-                      <span className="daily__yesterday-text">{renderInline(task.text, `y-${task.line}`)}</span>
+                      <span className="daily__yesterday-text">
+                        {renderInline(task.text, `y-${task.line}`)}
+                        {task.state === "doing" && <span className="daily__doing-badge">In progress</span>}
+                      </span>
                       <input
                         type="checkbox"
-                        checked={yesterdayDone[task.line] ?? task.checked}
+                        checked={yesterdayDone[task.line] ?? defaultYesterdayDone(task)}
                         onChange={(event) => onToggleDone(task.line, event.target.checked)}
                       />
                       <input
                         type="checkbox"
-                        checked={yesterdayCarry[task.line] ?? !task.checked}
+                        checked={yesterdayCarry[task.line] ?? defaultYesterdayCarry(task)}
                         onChange={(event) => onToggleCarry(task.line, event.target.checked)}
                       />
                     </div>
@@ -319,6 +333,7 @@ function DailyWizard(props: DailyWizardProps) {
                       onCarriedItemsChange(carriedItems.map((entryItem, i) => (i === index ? { ...entryItem, text: nextText } : entryItem)));
                     }}
                   />
+                  {isDoingBlock(item.block) && <span className="daily__doing-badge">In progress</span>}
                   <button className="act act--icon" onClick={() => onCarriedItemsChange(carriedItems.filter((_, i) => i !== index))}>
                     Remove
                   </button>
@@ -330,6 +345,17 @@ function DailyWizard(props: DailyWizardProps) {
             <span>New items (one per line, "Project - item")</span>
             <textarea className="in daily__wizard-textarea" value={newItemsText} onChange={(event) => onNewItemsTextChange(event.target.value)} />
           </label>
+          {tasksEnabled && (
+            <BoardTaskPicker
+              newItemsText={newItemsText}
+              carriedItems={carriedItems}
+              wikilinks={wikilinks}
+              onPick={(item) => onNewItemsTextChange(appendNewItem(newItemsText, item))}
+              onPickDoing={(item) => {
+                if (!hasFocusItem(carriedItems, item)) onCarriedItemsChange([...carriedItems, item]);
+              }}
+            />
+          )}
           <label className="field">
             <span>Meetings (one per line)</span>
             <textarea className="in daily__wizard-textarea" value={meetingsText} onChange={(event) => onMeetingsTextChange(event.target.value)} />
@@ -388,7 +414,7 @@ function DailyWizard(props: DailyWizardProps) {
   );
 }
 
-export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily }: Props) {
+export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily, subscribeBoard }: Props) {
   const [overview, setOverview] = useState<DailyOverview | null>(null);
   const [overviewFailed, setOverviewFailed] = useState<"stale-hub" | "error" | null>(null);
   const [date, setDate] = useState<string | null>(null);
@@ -585,6 +611,13 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
     if (!enabled) return;
     return subscribeDaily((event) => {
       loadOverview();
+      if (event.recovered) {
+        if (date) {
+          refreshSessions(date);
+          if (!dirty && saveStatus !== "saving") void loadEntry(date).catch(() => undefined);
+        }
+        return;
+      }
       if (event.date === date) refreshSessions(event.date);
       if (event.date !== date) return;
       const decision = decideDailyEvent(event, {
@@ -701,8 +734,8 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
           const initialDone: Record<number, boolean> = {};
           const initialCarry: Record<number, boolean> = {};
           for (const task of next.yesterday?.tasks ?? []) {
-            initialDone[task.line] = task.checked;
-            initialCarry[task.line] = !task.checked;
+            initialDone[task.line] = defaultYesterdayDone(task);
+            initialCarry[task.line] = defaultYesterdayCarry(task);
           }
           setYesterdayDone(initialDone);
           setYesterdayCarry(initialCarry);
@@ -719,7 +752,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
 
   const computeCarriedItems = (): DailyFocusDraftItem[] => {
     const tasks = prepare?.yesterday?.tasks ?? [];
-    return carryOverFromYesterday(tasks, yesterdayDone, yesterdayCarry);
+    return keepPickedDoingItems(carryOverFromYesterday(tasks, yesterdayDone, yesterdayCarry), carriedItems, tasks);
   };
 
   const skipYesterday = () => {
@@ -732,7 +765,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
     setCloseBusy(true);
     setCloseError(null);
     try {
-      const tasks = prepare.yesterday.tasks.map((task) => ({ line: task.line, checked: yesterdayDone[task.line] ?? task.checked }));
+      const tasks = prepare.yesterday.tasks.map((task) => ({ line: task.line, checked: yesterdayDone[task.line] ?? defaultYesterdayDone(task) }));
       await closeYesterday(date, { yesterday: prepare.yesterday.date, tasks });
       setCarriedItems(computeCarriedItems());
       setWizardStep(2);
@@ -893,6 +926,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
           {wizardOpen && (
             <DailyWizard
               date={date}
+              tasksEnabled={settings?.features.tasks === true}
               step={wizardStep}
               onStepChange={setWizardStep}
               prepare={prepare}
@@ -991,27 +1025,30 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily 
             </>
           )}
         </div>
-        <div className="panel daily__side">
-          <h3>Sessions today</h3>
-          {sessions.length === 0 && <p className="muted small">none yet</p>}
-          {sessions.length > 0 && (
-            <ul className="plainlist">
-              {sessions.map((session) => {
-                const title = session.title ?? session.sessionId.slice(0, 8);
-                return (
-                  <li key={session.sessionId} className="daily__session-row">
-                    <button className="linklike daily__session-title" title={title} onClick={() => onOpenSession(session.sessionId)}>
-                      {title}
-                    </button>
-                    <span className="daily__session-chips">
-                      {session.client && <span className="chip">{session.client}</span>}
-                      <span className="chip">{session.status}</span>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+        <div className="daily__aside">
+          <div className="panel daily__side">
+            <h3>Sessions today</h3>
+            {sessions.length === 0 && <p className="muted small">none yet</p>}
+            {sessions.length > 0 && (
+              <ul className="plainlist">
+                {sessions.map((session) => {
+                  const title = session.title ?? session.sessionId.slice(0, 8);
+                  return (
+                    <li key={session.sessionId} className="daily__session-row">
+                      <button className="linklike daily__session-title" title={title} onClick={() => onOpenSession(session.sessionId)}>
+                        {title}
+                      </button>
+                      <span className="daily__session-chips">
+                        {session.client && <span className="chip">{session.client}</span>}
+                        <span className="chip">{session.status}</span>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+          {settings?.features.tasks === true && date && <DailyTasksCheck date={date} subscribeDaily={subscribeDaily} subscribeBoard={subscribeBoard} />}
         </div>
       </div>
     </div>

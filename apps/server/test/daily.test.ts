@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -44,7 +44,8 @@ function fixtureSettings(root: string, overrides: Partial<DelegationSettings> = 
     autonomy: "full",
     ownerName: "tester",
     runTimeoutMinutes: 60,
-    features: { daily: true, trail: false, usage: false, limits: false },
+    features: { daily: true, trail: false, usage: false, limits: false, tasks: false },
+    tasks: { root: null, section: "Open loops", prefixes: { blocked: ["BLOCK", "BLOCKED"], hold: ["HOLD"], archived: ["ARCHIVED"] }, separator: " - ", exclude: ["_*"], workspaceKey: "workspace", parentKey: "parent", delegatePrompt: null, markDoingOnDelegate: true, reasonSeparator: " - ", doneSection: "", doneStamp: " ✅ {{date}}", priorityTag: "p", priorityLevels: 4 },
     daily: defaultDaily,
     trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true },
     widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions", autostart: true },
@@ -137,7 +138,7 @@ tags: [diario]
 describe("daily settings", () => {
   it("defaults features.daily off and merges nested daily patches", () => {
     const defaults = store.getSettings();
-    assert.deepEqual(defaults.features, { daily: false, trail: false, usage: false, limits: false });
+    assert.deepEqual(defaults.features, { daily: false, trail: false, usage: false, limits: false, tasks: false });
     assert.deepEqual(defaults.daily, defaultDaily);
 
     const afterFeature = store.updateSettings({ features: { daily: true } });
@@ -269,6 +270,11 @@ describe("template and prompt rendering", () => {
     assert.match(rendered, /ship the daily tab/);
   });
 
+  it("tells the default prompt that [-] items are in progress and carried keeping [-]", () => {
+    assert.match(daily.DEFAULT_DAILY_PROMPT, /- \[-\]/);
+    assert.match(daily.DEFAULT_DAILY_PROMPT, /in progress/);
+  });
+
   it("finds the most recent diary before a date through the recursive lookup", () => {
     const root = mkdtempSync(join(tmpdir(), "cch-daily-yday-"));
     mkdirSync(join(root, "daily", "2026-08"), { recursive: true });
@@ -309,6 +315,27 @@ describe("parseTaskLines", () => {
       tasks.map((task) => task.depth),
       [0, 1, 2, 4],
     );
+  });
+});
+
+describe("parseTaskLines in-progress state", () => {
+  it("matches [-] lines as doing and keeps checked equal to state done", () => {
+    const tasks = daily.parseTaskLines("- [ ] todo\n- [-] doing\n- [x] done\n- [X] done upper\n  - [-] nested doing");
+    assert.deepEqual(
+      tasks.map((task) => task.state),
+      ["todo", "doing", "done", "done", "doing"],
+    );
+    assert.deepEqual(
+      tasks.map((task) => task.checked),
+      [false, false, true, true, false],
+    );
+    assert.equal(tasks[1]!.text, "doing");
+    assert.equal(tasks[1]!.raw, "- [-] doing");
+    assert.equal(tasks[4]!.depth, 1);
+  });
+
+  it("does not treat other bracket contents as tasks", () => {
+    assert.equal(daily.parseTaskLines("- [~] nope\n- [--] nope\n- [] nope").length, 0);
   });
 });
 
@@ -355,6 +382,19 @@ describe("setTaskChecked", () => {
   it("leaves the source unchanged for an out-of-range index", () => {
     const source = "- [ ] a\n- [ ] b";
     assert.equal(daily.setTaskChecked(source, 9, true), source);
+  });
+
+  it("turns [-] into [x] when checking", () => {
+    assert.equal(daily.setTaskChecked("- [ ] a\n- [-] b\n- [ ] c", 1, true), "- [ ] a\n- [x] b\n- [ ] c");
+  });
+
+  it("turns [x] into [ ] when unchecking and leaves [-] untouched", () => {
+    assert.equal(daily.setTaskChecked("- [x] a\n- [-] b", 0, false), "- [ ] a\n- [-] b");
+    assert.equal(daily.setTaskChecked("- [x] a\n- [-] b", 1, false), "- [x] a\n- [-] b");
+  });
+
+  it("preserves CRLF when checking a [-] line", () => {
+    assert.equal(daily.setTaskChecked("# t\r\n- [-] a\r\n- [ ] b", 1, true), "# t\r\n- [x] a\r\n- [ ] b");
   });
 });
 
@@ -499,6 +539,24 @@ describe("composeDaily", () => {
     );
     assert.match(content, /## Focus\n- \[ \] \[\[Acme\]\] - Config\/Check GeoServer Produção/);
     assert.match(content, /ips de plataforma, sem conseguir resolver secrets/);
+  });
+
+  it("keeps [-] on the first line of a carried doing block and reopens done ones", () => {
+    const doingBlock = "- [-] Acme - Migrate things\n  - [x] sub done\n  - note";
+    const doneBlock = "- [x] Acme - Finished thing";
+    const content = daily.composeDaily(
+      daily.BUILT_IN_TEMPLATE,
+      {
+        focus: [
+          { project: null, text: "ignored", block: doingBlock },
+          { project: null, text: "ignored", block: doneBlock },
+        ],
+        meetings: [],
+        sessions: [],
+      },
+      { date: "2026-09-15", headings, wikilinks: false },
+    );
+    assert.match(content, /## Focus\n- \[-\] Acme - Migrate things\n  - \[x\] sub done\n  - note\n- \[ \] Acme - Finished thing/);
   });
 
   it("inserts a briefing blockquote right after the H1, and skips it entirely when empty", () => {
@@ -927,5 +985,109 @@ describe("daily HTTP routes", () => {
     });
     assert.equal(overwritten.status, 200);
     assert.match((overwritten.json as { content: string }).content, /## Focus\n- \[ \] replaced/);
+  });
+});
+
+describe("atomic file writes", () => {
+  const root = mkdtempSync(join(tmpdir(), "cch-atomic-"));
+
+  after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+
+  const failure = (code: string): NodeJS.ErrnoException => Object.assign(new Error(code), { code });
+
+  interface Calls {
+    writes: string[];
+    renames: number;
+    copies: string[];
+    unlinks: string[];
+  }
+
+  const stub = (rename: (attempt: number) => void, copy: () => void = () => undefined, unlink: () => void = () => undefined) => {
+    const calls: Calls = { writes: [], renames: 0, copies: [], unlinks: [] };
+    const ops = {
+      writeFileSync: (path: string) => {
+        calls.writes.push(path);
+      },
+      renameSync: () => {
+        calls.renames += 1;
+        rename(calls.renames);
+      },
+      copyFileSync: (from: string) => {
+        calls.copies.push(from);
+        copy();
+      },
+      unlinkSync: (path: string) => {
+        calls.unlinks.push(path);
+        unlink();
+      },
+    };
+    return { ops, calls };
+  };
+
+  it("writes the target and leaves no temp file with the real filesystem", () => {
+    const target = join(root, "plain.md");
+    daily.writeFileAtomic(target, "plain content");
+    assert.equal(readFileSync(target, "utf8"), "plain content");
+    assert.deepEqual(readdirSync(root).filter((name) => name.endsWith(".tmp")), []);
+  });
+
+  it("retries the rename immediately and succeeds without copying", () => {
+    const { ops, calls } = stub((attempt) => {
+      if (attempt < 3) throw failure("EPERM");
+    });
+    daily.writeFileAtomic(join(root, "retry.md"), "x", ops);
+    assert.equal(calls.renames, 3);
+    assert.deepEqual(calls.copies, []);
+    assert.deepEqual(calls.unlinks, []);
+  });
+
+  it("falls back to copy and removes the temp file after the retries keep failing", () => {
+    for (const code of ["EPERM", "EBUSY", "EACCES"]) {
+      const { ops, calls } = stub(() => {
+        throw failure(code);
+      });
+      daily.writeFileAtomic(join(root, "fallback.md"), "x", ops);
+      assert.equal(calls.renames, 4, code);
+      assert.equal(calls.copies.length, 1, code);
+      assert.equal(calls.copies[0], calls.writes[0], code);
+      assert.deepEqual(calls.unlinks, [calls.writes[0]], code);
+    }
+  });
+
+  it("still succeeds when removing the temp file after the copy fails", () => {
+    const { ops, calls } = stub(
+      () => {
+        throw failure("EBUSY");
+      },
+      () => undefined,
+      () => {
+        throw failure("EPERM");
+      },
+    );
+    assert.doesNotThrow(() => daily.writeFileAtomic(join(root, "unlink.md"), "x", ops));
+    assert.equal(calls.copies.length, 1);
+  });
+
+  it("rethrows the copy error and removes the temp file when the fallback fails", () => {
+    const { ops, calls } = stub(
+      () => {
+        throw failure("EPERM");
+      },
+      () => {
+        throw failure("EACCES");
+      },
+    );
+    assert.throws(() => daily.writeFileAtomic(join(root, "copyfail.md"), "x", ops), (err: unknown) => (err as NodeJS.ErrnoException).code === "EACCES");
+    assert.deepEqual(calls.unlinks, [calls.writes[0]]);
+  });
+
+  it("rethrows any other rename error at once without retrying or copying", () => {
+    const { ops, calls } = stub(() => {
+      throw failure("ENOENT");
+    });
+    assert.throws(() => daily.writeFileAtomic(join(root, "other.md"), "x", ops), (err: unknown) => (err as NodeJS.ErrnoException).code === "ENOENT");
+    assert.equal(calls.renames, 1);
+    assert.deepEqual(calls.copies, []);
+    assert.deepEqual(calls.unlinks, [calls.writes[0]]);
   });
 });

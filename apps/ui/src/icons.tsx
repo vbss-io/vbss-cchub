@@ -53,6 +53,16 @@ export function IconTasks({ size = 20 }: IconProps) {
   );
 }
 
+export function IconBoard({ size = 20 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <rect x="3" y="4" width="5" height="16" rx="1.5" />
+      <rect x="9.5" y="4" width="5" height="10" rx="1.5" />
+      <rect x="16" y="4" width="5" height="13" rx="1.5" />
+    </svg>
+  );
+}
+
 export function IconWorkspaces({ size = 20 }: IconProps) {
   return (
     <svg {...svgProps(size)}>
@@ -227,6 +237,51 @@ export function IconOpenAI({ size = 14 }: IconProps) {
       {[0, 60, 120, 180, 240, 300].map((angle) => (
         <path key={angle} d={OPENAI_ARM} transform={`rotate(${angle} 12 12)`} />
       ))}
+    </svg>
+  );
+}
+
+export function IconEdit({ size = 14 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17Z" />
+      <path d="m14 7 3 3" />
+    </svg>
+  );
+}
+
+export function IconCalendarPlus({ size = 14 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M8 3v4M16 3v4M3 10h18M12 13v5M9.5 15.5h5" />
+    </svg>
+  );
+}
+
+export function IconRun({ size = 14 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <path d="m7 5 12 7-12 7Z" />
+    </svg>
+  );
+}
+
+export function IconDetails({ size = 14 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M14 4v16M17 9h1M17 12h1" />
+    </svg>
+  );
+}
+
+export function IconMore({ size = 14 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <circle cx="5" cy="12" r="1.4" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.4" fill="currentColor" />
+      <circle cx="19" cy="12" r="1.4" fill="currentColor" />
     </svg>
   );
 }

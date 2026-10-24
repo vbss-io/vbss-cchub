@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getDesktopNotifyStatus, sendToast, subscribe, type DesktopNotifyStatus, type HooksStatus } from "../api";
+import { formatList, parseList, validateTaskSettings } from "../board-model";
 import { GroupManager } from "../components/GroupManager";
 import { flushTrail, getTrail } from "../delegation";
 import type { ConnectStatus, DelegationSettings, McpClient, Runner, SettingsPatch, ShellKind, TrailDetail, TrailStatus, WidgetEdge, WidgetPanel } from "../delegation";
@@ -194,6 +195,24 @@ export function SettingsView(props: Props) {
   const [dailyWikilinks, setDailyWikilinks] = useState(settings?.daily.wikilinks ?? false);
   const [dailyBusy, setDailyBusy] = useState(false);
 
+  const [tasksRoot, setTasksRoot] = useState(settings?.tasks.root ?? "");
+  const [tasksSection, setTasksSection] = useState(settings?.tasks.section ?? "Open loops");
+  const [tasksBlocked, setTasksBlocked] = useState(formatList(settings?.tasks.prefixes.blocked ?? ["BLOCK", "BLOCKED"]));
+  const [tasksHold, setTasksHold] = useState(formatList(settings?.tasks.prefixes.hold ?? ["HOLD"]));
+  const [tasksArchived, setTasksArchived] = useState(formatList(settings?.tasks.prefixes.archived ?? ["ARCHIVED"]));
+  const [tasksSeparator, setTasksSeparator] = useState(settings?.tasks.separator ?? " - ");
+  const [tasksReasonSeparator, setTasksReasonSeparator] = useState(settings?.tasks.reasonSeparator ?? " - ");
+  const [tasksDoneSection, setTasksDoneSection] = useState(settings?.tasks.doneSection ?? "");
+  const [tasksDoneStamp, setTasksDoneStamp] = useState(settings?.tasks.doneStamp ?? " ✅ {{date}}");
+  const [tasksExclude, setTasksExclude] = useState(formatList(settings?.tasks.exclude ?? ["_*"]));
+  const [tasksWorkspaceKey, setTasksWorkspaceKey] = useState(settings?.tasks.workspaceKey ?? "workspace");
+  const [tasksParentKey, setTasksParentKey] = useState(settings?.tasks.parentKey ?? "parent");
+  const [tasksPrompt, setTasksPrompt] = useState(settings?.tasks.delegatePrompt ?? "");
+  const [tasksMarkDoing, setTasksMarkDoing] = useState(settings?.tasks.markDoingOnDelegate ?? true);
+  const [tasksPriorityTag, setTasksPriorityTag] = useState(settings?.tasks.priorityTag ?? "p");
+  const [tasksPriorityLevels, setTasksPriorityLevels] = useState(String(settings?.tasks.priorityLevels ?? 4));
+  const [tasksBusy, setTasksBusy] = useState(false);
+
   const [trailDir, setTrailDir] = useState(settings?.trail?.dir ?? "");
   const [trailDetail, setTrailDetail] = useState<TrailDetail>(settings?.trail?.detail ?? "light");
   const [trailModel, setTrailModel] = useState(settings?.trail?.model ?? "");
@@ -239,6 +258,22 @@ export function SettingsView(props: Props) {
     setDailyHeadingSessions(settings?.daily.headings.sessions ?? "Sessions");
     setDailyClosedKey(settings?.daily.closedKey ?? "closed");
     setDailyWikilinks(settings?.daily.wikilinks ?? false);
+    setTasksRoot(settings?.tasks.root ?? "");
+    setTasksSection(settings?.tasks.section ?? "Open loops");
+    setTasksBlocked(formatList(settings?.tasks.prefixes.blocked ?? ["BLOCK", "BLOCKED"]));
+    setTasksHold(formatList(settings?.tasks.prefixes.hold ?? ["HOLD"]));
+    setTasksArchived(formatList(settings?.tasks.prefixes.archived ?? ["ARCHIVED"]));
+    setTasksSeparator(settings?.tasks.separator ?? " - ");
+    setTasksReasonSeparator(settings?.tasks.reasonSeparator ?? " - ");
+    setTasksDoneSection(settings?.tasks.doneSection ?? "");
+    setTasksDoneStamp(settings?.tasks.doneStamp ?? " ✅ {{date}}");
+    setTasksExclude(formatList(settings?.tasks.exclude ?? ["_*"]));
+    setTasksWorkspaceKey(settings?.tasks.workspaceKey ?? "workspace");
+    setTasksParentKey(settings?.tasks.parentKey ?? "parent");
+    setTasksPrompt(settings?.tasks.delegatePrompt ?? "");
+    setTasksMarkDoing(settings?.tasks.markDoingOnDelegate ?? true);
+    setTasksPriorityTag(settings?.tasks.priorityTag ?? "p");
+    setTasksPriorityLevels(String(settings?.tasks.priorityLevels ?? 4));
     setTrailDir(settings?.trail?.dir ?? "");
     setTrailDetail(settings?.trail?.detail ?? "light");
     setTrailModel(settings?.trail?.model ?? "");
@@ -333,6 +368,71 @@ export function SettingsView(props: Props) {
       await props.onSaveSettings({ daily: { prompt: null } });
     } finally {
       setDailyBusy(false);
+    }
+  };
+
+  const tasksDirty =
+    tasksRoot.trim() !== (settings?.tasks.root ?? "") ||
+    tasksSection.trim() !== (settings?.tasks.section ?? "Open loops") ||
+    tasksBlocked !== formatList(settings?.tasks.prefixes.blocked ?? ["BLOCK", "BLOCKED"]) ||
+    tasksHold !== formatList(settings?.tasks.prefixes.hold ?? ["HOLD"]) ||
+    tasksArchived !== formatList(settings?.tasks.prefixes.archived ?? ["ARCHIVED"]) ||
+    tasksSeparator !== (settings?.tasks.separator ?? " - ") ||
+    tasksReasonSeparator !== (settings?.tasks.reasonSeparator ?? " - ") ||
+    tasksDoneSection.trim() !== (settings?.tasks.doneSection ?? "") ||
+    tasksDoneStamp !== (settings?.tasks.doneStamp ?? " ✅ {{date}}") ||
+    tasksExclude !== formatList(settings?.tasks.exclude ?? ["_*"]) ||
+    tasksWorkspaceKey.trim() !== (settings?.tasks.workspaceKey ?? "workspace") ||
+    tasksParentKey.trim() !== (settings?.tasks.parentKey ?? "parent") ||
+    tasksPrompt !== (settings?.tasks.delegatePrompt ?? "") ||
+    tasksMarkDoing !== (settings?.tasks.markDoingOnDelegate ?? true) ||
+    tasksPriorityTag.trim() !== (settings?.tasks.priorityTag ?? "p") ||
+    tasksPriorityLevels.trim() !== String(settings?.tasks.priorityLevels ?? 4);
+
+  const tasksPrefixesEmpty = [tasksBlocked, tasksHold, tasksArchived].some((value) => parseList(value).length === 0);
+
+  const tasksIssues = validateTaskSettings({
+    reasonSeparator: tasksReasonSeparator,
+    doneSection: tasksDoneSection,
+    doneStamp: tasksDoneStamp,
+    priorityTag: tasksPriorityTag,
+    priorityLevels: tasksPriorityLevels,
+  });
+  const tasksInvalid = Object.values(tasksIssues).some((issue) => issue !== null);
+
+  const saveTasks = async () => {
+    setTasksBusy(true);
+    try {
+      await props.onSaveSettings({
+        tasks: {
+          root: tasksRoot.trim() || null,
+          section: tasksSection.trim(),
+          prefixes: { blocked: parseList(tasksBlocked), hold: parseList(tasksHold), archived: parseList(tasksArchived) },
+          separator: tasksSeparator,
+          reasonSeparator: tasksReasonSeparator,
+          doneSection: tasksDoneSection.trim(),
+          doneStamp: tasksDoneStamp,
+          exclude: parseList(tasksExclude),
+          workspaceKey: tasksWorkspaceKey.trim(),
+          parentKey: tasksParentKey.trim(),
+          delegatePrompt: tasksPrompt.trim() ? tasksPrompt : null,
+          markDoingOnDelegate: tasksMarkDoing,
+          priorityTag: tasksPriorityTag.trim(),
+          priorityLevels: Number(tasksPriorityLevels.trim()),
+        },
+      });
+    } finally {
+      setTasksBusy(false);
+    }
+  };
+
+  const resetTasksPrompt = async () => {
+    setTasksBusy(true);
+    try {
+      setTasksPrompt("");
+      await props.onSaveSettings({ tasks: { delegatePrompt: null } });
+    } finally {
+      setTasksBusy(false);
     }
   };
 
@@ -763,6 +863,152 @@ export function SettingsView(props: Props) {
                 Reset to default
               </button>
               <button className="act act--focus" disabled={!enabled || dailyBusy || !dailyDirty} onClick={() => void saveDaily()}>
+                Save
+              </button>
+            </div>
+          </div>
+        )}
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={settings?.features.tasks ?? false}
+            disabled={!enabled}
+            onChange={(event) => void props.onSaveSettings({ features: { tasks: event.target.checked } })}
+          />
+          Tasks
+        </label>
+        <small className="muted">
+          A Tasks tab with a board and a table over the checklists in your second brain: every markdown file is a project, tasks are the checkbox lines in
+          one section, and edits go both ways.
+        </small>
+        {settings?.features.tasks && (
+          <div className="form">
+            <label className="field">
+              <span>Projects folder</span>
+              <input
+                className="in"
+                placeholder={settings?.secondBrainRoot ? `${settings.secondBrainRoot}/projects` : "<second brain>/projects"}
+                value={tasksRoot}
+                onChange={(event) => setTasksRoot(event.target.value)}
+                disabled={!enabled}
+              />
+              <small>Relative paths resolve inside the Second brain path. Every .md file below it is a project.</small>
+            </label>
+            <label className="field">
+              <span>Section</span>
+              <input className="in" placeholder="Open loops" value={tasksSection} onChange={(event) => setTasksSection(event.target.value)} disabled={!enabled} />
+              <small>Heading whose checkbox lines become tasks. Leave empty to read the whole document.</small>
+            </label>
+            <div className="field">
+              <span>Status prefixes</span>
+              <div className="frow frow--fields">
+                <label className="field">
+                  <span>Blocked</span>
+                  <input className="in" placeholder="BLOCK, BLOCKED" value={tasksBlocked} onChange={(event) => setTasksBlocked(event.target.value)} disabled={!enabled} />
+                </label>
+                <label className="field">
+                  <span>Hold</span>
+                  <input className="in" placeholder="HOLD" value={tasksHold} onChange={(event) => setTasksHold(event.target.value)} disabled={!enabled} />
+                </label>
+                <label className="field">
+                  <span>Archived</span>
+                  <input className="in" placeholder="ARCHIVED" value={tasksArchived} onChange={(event) => setTasksArchived(event.target.value)} disabled={!enabled} />
+                </label>
+              </div>
+              {tasksPrefixesEmpty && <small className="error">Each status needs at least one prefix word.</small>}
+              <small>
+                Comma separated, case sensitive. A task like <code>- [ ] HOLD - waiting for Ana</code> takes that status; the first word of each list is the one the
+                hub writes.
+              </small>
+            </div>
+            <label className="field">
+              <span>Separator</span>
+              <input className="in" placeholder=" - " value={tasksSeparator} onChange={(event) => setTasksSeparator(event.target.value)} disabled={!enabled} />
+              <small>
+                Written between a prefix and the title: a dash or colon surrounded by spaces, such as <code>{" - "}</code> or <code>{": "}</code>.
+              </small>
+            </label>
+            <label className="field">
+              <span>Reason separator</span>
+              <input className="in" placeholder=" - " value={tasksReasonSeparator} onChange={(event) => setTasksReasonSeparator(event.target.value)} disabled={!enabled} />
+              {tasksIssues.reasonSeparator && <small className="error">{tasksIssues.reasonSeparator}</small>}
+              <small>
+                Splits the reason off Blocked, Hold and Archived tasks at the last occurrence: with <code>{" | "}</code>, <code>- [ ] HOLD - Ana | waiting for the contract</code> shows
+                "waiting for the contract" under "Ana".
+              </small>
+            </label>
+            <div className="frow frow--fields">
+              <label className="field">
+                <span>Done section</span>
+                <input className="in" placeholder="Done loops" value={tasksDoneSection} onChange={(event) => setTasksDoneSection(event.target.value)} disabled={!enabled} />
+                {tasksIssues.doneSection && <small className="error">{tasksIssues.doneSection}</small>}
+                <small>Heading finished tasks move to, newest first. Leave empty to keep done tasks in place.</small>
+              </label>
+              <label className="field">
+                <span>Done stamp</span>
+                <input className="in" placeholder=" ✅ {{date}}" value={tasksDoneStamp} onChange={(event) => setTasksDoneStamp(event.target.value)} disabled={!enabled} />
+                {tasksIssues.doneStamp && <small className="error">{tasksIssues.doneStamp}</small>}
+                <small>
+                  Appended to a task when it moves, with <code>{"{{date}}"}</code> as the local date.
+                </small>
+              </label>
+            </div>
+            <div className="frow frow--fields">
+              <label className="field">
+                <span>Priority tag</span>
+                <input className="in" placeholder="p" value={tasksPriorityTag} onChange={(event) => setTasksPriorityTag(event.target.value)} disabled={!enabled} />
+                {tasksIssues.priorityTag && <small className="error">{tasksIssues.priorityTag}</small>}
+                <small>
+                  Obsidian tag at the end of a task line: with <code>p</code>, <code>- [ ] Ship export #p1</code> has priority P1.
+                </small>
+              </label>
+              <label className="field">
+                <span>Priority levels</span>
+                <input className="in" inputMode="numeric" placeholder="4" value={tasksPriorityLevels} onChange={(event) => setTasksPriorityLevels(event.target.value)} disabled={!enabled} />
+                {tasksIssues.priorityLevels && <small className="error">{tasksIssues.priorityLevels}</small>}
+                <small>How many levels the board offers, from P0 up (1 to 10).</small>
+              </label>
+            </div>
+            <label className="field">
+              <span>Exclude</span>
+              <input className="in" placeholder="_*" value={tasksExclude} onChange={(event) => setTasksExclude(event.target.value)} disabled={!enabled} />
+              <small>Comma separated name patterns for files and folders to skip. Names starting with a dot are always skipped.</small>
+            </label>
+            <div className="frow frow--fields">
+              <label className="field">
+                <span>Workspace key</span>
+                <input className="in" value={tasksWorkspaceKey} onChange={(event) => setTasksWorkspaceKey(event.target.value)} disabled={!enabled} />
+                <small>Frontmatter key naming the CC Hub workspace of a project.</small>
+              </label>
+              <label className="field">
+                <span>Parent key</span>
+                <input className="in" value={tasksParentKey} onChange={(event) => setTasksParentKey(event.target.value)} disabled={!enabled} />
+                <small>Frontmatter key that overrides the parent project.</small>
+              </label>
+            </div>
+            <label className="field">
+              <span>Delegate prompt</span>
+              <textarea
+                className="in area"
+                rows={8}
+                placeholder="Empty uses the default prompt"
+                value={tasksPrompt}
+                onChange={(event) => setTasksPrompt(event.target.value)}
+                disabled={!enabled}
+              />
+              <small>Placeholders: <code>{"{{project}}"}</code> <code>{"{{projectPath}}"}</code> <code>{"{{task}}"}</code> <code>{"{{subtasks}}"}</code>{" "}
+                <code>{"{{notes}}"}</code> <code>{"{{status}}"}</code> <code>{"{{reason}}"}</code>{" "}
+                <code>{"{{priority}}"}</code></small>
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={tasksMarkDoing} onChange={(event) => setTasksMarkDoing(event.target.checked)} disabled={!enabled} />
+              Mark a To-Do task as Doing when it is delegated
+            </label>
+            <div className="actions">
+              <button className="act" disabled={!enabled || tasksBusy} onClick={() => void resetTasksPrompt()}>
+                Reset to default
+              </button>
+              <button className="act act--focus" disabled={!enabled || tasksBusy || !tasksDirty || tasksPrefixesEmpty || tasksInvalid} onClick={() => void saveTasks()}>
                 Save
               </button>
             </div>

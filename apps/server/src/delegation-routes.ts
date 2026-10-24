@@ -54,6 +54,26 @@ import {
   type ComposeFocusItem,
   type TaskLine,
 } from "./daily.js";
+import {
+  addBoardNote,
+  addTaskToDaily,
+  AlreadyInDailyError,
+  BOARD_STATUSES,
+  createBoardTask,
+  dailyTaskLinks,
+  deleteBoardNote,
+  delegateBoardTask,
+  editBoardNote,
+  moveBoardItem,
+  moveTaskToProject,
+  readBoard,
+  reparentBoardTask,
+  TaskConflictError,
+  sweepDoneTasks,
+  watchTasksBoard,
+  writeBoardTask,
+  type BoardStatus,
+} from "./tasks-board.js";
 import { flushTrail, trailStatus } from "./trail.js";
 import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus, WorktreeError } from "./worktrees.js";
 import { portRangeOf } from "./task-ports.js";
@@ -73,6 +93,11 @@ import {
   RUN_TIMEOUT_MIN,
   RUNNERS,
   TASK_STATUSES,
+  TASKS_DATE_TOKEN,
+  TASKS_PRIORITY_LEVELS_MAX,
+  TASKS_PRIORITY_LEVELS_MIN,
+  TASKS_PRIORITY_TAG_RE,
+  TASKS_SEPARATOR_RE,
   TRAIL_DETAILS,
   USAGE_DAYS_MAX,
   USAGE_DAYS_MIN,
@@ -223,7 +248,7 @@ export function delegationRouter(): Router {
     const featuresBody = body.features as Record<string, unknown> | undefined;
     if (featuresBody && typeof featuresBody === "object") {
       const featuresPatch: NonNullable<UpdateSettingsInput["features"]> = {};
-      for (const key of ["daily", "trail", "usage", "limits"] as const) {
+      for (const key of ["daily", "trail", "usage", "limits", "tasks"] as const) {
         if (!(key in featuresBody)) continue;
         const flag = featuresBody[key];
         if (typeof flag !== "boolean") {
@@ -293,6 +318,130 @@ export function delegationRouter(): Router {
         dailyPatch.headings = headingsPatch;
       }
       patch.daily = dailyPatch;
+    }
+    const tasksBody = body.tasks as Record<string, unknown> | undefined;
+    if (tasksBody && typeof tasksBody === "object") {
+      const tasksPatch: NonNullable<UpdateSettingsInput["tasks"]> = {};
+      const stringList = (value: unknown): string[] | null => {
+        if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) return null;
+        const words = value.map((item: string) => item.trim());
+        if (words.some((word) => word === "" || /[\r\n]/.test(word))) return null;
+        return [...new Set(words)];
+      };
+      if ("root" in tasksBody) {
+        if (tasksBody.root !== null && typeof tasksBody.root !== "string") {
+          res.status(400).json({ error: "tasks.root must be a string or null" });
+          return;
+        }
+        tasksPatch.root = typeof tasksBody.root === "string" && tasksBody.root.trim() ? tasksBody.root.trim() : null;
+      }
+      if ("section" in tasksBody) {
+        if (typeof tasksBody.section !== "string" || /[\r\n]/.test(tasksBody.section)) {
+          res.status(400).json({ error: "tasks.section must be a single-line string" });
+          return;
+        }
+        tasksPatch.section = tasksBody.section.trim();
+      }
+      if ("prefixes" in tasksBody) {
+        const prefixesBody = tasksBody.prefixes as Record<string, unknown> | null;
+        if (!prefixesBody || typeof prefixesBody !== "object" || Array.isArray(prefixesBody)) {
+          res.status(400).json({ error: "tasks.prefixes must be an object" });
+          return;
+        }
+        const prefixesPatch: NonNullable<NonNullable<UpdateSettingsInput["tasks"]>["prefixes"]> = {};
+        for (const key of ["blocked", "hold", "archived"] as const) {
+          if (!(key in prefixesBody)) continue;
+          const words = stringList(prefixesBody[key]);
+          if (!words) {
+            res.status(400).json({ error: `tasks.prefixes.${key} must be an array of non-empty strings` });
+            return;
+          }
+          if (words.length === 0) {
+            res.status(400).json({ error: `tasks.prefixes.${key} needs at least one word` });
+            return;
+          }
+          prefixesPatch[key] = words;
+        }
+        tasksPatch.prefixes = prefixesPatch;
+      }
+      if ("separator" in tasksBody) {
+        if (typeof tasksBody.separator !== "string" || !TASKS_SEPARATOR_RE.test(tasksBody.separator)) {
+          res.status(400).json({ error: 'tasks.separator must be a dash or colon surrounded by spaces, like " - " or ": "' });
+          return;
+        }
+        tasksPatch.separator = tasksBody.separator;
+      }
+      if ("exclude" in tasksBody) {
+        const patterns = stringList(tasksBody.exclude);
+        if (!patterns) {
+          res.status(400).json({ error: "tasks.exclude must be an array of non-empty strings" });
+          return;
+        }
+        tasksPatch.exclude = patterns;
+      }
+      for (const key of ["workspaceKey", "parentKey"] as const) {
+        if (!(key in tasksBody)) continue;
+        const value = tasksBody[key];
+        if (typeof value !== "string" || !/^[^\s:]+$/.test(value.trim())) {
+          res.status(400).json({ error: `tasks.${key} must be a frontmatter key without spaces or colons` });
+          return;
+        }
+        tasksPatch[key] = value.trim();
+      }
+      if ("delegatePrompt" in tasksBody) {
+        if (tasksBody.delegatePrompt !== null && typeof tasksBody.delegatePrompt !== "string") {
+          res.status(400).json({ error: "tasks.delegatePrompt must be a string or null" });
+          return;
+        }
+        tasksPatch.delegatePrompt = typeof tasksBody.delegatePrompt === "string" && tasksBody.delegatePrompt.trim() ? tasksBody.delegatePrompt : null;
+      }
+      if ("markDoingOnDelegate" in tasksBody) {
+        if (typeof tasksBody.markDoingOnDelegate !== "boolean") {
+          res.status(400).json({ error: "tasks.markDoingOnDelegate must be a boolean" });
+          return;
+        }
+        tasksPatch.markDoingOnDelegate = tasksBody.markDoingOnDelegate;
+      }
+      if ("reasonSeparator" in tasksBody) {
+        const value = tasksBody.reasonSeparator;
+        if (typeof value !== "string" || value.trim() === "" || /[\r\n]/.test(value)) {
+          res.status(400).json({ error: "tasks.reasonSeparator must be a single-line string with text in it" });
+          return;
+        }
+        tasksPatch.reasonSeparator = value;
+      }
+      if ("doneSection" in tasksBody) {
+        if (typeof tasksBody.doneSection !== "string" || /[\r\n]/.test(tasksBody.doneSection)) {
+          res.status(400).json({ error: "tasks.doneSection must be a single-line string" });
+          return;
+        }
+        tasksPatch.doneSection = tasksBody.doneSection.trim();
+      }
+      if ("doneStamp" in tasksBody) {
+        const value = tasksBody.doneStamp;
+        if (typeof value !== "string" || /[\r\n]/.test(value) || !value.includes(TASKS_DATE_TOKEN)) {
+          res.status(400).json({ error: `tasks.doneStamp must be a single-line string containing ${TASKS_DATE_TOKEN}` });
+          return;
+        }
+        tasksPatch.doneStamp = value;
+      }
+      if ("priorityTag" in tasksBody) {
+        const value = typeof tasksBody.priorityTag === "string" ? tasksBody.priorityTag.trim() : "";
+        if (!TASKS_PRIORITY_TAG_RE.test(value)) {
+          res.status(400).json({ error: "tasks.priorityTag must be letters, digits, - or _ only" });
+          return;
+        }
+        tasksPatch.priorityTag = value;
+      }
+      if ("priorityLevels" in tasksBody) {
+        const value = tasksBody.priorityLevels;
+        if (typeof value !== "number" || !Number.isInteger(value) || value < TASKS_PRIORITY_LEVELS_MIN || value > TASKS_PRIORITY_LEVELS_MAX) {
+          res.status(400).json({ error: `tasks.priorityLevels must be an integer from ${TASKS_PRIORITY_LEVELS_MIN} to ${TASKS_PRIORITY_LEVELS_MAX}` });
+          return;
+        }
+        tasksPatch.priorityLevels = value;
+      }
+      patch.tasks = tasksPatch;
     }
     const trailBody = body.trail as Record<string, unknown> | undefined;
     if (trailBody && typeof trailBody === "object") {
@@ -403,6 +552,7 @@ export function delegationRouter(): Router {
     }
     const updated = updateSettings(patch);
     watchDaily(updated);
+    watchTasksBoard(updated);
     broadcast("settings", updated);
     res.json(updated);
   });
@@ -626,6 +776,234 @@ export function delegationRouter(): Router {
       }
     }
     res.json({ scheduled: flushTrail(sessionId) });
+  });
+
+  const boardTarget = (body: Record<string, unknown>): { projectId: string; line: number; raw: string } => {
+    const projectId = asString(body.projectId);
+    if (!projectId) throw new BadRequestError("projectId required");
+    if (typeof body.line !== "number" || !Number.isInteger(body.line) || body.line < 0) {
+      throw new BadRequestError("line must be a non-negative integer");
+    }
+    if (typeof body.raw !== "string") throw new BadRequestError("raw required");
+    return { projectId, line: body.line, raw: body.raw };
+  };
+
+  const sendBoardError = (res: Parameters<typeof sendError>[0], err: unknown): void => {
+    if (err instanceof TaskConflictError) {
+      res.status(409).json({ error: err.message, current: err.current });
+      return;
+    }
+    if (err instanceof AlreadyInDailyError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    if (err instanceof DailyConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    sendError(res, err);
+  };
+
+  router.get("/tasks-board", (_req, res) => {
+    try {
+      res.json(readBoard(getSettings()));
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  router.patch("/tasks-board/item", (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    try {
+      const target = boardTarget(body);
+      const status = oneOf<BoardStatus>(body.status, BOARD_STATUSES, "status");
+      if (body.title !== undefined && typeof body.title !== "string") throw new BadRequestError("title must be a string");
+      if (body.reason !== undefined && body.reason !== null && typeof body.reason !== "string") {
+        throw new BadRequestError("reason must be a string or null");
+      }
+      res.json(
+        writeBoardTask(getSettings(), {
+          ...target,
+          ...(status ? { status } : {}),
+          ...(typeof body.title === "string" ? { title: body.title } : {}),
+          ...(body.reason !== undefined ? { reason: body.reason as string | null } : {}),
+          ...(body.priority !== undefined ? { priority: body.priority as number | null } : {}),
+        }),
+      );
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  router.post("/tasks-board/item", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const projectId = asString(body.projectId);
+      if (!projectId) throw new BadRequestError("projectId required");
+      if (typeof body.title !== "string") throw new BadRequestError("title required");
+      const status = oneOf<BoardStatus>(body.status, BOARD_STATUSES, "status");
+      if (body.reason !== undefined && body.reason !== null && typeof body.reason !== "string") {
+        throw new BadRequestError("reason must be a string or null");
+      }
+      const hasParent = body.parentLine !== undefined && body.parentLine !== null;
+      if (hasParent && (typeof body.parentLine !== "number" || !Number.isInteger(body.parentLine) || body.parentLine < 0)) {
+        throw new BadRequestError("parentLine must be a non-negative integer");
+      }
+      if (hasParent && typeof body.parentRaw !== "string") throw new BadRequestError("parentRaw required with parentLine");
+      res.status(201).json(
+        createBoardTask(getSettings(), {
+          projectId,
+          title: body.title,
+          ...(status ? { status } : {}),
+          ...(body.reason !== undefined ? { reason: body.reason as string | null } : {}),
+          ...(body.priority !== undefined ? { priority: body.priority as number | null } : {}),
+          ...(hasParent ? { parentLine: body.parentLine as number, parentRaw: body.parentRaw as string } : {}),
+        }),
+      );
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  const noteText = (body: Record<string, unknown>): string => {
+    if (typeof body.text !== "string") throw new BadRequestError("text must be a single non-empty line");
+    return body.text;
+  };
+
+  router.post("/tasks-board/note", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      res.status(201).json(addBoardNote(getSettings(), { ...boardTarget(body), text: noteText(body) }));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  router.patch("/tasks-board/note", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      res.json(editBoardNote(getSettings(), { ...boardTarget(body), text: noteText(body) }));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  router.delete("/tasks-board/note", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      res.json(deleteBoardNote(getSettings(), boardTarget(body)));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  const PARENT_SHAPE_ERROR = "parent must be null or { line, raw }";
+
+  const boardParent = (value: unknown): { line: number; raw: string } | null => {
+    if (value === null || value === undefined) return null;
+    if (typeof value !== "object" || Array.isArray(value)) throw new BadRequestError(PARENT_SHAPE_ERROR);
+    const ref = value as Record<string, unknown>;
+    if (typeof ref.line !== "number" || !Number.isInteger(ref.line) || ref.line < 0 || typeof ref.raw !== "string") {
+      throw new BadRequestError(PARENT_SHAPE_ERROR);
+    }
+    return { line: ref.line, raw: ref.raw };
+  };
+
+  router.post("/tasks-board/move", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const target = boardTarget(body);
+      if (body.direction !== "up" && body.direction !== "down") throw new BadRequestError("direction must be up or down");
+      res.json(moveBoardItem(getSettings(), { ...target, direction: body.direction }));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  router.post("/tasks-board/reparent", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const target = boardTarget(body);
+      if (body.parent === undefined) throw new BadRequestError(PARENT_SHAPE_ERROR);
+      res.json(reparentBoardTask(getSettings(), { ...target, parent: boardParent(body.parent) }));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  router.post("/tasks-board/move-to-project", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const target = boardTarget(body);
+      const targetProjectId = asString(body.targetProjectId);
+      if (!targetProjectId) throw new BadRequestError("targetProjectId required");
+      res.json(moveTaskToProject(getSettings(), { ...target, targetProjectId, parent: boardParent(body.parent) }));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  router.post("/tasks-board/sweep-done", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      res.json(sweepDoneTasks(getSettings(), asString(body.projectId)));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  router.post("/tasks-board/open", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const settings = getSettings();
+    if (!settings.features.tasks) {
+      res.status(400).json({ error: "the tasks feature is disabled" });
+      return;
+    }
+    const projectId = asString(body.projectId);
+    const project = projectId ? readBoard(settings).projects.find((entry) => entry.id === projectId) : undefined;
+    if (!project) {
+      res.status(404).json({ error: "project not found" });
+      return;
+    }
+    const outcome = openWorkspace(project.path, settings.editorCommand);
+    res.status(outcome.ok ? 200 : 500).json(outcome);
+  });
+
+  router.get("/tasks-board/daily-links", (req, res) => {
+    try {
+      const date = typeof req.query.date === "string" && req.query.date !== "" ? req.query.date : localDate();
+      res.json(dailyTaskLinks(getSettings(), date));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  router.post("/tasks-board/add-to-daily", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const target = boardTarget(body);
+      res.status(201).json(addTaskToDaily(getSettings(), { ...target, date: asString(body.date) }));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  router.post("/tasks-board/delegate", (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    try {
+      const target = boardTarget(body);
+      res.status(201).json(
+        delegateBoardTask(getSettings(), {
+          ...target,
+          workspace: asString(body.workspace),
+          prompt: asString(body.prompt),
+          repo: asString(body.repo),
+          runner: oneOf<Runner>(body.runner, RUNNERS, "runner"),
+        }),
+      );
+    } catch (err) {
+      sendBoardError(res, err);
+    }
   });
 
   router.get("/daily", (_req, res) => {
