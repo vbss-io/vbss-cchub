@@ -6,6 +6,7 @@ export interface BoardMenuItem {
   label: string;
   title?: string;
   disabled?: boolean;
+  separator?: boolean;
   onSelect: () => void;
 }
 
@@ -113,7 +114,7 @@ export function BoardActionsMenu({ label, items, disabled = false }: Props) {
               key={item.id}
               type="button"
               role="menuitem"
-              className="board-menu__item"
+              className={`board-menu__item ${item.separator ? "board-menu__item--sep" : ""}`}
               title={item.title}
               disabled={item.disabled}
               onClick={() => {

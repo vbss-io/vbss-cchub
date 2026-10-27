@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BOARD_STATUS_LABEL, focusItemFromTask, pickableTasks, projectBreadcrumb, projectOptions, sortByPriority } from "../board-model";
 import { doingFocusItem, formatNewItemLine, hasFocusItem, type DailyFocusDraftItem } from "../daily-plan";
 import { getTasksBoard, type BoardPayload } from "../delegation";
+import { InlineText } from "../markdown";
 import { BoardPriorityBadge } from "./BoardParts";
 
 interface Props {
@@ -72,13 +73,13 @@ export function BoardTaskPicker({ newItemsText, carriedItems, wikilinks, onPick,
                   const project = projects.find((candidate) => candidate.id === task.projectId);
                   const picked = project ? focusItemFromTask(project, task) : null;
                   const isDoing = task.status === "doing";
-                  const item = picked && isDoing ? doingFocusItem(picked, wikilinks) : picked;
+                  const item = picked && isDoing ? doingFocusItem(picked, wikilinks, project?.title ?? null) : picked;
                   const isAdded = item !== null && (isDoing ? hasFocusItem(carriedItems, item) : written.has(formatNewItemLine(item)));
                   return (
                     <div className="board-picker__row" key={task.id}>
                       <span className="board-picker__text">
                         <span className="board-picker__title">
-                          <BoardPriorityBadge priority={task.priority} /> {task.title}
+                          <BoardPriorityBadge priority={task.priority} /> <InlineText text={task.title} />
                         </span>
                         <span className="muted small">{projectBreadcrumb(projects, task.projectId).join(" › ")}</span>
                       </span>

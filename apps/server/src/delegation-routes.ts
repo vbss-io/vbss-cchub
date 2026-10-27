@@ -41,6 +41,7 @@ import {
   generateDaily,
   isValidDailyDate,
   listDiaryDates,
+  organizeDailyFocus,
   parseTaskLines,
   readDaily,
   readFrontmatterKey,
@@ -60,6 +61,8 @@ import {
   AlreadyInDailyError,
   BOARD_STATUSES,
   createBoardTask,
+  dailySyncBaseline,
+  composeBoardFor,
   dailyTaskLinks,
   deleteBoardNote,
   delegateBoardTask,
@@ -70,8 +73,11 @@ import {
   reparentBoardTask,
   TaskConflictError,
   sweepDoneTasks,
+  syncTaskFromDaily,
+  syncTasksFromDaily,
+  syncTaskToDaily,
   watchTasksBoard,
-  writeBoardTask,
+  writeBoardTaskSynced,
   type BoardStatus,
 } from "./tasks-board.js";
 import { flushTrail, trailStatus } from "./trail.js";
@@ -287,6 +293,14 @@ export function delegationRouter(): Router {
           return;
         }
         dailyPatch.wikilinks = dailyBody.wikilinks;
+      }
+      if ("projectOrder" in dailyBody) {
+        const order = dailyBody.projectOrder;
+        if (!Array.isArray(order) || !order.every((item) => typeof item === "string" && item.trim() !== "" && !/[\r\n]/.test(item))) {
+          res.status(400).json({ error: "daily.projectOrder must be an array of project ids" });
+          return;
+        }
+        dailyPatch.projectOrder = [...new Set(order.map((item: string) => item.trim()))];
       }
       const headingsBody = dailyBody.headings as Record<string, unknown> | undefined;
       if (headingsBody && typeof headingsBody === "object") {
@@ -804,6 +818,13 @@ export function delegationRouter(): Router {
     sendError(res, err);
   };
 
+  const boardDates = (body: Record<string, unknown>): { start?: string | null; scheduled?: string | null; due?: string | null; repeat?: string | null } => ({
+    ...(body.start !== undefined ? { start: body.start as string | null } : {}),
+    ...(body.scheduled !== undefined ? { scheduled: body.scheduled as string | null } : {}),
+    ...(body.due !== undefined ? { due: body.due as string | null } : {}),
+    ...(body.repeat !== undefined ? { repeat: body.repeat as string | null } : {}),
+  });
+
   router.get("/tasks-board", (_req, res) => {
     try {
       res.json(readBoard(getSettings()));
@@ -822,12 +843,13 @@ export function delegationRouter(): Router {
         throw new BadRequestError("reason must be a string or null");
       }
       res.json(
-        writeBoardTask(getSettings(), {
+        writeBoardTaskSynced(getSettings(), {
           ...target,
           ...(status ? { status } : {}),
           ...(typeof body.title === "string" ? { title: body.title } : {}),
           ...(body.reason !== undefined ? { reason: body.reason as string | null } : {}),
           ...(body.priority !== undefined ? { priority: body.priority as number | null } : {}),
+          ...boardDates(body),
         }),
       );
     } catch (err) {
@@ -857,6 +879,7 @@ export function delegationRouter(): Router {
           ...(status ? { status } : {}),
           ...(body.reason !== undefined ? { reason: body.reason as string | null } : {}),
           ...(body.priority !== undefined ? { priority: body.priority as number | null } : {}),
+          ...boardDates(body),
           ...(hasParent ? { parentLine: body.parentLine as number, parentRaw: body.parentRaw as string } : {}),
         }),
       );
@@ -988,6 +1011,28 @@ export function delegationRouter(): Router {
     }
   });
 
+  router.post("/tasks-board/sync-daily", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      const target = boardTarget(body);
+      res.json(syncTaskToDaily(getSettings(), { ...target, date: asString(body.date) }));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
+  router.post("/tasks-board/sync-from-daily", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    try {
+      if (typeof body.line !== "number" || !Number.isInteger(body.line) || body.line < 0) {
+        throw new BadRequestError("line must be a non-negative integer");
+      }
+      res.json(syncTaskFromDaily(getSettings(), { line: body.line, date: asString(body.date) }));
+    } catch (err) {
+      sendBoardError(res, err);
+    }
+  });
+
   router.post("/tasks-board/delegate", (req, res) => {
     const body = req.body as Record<string, unknown>;
     try {
@@ -1072,7 +1117,30 @@ export function delegationRouter(): Router {
       writeId = body.writeId;
     }
     try {
-      res.json(writeDaily(getSettings(), req.params.date, body.content, baseUpdatedAt, writeId));
+      const settings = getSettings();
+      const baseline = dailySyncBaseline(settings, req.params.date);
+      const written = writeDaily(settings, req.params.date, body.content, baseUpdatedAt, writeId, "client");
+      if (baseline !== null) syncTasksFromDaily(settings, req.params.date, baseline, body.content);
+      res.json(written);
+    } catch (err) {
+      if (err instanceof DailyConflictError) {
+        res.status(409).json({ error: err.message, content: err.content, updatedAt: err.updatedAt });
+        return;
+      }
+      sendError(res, err);
+    }
+  });
+
+  router.post("/daily/:date/organize-focus", (req, res) => {
+    if (!isValidDailyDate(req.params.date)) {
+      res.status(400).json({ error: "date must be a valid YYYY-MM-DD" });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const baseUpdatedAt = typeof body.baseUpdatedAt === "number" ? body.baseUpdatedAt : undefined;
+    try {
+      const settings = getSettings();
+      res.json(organizeDailyFocus(settings, req.params.date, composeBoardFor(settings), baseUpdatedAt));
     } catch (err) {
       if (err instanceof DailyConflictError) {
         res.status(409).json({ error: err.message, content: err.content, updatedAt: err.updatedAt });
@@ -1178,6 +1246,7 @@ export function delegationRouter(): Router {
       for (const task of tasks) content = setTaskChecked(content, task.line, task.checked);
       content = setFrontmatterKey(content, settings.daily.closedKey, req.params.date);
       const written = writeDaily(settings, yesterday, content);
+      syncTasksFromDaily(settings, yesterday, existing.content, content);
       res.json({ date: yesterday, updatedAt: written.updatedAt, closed: true });
     } catch (err) {
       sendError(res, err);
@@ -1227,7 +1296,7 @@ export function delegationRouter(): Router {
       const content = composeDaily(
         dailyTemplateText(settings),
         { briefing, focus, meetings, sessions: dailySessionsForDate(date) },
-        { date, headings: settings.daily.headings, wikilinks: settings.daily.wikilinks },
+        { date, headings: settings.daily.headings, wikilinks: settings.daily.wikilinks, board: composeBoardFor(settings) },
       );
       writeDaily(settings, date, content);
       res.json(readDaily(settings, date));

@@ -136,6 +136,12 @@
   }
 }
 
+@media (max-width: 420px) {
+  .board-dates {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 600px) {
   .content {
     padding-left: 8px;
@@ -193,6 +199,14 @@
   .view--board .search .in {
     min-width: 0;
     width: 100%;
+  }
+
+  .tl {
+    --tl-label: 180px;
+  }
+
+  .tl__label .tag {
+    display: none;
   }
 
   .modal__overlay {

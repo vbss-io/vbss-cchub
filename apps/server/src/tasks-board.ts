@@ -1,7 +1,18 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
-import { findHeadingIndex, isPlaceholderLine, isValidDailyDate, parseTaskLines, readDaily, taskBlock, writeDaily, writeFileAtomic } from "./daily.js";
+import {
+  findHeadingIndex,
+  isPlaceholderLine,
+  isValidDailyDate,
+  parseTaskLines,
+  readDaily,
+  taskBlock,
+  writeDaily,
+  writeFileAtomic,
+  type ComposeBoard,
+  type DailyReadResult,
+} from "./daily.js";
 import { BadRequestError, delegateTask, NotFoundError } from "./delegation-launch.js";
 import { TASKS_DATE_TOKEN, type DelegationSettings, type Runner, type TasksFeatureSettings } from "./delegation-types.js";
 import { localDate } from "./second-brain.js";
@@ -37,6 +48,10 @@ export interface BoardTask {
   doneAt: string | null;
   group: string | null;
   priority: number | null;
+  start: string | null;
+  scheduled: string | null;
+  due: string | null;
+  repeat: string | null;
   notes: string[];
   noteItems: BoardNoteItem[];
   subtasks: BoardTask[];
@@ -58,6 +73,7 @@ export interface BoardToday {
   exists: boolean;
   taskIds: string[];
   states: Record<string, BoardCheckbox>;
+  mismatch: string[];
 }
 
 export interface BoardPayload {
@@ -71,11 +87,22 @@ export interface BoardPayload {
   today: BoardToday | null;
 }
 
+export interface BoardDates {
+  start: string | null;
+  scheduled: string | null;
+  due: string | null;
+  repeat: string | null;
+}
+
 export interface BoardChange {
   status?: BoardStatus;
   title?: string;
   reason?: string | null;
   priority?: number | null;
+  start?: string | null;
+  scheduled?: string | null;
+  due?: string | null;
+  repeat?: string | null;
 }
 
 export interface BoardWriteInput extends BoardChange {
@@ -88,6 +115,11 @@ export interface BoardWriteResult {
   task: BoardTask;
   updatedAt: number;
   moved: boolean;
+  recurred: boolean;
+}
+
+export interface BoardSyncedWriteResult extends BoardWriteResult {
+  dailySynced: boolean;
 }
 
 export interface BoardCreateInput {
@@ -96,6 +128,10 @@ export interface BoardCreateInput {
   status?: BoardStatus;
   reason?: string | null;
   priority?: number | null;
+  start?: string | null;
+  scheduled?: string | null;
+  due?: string | null;
+  repeat?: string | null;
   parentLine?: number;
   parentRaw?: string;
 }
@@ -160,6 +196,17 @@ export interface BoardOrganizeResult {
   task: BoardTask;
 }
 
+export interface DailyLinkChild {
+  line: number;
+  depth: number;
+  raw: string;
+  checkbox: BoardCheckbox;
+  text: string;
+  taskId: string | null;
+  taskStatus: BoardStatus | null;
+  mismatch: boolean;
+}
+
 export interface DailyLinkItem {
   line: number;
   raw: string;
@@ -172,6 +219,8 @@ export interface DailyLinkItem {
   taskStatus: BoardStatus | null;
   taskPriority: number | null;
   mismatch: boolean;
+  recurredToday: boolean;
+  children: DailyLinkChild[];
 }
 
 export interface DailyLinksResult {
@@ -193,6 +242,33 @@ export interface AddToDailyResult {
   date: string;
   line: number;
   raw: string;
+  subtasks: number;
+}
+
+export interface SyncDailyInput {
+  projectId: string;
+  line: number;
+  raw: string;
+  date: string | null;
+}
+
+export interface SyncFromDailyInput {
+  line: number;
+  date: string | null;
+}
+
+export interface SyncDailyResult {
+  date: string;
+  updated: number;
+}
+
+export interface SyncFailure {
+  taskId: string;
+  error: string;
+}
+
+export interface SyncFromDailyResult extends SyncDailyResult {
+  failed: SyncFailure[];
 }
 
 export interface BoardDelegateInput {
@@ -324,9 +400,17 @@ function priorityRegExp(config: TasksFeatureSettings): RegExp {
 }
 
 const CODE_SPAN_RE = /(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g;
+const WIKILINK_SPAN_RE = /!?\[\[[^\]\r\n]*\]\]/g;
+const LINK_SPAN_RE = /!?\[[^\]\r\n]*\]\([^)\r\n]*\)/g;
+const URL_SPAN_RE = /\bhttps?:\/\/[^\s<>]+/gi;
+const PROTECTED_SPAN_RES = [CODE_SPAN_RE, WIKILINK_SPAN_RE, LINK_SPAN_RE, URL_SPAN_RE];
+
+function protectedSpans(text: string): [number, number][] {
+  return PROTECTED_SPAN_RES.flatMap((re) => [...text.matchAll(re)].map((span): [number, number] => [span.index ?? 0, (span.index ?? 0) + span[0].length]));
+}
 
 function priorityMatches(text: string, config: TasksFeatureSettings): RegExpMatchArray[] {
-  const spans = [...text.matchAll(CODE_SPAN_RE)].map((span): [number, number] => [span.index ?? 0, (span.index ?? 0) + span[0].length]);
+  const spans = protectedSpans(text);
   return [...text.matchAll(priorityRegExp(config))].filter((match) => {
     const at = (match.index ?? 0) + (match[1] ?? "").length;
     return !spans.some(([from, to]) => at >= from && at < to);
@@ -367,6 +451,228 @@ function priorityOf(value: unknown): number | null {
     throw new BadRequestError("priority must be an integer from 0 to 9 or null");
   }
   return value;
+}
+
+const START_MARK = "\u{1F6EB}";
+const SCHEDULED_MARK = "\u23F3";
+const DUE_MARK = "\u{1F4C5}";
+const REPEAT_MARK = "\u{1F501}";
+const DATE_FIELDS = ["start", "scheduled", "due"] as const;
+const STOP_MARKS = [START_MARK, SCHEDULED_MARK, DUE_MARK, REPEAT_MARK, "\u2705", "\u2795", "\u23EB", "\u{1F53C}", "\u{1F53D}", "\u23EC", "\u{1F53A}", "\u274C", "\u{1F194}", "\u26D4", "\u{1F3C1}"];
+const STOP_SOURCE = `(?:${STOP_MARKS.join("|")})\\uFE0F?`;
+const LOOSE_DATE_SOURCE = "\\d{4}-\\d{2}-\\d{2}";
+const signifierPatterns = new Map<string, RegExp>();
+
+function signifierRegExp(config: TasksFeatureSettings): RegExp {
+  const template = config.doneStamp.trim();
+  const stamp = template.includes(TASKS_DATE_TOKEN) ? template.split(TASKS_DATE_TOKEN).map(escapeRegExp).join(LOOSE_DATE_SOURCE) : null;
+  const key = stamp ?? "";
+  const cached = signifierPatterns.get(key);
+  if (cached) return cached;
+  const stop = stamp === null ? STOP_SOURCE : `(?:${STOP_SOURCE}|${stamp})`;
+  const pattern = new RegExp(
+    `(\\s*)(?:(${START_MARK}|${SCHEDULED_MARK}|${DUE_MARK})\\uFE0F?\\s*(\\d{4}-\\d{2}-\\d{2})(?!\\d)|${REPEAT_MARK}\\uFE0F?[ \\t]*(.*?)(?=\\s*${stop}|\\s+#[^\\s#]|\\s*$))(\\s*)`,
+    "gu",
+  );
+  signifierPatterns.set(key, pattern);
+  return pattern;
+}
+const CALENDAR_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const DAY_MS = 86_400_000;
+const MIN_BOARD_YEAR = 2000;
+const MAX_BOARD_YEAR = 2100;
+const CHANGE_REQUIRED_ERROR = "status, title, reason or priority required (or start, scheduled, due, repeat)";
+const REPEAT_ERROR = "repeat must be a single line without task signifiers, # tags or backticks, or null";
+const SIGNIFIER_TEXT_ERROR = "must not contain dates or a repeat rule, use start, scheduled, due and repeat";
+
+type DateField = (typeof DATE_FIELDS)[number];
+
+const DATE_MARKS: Record<DateField, string> = { start: START_MARK, scheduled: SCHEDULED_MARK, due: DUE_MARK };
+
+interface SignifierSplit extends BoardDates {
+  text: string;
+  conflict: keyof BoardDates | null;
+}
+
+function isCalendarDate(text: string): boolean {
+  const match = text.match(CALENDAR_DATE_RE);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = utcDate(year, month - 1, day);
+  return parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+}
+
+function isBoardDate(text: string): boolean {
+  if (!isCalendarDate(text)) return false;
+  const year = Number(text.slice(0, 4));
+  return year >= MIN_BOARD_YEAR && year <= MAX_BOARD_YEAR;
+}
+
+function signifierMatches(text: string, config: TasksFeatureSettings): RegExpMatchArray[] {
+  const spans = protectedSpans(text);
+  return [...text.matchAll(signifierRegExp(config))].filter((match) => {
+    const at = (match.index ?? 0) + (match[1] ?? "").length;
+    if (spans.some(([from, to]) => at >= from && at < to)) return false;
+    if (match[2] !== undefined) return isBoardDate(match[3] ?? "");
+    return (match[4] ?? "").trim() !== "";
+  });
+}
+
+function stripSignifiers(text: string, matches: RegExpMatchArray[]): string {
+  let out = "";
+  let position = 0;
+  for (const match of matches) {
+    const at = match.index ?? 0;
+    out += text.slice(position, at);
+    if (out !== "" && !/\s$/.test(out)) out += " ";
+    position = at + match[0].length;
+  }
+  return (out + text.slice(position)).trim();
+}
+
+function signifierField(match: RegExpMatchArray): keyof BoardDates {
+  const mark = match[2];
+  if (mark === undefined) return "repeat";
+  return DATE_FIELDS.find((field) => DATE_MARKS[field] === mark) ?? "due";
+}
+
+function splitSignifiers(text: string, config: TasksFeatureSettings): SignifierSplit {
+  const split: SignifierSplit = { text, start: null, scheduled: null, due: null, repeat: null, conflict: null };
+  const matches = signifierMatches(text, config);
+  if (matches.length === 0) return split;
+  const stripped = stripSignifiers(text, matches);
+  if (stripped === "") return split;
+  split.text = stripped;
+  for (const match of matches) {
+    const field = signifierField(match);
+    const value = field === "repeat" ? (match[4] ?? "").trim() : (match[3] ?? "");
+    const current = split[field];
+    if (current === null) split[field] = value;
+    else if (current !== value && split.conflict === null) split.conflict = field;
+  }
+  return split;
+}
+
+function withoutSignifiers(text: string, config: TasksFeatureSettings): string {
+  return stripSignifiers(text, signifierMatches(text, config));
+}
+
+function formatSignifiers(dates: BoardDates): string {
+  const parts: string[] = [];
+  if (dates.repeat !== null) parts.push(`${REPEAT_MARK} ${dates.repeat}`);
+  for (const field of DATE_FIELDS) {
+    const value = dates[field];
+    if (value !== null) parts.push(`${DATE_MARKS[field]} ${value}`);
+  }
+  return parts.join(" ");
+}
+
+function dateValueOf(value: unknown, field: DateField): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || !isCalendarDate(value)) throw new BadRequestError(`${field} must be a YYYY-MM-DD date or null`);
+  if (!isBoardDate(value)) throw new BadRequestError(`${field} must be a date between ${MIN_BOARD_YEAR} and ${MAX_BOARD_YEAR}`);
+  return value;
+}
+
+function repeatValueOf(value: unknown, config: TasksFeatureSettings): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || /[\r\n`]/.test(value)) throw new BadRequestError(REPEAT_ERROR);
+  const trimmed = value.trim();
+  if (trimmed === "") return null;
+  const probe = splitSignifiers(`x ${REPEAT_MARK} ${trimmed}`, config);
+  if (probe.text !== "x" || probe.repeat !== trimmed || probe.conflict !== null) throw new BadRequestError(REPEAT_ERROR);
+  return trimmed;
+}
+
+function datesOf(input: Partial<BoardDates>, config: TasksFeatureSettings): BoardDates {
+  return {
+    start: dateValueOf(input.start, "start"),
+    scheduled: dateValueOf(input.scheduled, "scheduled"),
+    due: dateValueOf(input.due, "due"),
+    repeat: repeatValueOf(input.repeat, config),
+  };
+}
+
+function touchesDates(change: BoardChange): boolean {
+  return DATE_FIELDS.some((field) => change[field] !== undefined) || change.repeat !== undefined;
+}
+
+function mergeDates(current: BoardDates, change: BoardChange, config: TasksFeatureSettings): BoardDates {
+  const next = datesOf(change, config);
+  return {
+    start: change.start === undefined ? current.start : next.start,
+    scheduled: change.scheduled === undefined ? current.scheduled : next.scheduled,
+    due: change.due === undefined ? current.due : next.due,
+    repeat: change.repeat === undefined ? current.repeat : next.repeat,
+  };
+}
+
+function ensureNoSignifiers(text: string, label: string, config: TasksFeatureSettings): void {
+  if (signifierMatches(text, config).length > 0) throw new BadRequestError(`${label} ${SIGNIFIER_TEXT_ERROR}`);
+}
+
+type RepeatUnit = "day" | "week" | "month" | "year" | "weekday";
+
+interface RepeatRule {
+  unit: RepeatUnit;
+  count: number;
+}
+
+function parseRepeatRule(rule: string): RepeatRule | null {
+  const text = rule.trim().toLowerCase().replace(/\s+/g, " ");
+  if (text === "every weekday") return { unit: "weekday", count: 1 };
+  const match = text.match(/^every (?:(\d{1,4}) )?(day|week|month|year)s?$/);
+  if (!match) return null;
+  const count = match[1] === undefined ? 1 : Number(match[1]);
+  return count >= 1 ? { unit: match[2] as RepeatUnit, count } : null;
+}
+
+function utcDate(year: number, monthIndex: number, day: number): Date {
+  const date = new Date(0);
+  date.setUTCFullYear(year, monthIndex, day);
+  return date;
+}
+
+function formatUtcDate(date: Date): string {
+  const year = String(date.getUTCFullYear()).padStart(4, "0");
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function advanceDate(date: string, rule: string): string | null {
+  const parsed = parseRepeatRule(rule);
+  const match = date.match(CALENDAR_DATE_RE);
+  if (!parsed || !match || !isBoardDate(date)) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]) - 1;
+  const day = Number(match[3]);
+  let next: Date;
+  if (parsed.unit === "weekday") {
+    next = utcDate(year, month, day + 1);
+    while (next.getUTCDay() === 0 || next.getUTCDay() === 6) next = new Date(next.getTime() + DAY_MS);
+  } else if (parsed.unit === "day" || parsed.unit === "week") {
+    next = utcDate(year, month, day + parsed.count * (parsed.unit === "week" ? 7 : 1));
+  } else {
+    const first = utcDate(year, month + parsed.count * (parsed.unit === "year" ? 12 : 1), 1);
+    const last = utcDate(first.getUTCFullYear(), first.getUTCMonth() + 1, 0).getUTCDate();
+    next = utcDate(first.getUTCFullYear(), first.getUTCMonth(), Math.min(day, last));
+  }
+  const formatted = formatUtcDate(next);
+  return isBoardDate(formatted) ? formatted : null;
+}
+
+function advancedDates(task: BoardDates): Partial<BoardDates> {
+  if (task.repeat === null) return {};
+  const change: Partial<BoardDates> = {};
+  for (const field of DATE_FIELDS) {
+    const value = task[field];
+    const next = value === null ? null : advanceDate(value, task.repeat);
+    if (next !== null) change[field] = next;
+  }
+  return change;
 }
 
 function checkboxOf(char: string): BoardCheckbox {
@@ -578,7 +884,8 @@ export function parseBoardTasks(markdown: string, projectId: string, config: Tas
     const match = line.match(TASK_LINE_RE);
     const rest = match ? (match[3] as string).trim() : "";
     if (match && rest !== "") {
-      const stamped = current === "done" ? splitStamp(rest, config) : { text: rest, doneAt: null, tail: "" };
+      const signified = splitSignifiers(rest, config);
+      const stamped = current === "done" || signified.repeat !== null ? splitStamp(signified.text, config) : { text: signified.text, doneAt: null, tail: "" };
       const prioritized = splitPriority(stamped.text, config);
       const body = prioritized.text.trim();
       const prefix = matchPrefix(body, config);
@@ -600,6 +907,10 @@ export function parseBoardTasks(markdown: string, projectId: string, config: Tas
         doneAt: stamped.doneAt,
         group,
         priority: prioritized.priority,
+        start: signified.start,
+        scheduled: signified.scheduled,
+        due: signified.due,
+        repeat: signified.repeat,
         notes: [],
         noteItems: [],
         subtasks: [],
@@ -652,11 +963,12 @@ function validateReason(reason: unknown): string | null {
   return trimmed === "" ? null : trimmed;
 }
 
-function validateChange(change: BoardChange): void {
-  if (change.status === undefined && change.title === undefined && change.reason === undefined && change.priority === undefined) {
-    throw new BadRequestError("status, title, reason or priority required");
+function validateChange(change: BoardChange, config: TasksFeatureSettings): void {
+  if (change.status === undefined && change.title === undefined && change.reason === undefined && change.priority === undefined && !touchesDates(change)) {
+    throw new BadRequestError(CHANGE_REQUIRED_ERROR);
   }
   priorityOf(change.priority);
+  datesOf(change, config);
   if (change.status !== undefined && !(BOARD_STATUSES as readonly string[]).includes(change.status)) {
     throw new BadRequestError(`status must be one of: ${BOARD_STATUSES.join(", ")}`);
   }
@@ -667,6 +979,7 @@ function validateChange(change: BoardChange): void {
 function cleanTitle(title: string, config: TasksFeatureSettings): string {
   const cleaned = removePriorityTokens(title.trim(), config);
   if (cleaned === "") throw new BadRequestError(NO_TITLE_ERROR);
+  ensureNoSignifiers(cleaned, "title", config);
   return cleaned;
 }
 
@@ -674,6 +987,7 @@ function cleanReason(reason: unknown, config: TasksFeatureSettings): string | nu
   const valid = validateReason(reason);
   if (valid === null) return null;
   const cleaned = removePriorityTokens(valid, config);
+  ensureNoSignifiers(cleaned, "reason", config);
   return cleaned === "" ? null : cleaned;
 }
 
@@ -686,11 +1000,14 @@ function ensureReasonFits(reason: string | null, config: TasksFeatureSettings): 
 export type StampMode = "none" | "keep" | "drop";
 
 export function rewriteTaskLine(raw: string, config: TasksFeatureSettings, change: BoardChange, stampMode: StampMode = "none"): string {
-  validateChange(change);
+  validateChange(change, config);
   const parts = raw.match(TASK_PARTS_RE);
   if (!parts) throw new BadRequestError("not a task line");
   const [, head, box, close, gap, restRaw] = parts as unknown as [string, string, string, string, string, string];
-  const stamped = splitAnyStamp(restRaw, config);
+  const signified = splitSignifiers(restRaw, config);
+  if (signified.conflict !== null) throw new BadRequestError(`the task has two different ${signified.conflict} values, fix the line in the file first`);
+  const dates = mergeDates(signified, change, config);
+  const stamped = splitAnyStamp(signified.text, config);
   const prioritized = splitPriority(stamped.text, config);
   const prefix = matchPrefix(prioritized.text, config);
   const currentStatus: BoardStatus = prefix?.status ?? checkboxOf(box);
@@ -703,7 +1020,7 @@ export function rewriteTaskLine(raw: string, config: TasksFeatureSettings, chang
     const carried = validateReason(change.reason) !== null ? carriesReason(targetStatus) : carriesReason(currentStatus) || carriesReason(targetStatus);
     if (!carried) throw new BadRequestError("reason only applies to blocked, hold and archived tasks");
   }
-  const reshapes = change.priority !== undefined || change.reason !== undefined || (status !== undefined && carriesReason(status));
+  const reshapes = change.priority !== undefined || change.reason !== undefined || touchesDates(change) || (status !== undefined && carriesReason(status));
   if (change.title === undefined && reshapes && removePriorityTokens(text, config) === "") throw new BadRequestError(NO_TITLE_ERROR);
   if (status === "todo" || status === "doing" || status === "done") {
     checkbox = status === "todo" ? " " : status === "doing" ? "-" : "x";
@@ -727,7 +1044,10 @@ export function rewriteTaskLine(raw: string, config: TasksFeatureSettings, chang
   if (priority !== null) token = priority === prioritized.priority && prioritized.token ? prioritized.token : formatPriority(config, priority);
   const tail = stampMode === "drop" ? "" : stamped.tail;
   const content = text === "" ? token : `${text}${token === "" ? "" : ` ${token}`}`;
-  return `${head}${checkbox}${close}${gap || " "}${span}${content}${tail}`;
+  const signifiers = formatSignifiers(dates);
+  if (signifiers === "") return `${head}${checkbox}${close}${gap || " "}${span}${content}${tail}`;
+  if (removePriorityTokens(withoutSignifiers(text, config), config) === "") throw new BadRequestError(NO_TITLE_ERROR);
+  return `${head}${checkbox}${close}${gap || " "}${span}${content} ${signifiers}${tail}`;
 }
 
 interface WalkedFile {
@@ -1189,6 +1509,50 @@ function moveBlockToOpen(doc: ParsedDoc, config: TasksFeatureSettings, start: nu
   return insertIntoOpenEnd(doc, block, config);
 }
 
+const TASK_MARK_RE = /^(\s*[-*]\s+\[)([ xX-])(\])/;
+
+function setTaskMark(text: string, mark: string): string {
+  return text.replace(TASK_MARK_RE, (_whole, open: string, _mark: string, close: string) => `${open}${mark}${close}`);
+}
+
+function isPendingRecurrence(task: BoardTask): boolean {
+  return task.section === "open" && task.repeat !== null && task.status === "done" && task.doneAt === null;
+}
+
+const OCCURRENCE_MESSAGE = "this is a finished occurrence of a recurring task - edit it in Obsidian";
+
+function isFinishedOccurrence(task: BoardTask, config: TasksFeatureSettings): boolean {
+  if (task.repeat === null || task.doneAt === null) return false;
+  return task.section === "done" || doneSectionName(config) === null;
+}
+
+function holdsLine(task: BoardTask, line: number): boolean {
+  return flattenTasks([task]).some((member) => member.line === line || member.noteItems.some((note) => note.line === line));
+}
+
+function ensureNotOccurrence(tasks: BoardTask[], line: number, config: TasksFeatureSettings): void {
+  const top = tasks.find((task) => holdsLine(task, line));
+  if (top && isFinishedOccurrence(top, config)) throw new BadRequestError(OCCURRENCE_MESSAGE);
+}
+
+function recurBlock(doc: ParsedDoc, config: TasksFeatureSettings, task: BoardTask, date: string): number {
+  const length = blockLength(doc, task.line);
+  const block = doc.lines.slice(task.line, task.line + length);
+  const nested = new Set(flattenTasks(task.subtasks).map((subtask) => subtask.line));
+  const original = block[0] as DocLine;
+  const copy = block.map((line, offset) => {
+    if (offset === 0) return docLine(`${rewriteTaskLine(line.text, config, { status: "done" }).trimEnd()}${formatStamp(config, date)}`);
+    return docLine(nested.has(task.line + offset) ? setTaskMark(line.text, "x") : line.text);
+  });
+  original.text = rewriteTaskLine(original.text, config, { status: "todo", ...advancedDates(task) });
+  block.forEach((line, offset) => {
+    if (offset > 0 && nested.has(task.line + offset)) line.text = setTaskMark(line.text, " ");
+  });
+  if (doneSectionName(config) !== null) insertIntoDone(doc, copy, config);
+  else doc.lines.splice(task.line + length, 0, ...copy);
+  return doc.lines.indexOf(original);
+}
+
 function topLevelOf(tasks: BoardTask[], line: number): BoardTask | null {
   return tasks.find((task) => findTaskAt([task], line) !== null) ?? null;
 }
@@ -1201,19 +1565,29 @@ function commitFile(file: WalkedFile, next: string): number {
 }
 
 export function writeBoardTask(settings: DelegationSettings, input: BoardWriteInput): BoardWriteResult {
-  validateChange(input);
+  validateChange(input, settings.tasks);
   const file = locateProject(settings, input.projectId);
   const content = readProjectFile(file);
   const config = settings.tasks;
   const current = checkFresh(content, file, config, input.line, input.raw);
+  ensureNotOccurrence(parseBoardTasks(content, file.id, config), input.line, config);
   const updatedLine = rewriteTaskLine(input.raw, config, input, current.section === "done" ? "keep" : "none");
   const doc = openDoc(content);
   (doc.lines[input.line] as DocLine).text = updatedLine;
   let moved = false;
+  let recurred = false;
   let line = input.line;
-  if (input.status !== undefined && doneSectionName(config) !== null) {
+  if (input.status === "done") {
+    const top = parseBoardTasks(renderDoc(doc), file.id, config).find((task) => task.line === input.line);
+    if (top && isPendingRecurrence(top)) {
+      line = recurBlock(doc, config, top, localDate());
+      recurred = true;
+      moved = true;
+    }
+  }
+  if (!recurred && input.status !== undefined && doneSectionName(config) !== null) {
     const top = topLevelOf(parseBoardTasks(renderDoc(doc), file.id, config), input.line);
-    if (top && current.section === "open" && isFinished(top)) {
+    if (top && current.section === "open" && !isPendingRecurrence(top) && isFinished(top)) {
       line = moveBlockToDone(doc, config, top.line, localDate()) + (input.line - top.line);
       moved = true;
     } else if (top && current.section === "done" && input.status !== "done" && current.status !== input.status) {
@@ -1225,7 +1599,7 @@ export function writeBoardTask(settings: DelegationSettings, input: BoardWriteIn
   let updatedAt = statSync(file.abs).mtimeMs;
   if (next !== content) updatedAt = commitFile(file, next);
   const task = findTaskAt(parseBoardTasks(next, file.id, config), line) as BoardTask;
-  return { task, updatedAt, moved };
+  return { task, updatedAt, moved, recurred };
 }
 
 const leadingSpace = (text: string): string => text.match(/^\s*/)?.[0] ?? "";
@@ -1277,7 +1651,7 @@ function noteIndent(doc: ParsedDoc, parentLine: number): string {
   return first ?? childIndent(doc, parentLine);
 }
 
-function composeTaskLine(indent: string, status: BoardStatus, title: string, reason: string | null, priority: number | null, config: TasksFeatureSettings): string {
+function composeTaskLine(indent: string, status: BoardStatus, title: string, reason: string | null, priority: number | null, dates: BoardDates, config: TasksFeatureSettings): string {
   const checkbox = status === "doing" ? "-" : status === "done" ? "x" : " ";
   let span = "";
   if (carriesReason(status)) {
@@ -1286,7 +1660,8 @@ function composeTaskLine(indent: string, status: BoardStatus, title: string, rea
     span = `${first}${config.separator}`;
   }
   const token = priority === null ? "" : ` ${formatPriority(config, priority)}`;
-  return `${indent}- [${checkbox}] ${span}${joinReason(title, reason, config.reasonSeparator)}${token}`;
+  const signifiers = formatSignifiers(dates);
+  return `${indent}- [${checkbox}] ${span}${joinReason(title, reason, config.reasonSeparator)}${token}${signifiers === "" ? "" : ` ${signifiers}`}`;
 }
 
 export function createBoardTask(settings: DelegationSettings, input: BoardCreateInput): BoardCreateResult {
@@ -1295,6 +1670,7 @@ export function createBoardTask(settings: DelegationSettings, input: BoardCreate
   if (!(BOARD_STATUSES as readonly string[]).includes(status)) throw new BadRequestError(`status must be one of: ${BOARD_STATUSES.join(", ")}`);
   const reason = cleanReason(input.reason, settings.tasks);
   const priority = priorityOf(input.priority);
+  const dates = datesOf(input, settings.tasks);
   if (reason !== null && !carriesReason(status)) throw new BadRequestError("reason only applies to blocked, hold and archived tasks");
   ensureReasonFits(reason, settings.tasks);
   if (input.parentLine !== undefined && input.parentRaw === undefined) throw new BadRequestError("parentRaw required with parentLine");
@@ -1305,14 +1681,15 @@ export function createBoardTask(settings: DelegationSettings, input: BoardCreate
   let at: number;
   if (input.parentLine !== undefined) {
     const parent = checkFresh(content, file, config, input.parentLine, input.parentRaw as string);
+    ensureNotOccurrence(parseBoardTasks(content, file.id, config), parent.line, config);
     const indent = childIndent(doc, parent.line);
     at = parent.line + blockLength(doc, parent.line);
-    doc.lines.splice(at, 0, docLine(composeTaskLine(indent, status, title, reason, priority, config)));
+    doc.lines.splice(at, 0, docLine(composeTaskLine(indent, status, title, reason, priority, dates, config)));
   } else if (status === "done" && doneSectionName(config) !== null) {
-    const line = `${composeTaskLine("", status, title, reason, priority, config)}${formatStamp(config, localDate())}`;
+    const line = `${composeTaskLine("", status, title, reason, priority, dates, config)}${formatStamp(config, localDate())}`;
     at = insertIntoDone(doc, [docLine(line)], config);
   } else {
-    at = insertIntoOpenEnd(doc, [docLine(composeTaskLine("", status, title, reason, priority, config))], config);
+    at = insertIntoOpenEnd(doc, [docLine(composeTaskLine("", status, title, reason, priority, dates, config))], config);
   }
   const next = renderDoc(doc);
   const updatedAt = commitFile(file, next);
@@ -1353,6 +1730,7 @@ export function addBoardNote(settings: DelegationSettings, input: BoardNoteInput
   const content = readProjectFile(file);
   const config = settings.tasks;
   const parent = checkFresh(content, file, config, input.line, input.raw);
+  ensureNotOccurrence(parseBoardTasks(content, file.id, config), parent.line, config);
   const doc = openDoc(content);
   const line = `${noteIndent(doc, parent.line)}- ${text}`;
   ensureNoteShape(line);
@@ -1371,6 +1749,7 @@ export function editBoardNote(settings: DelegationSettings, input: BoardNoteInpu
   const content = readProjectFile(file);
   const config = settings.tasks;
   const { owner, note } = locateNote(content, file, config, input.line, input.raw);
+  ensureNotOccurrence(parseBoardTasks(content, file.id, config), note.line, config);
   const lead = note.raw.match(/^(\s*)([-*+]\s+)?/) as RegExpMatchArray;
   const line = `${lead[1] ?? ""}${lead[2] ?? ""}${text}`;
   ensureNoteShape(line);
@@ -1442,6 +1821,7 @@ export function deleteBoardNote(settings: DelegationSettings, input: BoardNoteRe
   const content = readProjectFile(file);
   const config = settings.tasks;
   const { owner, note } = locateNote(content, file, config, input.line, input.raw);
+  ensureNotOccurrence(parseBoardTasks(content, file.id, config), note.line, config);
   const doc = openDoc(content);
   const removed = noteRemoval(doc, note.line);
   settleNoteBlanks(doc, removed, note.line, owner.line + blockLength(doc, owner.line));
@@ -1667,6 +2047,7 @@ export function moveBoardItem(settings: DelegationSettings, input: BoardMoveInpu
   const content = readProjectFile(file);
   const config = settings.tasks;
   const located = locateItem(content, file, config, input.line, input.raw);
+  ensureNotOccurrence(located.tasks, input.line, config);
   const doc = openDoc(content);
   const length = fencedBlockLength(doc, input.line);
   const neighbour = neighbourOf(doc, located, input.line, length, input.direction);
@@ -1714,6 +2095,7 @@ export function reparentBoardTask(settings: DelegationSettings, input: BoardRepa
   const located = locateItem(content, file, config, input.line, input.raw);
   const self = located.task;
   if (!self) throw new BadRequestError("notes cannot be reparented");
+  ensureNotOccurrence(located.tasks, input.line, config);
   const doc = openDoc(content);
   const length = fencedBlockLength(doc, input.line);
   const block = doc.lines.slice(input.line, input.line + length);
@@ -1722,6 +2104,7 @@ export function reparentBoardTask(settings: DelegationSettings, input: BoardRepa
   if (input.parent === null && !located.owner) throw new BadRequestError("the task is already top-level");
   if (input.parent !== null) {
     parent = resolveParent(content, located.tasks, input.parent);
+    ensureNotOccurrence(located.tasks, parent.line, config);
     if (parent.line === input.line) throw new BadRequestError("a task cannot become its own subtask");
     const parentLine = parent.line;
     if ((parentLine > input.line && parentLine < input.line + length) || flattenTasks(self.subtasks).some((task) => task.line === parentLine)) {
@@ -1771,10 +2154,13 @@ export function moveTaskToProject(settings: DelegationSettings, input: BoardMove
   const located = locateItem(content, file, config, input.line, input.raw);
   const self = located.task;
   if (!self) throw new BadRequestError("only tasks can be moved to another project");
+  ensureNotOccurrence(located.tasks, input.line, config);
   const doc = openDoc(content);
   const length = fencedBlockLength(doc, input.line);
   const targetDoc = openDoc(targetContent);
-  const parent = input.parent ? resolveParent(targetContent, parseBoardTasks(targetContent, target.id, config), input.parent) : null;
+  const targetTasks = parseBoardTasks(targetContent, target.id, config);
+  const parent = input.parent ? resolveParent(targetContent, targetTasks, input.parent) : null;
+  if (parent) ensureNotOccurrence(targetTasks, parent.line, config);
   if (parent) fencedBlockLength(targetDoc, parent.line);
   const stamped = parent === null && located.owner === null && self.section === "done" && self.doneAt !== null && doneSectionName(config) !== null;
   const block = doc.lines.slice(input.line, input.line + length);
@@ -1824,8 +2210,25 @@ export function moveTaskToProject(settings: DelegationSettings, input: BoardMove
 function sweepDocument(doc: ParsedDoc, config: TasksFeatureSettings, projectId: string, date: string): number {
   let moved = 0;
   let previous = Number.POSITIVE_INFINITY;
+  let previousRecurring = Number.POSITIVE_INFINITY;
+  const skipped = new Set<string>();
   for (;;) {
-    const eligible = parseBoardTasks(renderDoc(doc), projectId, config).filter((task) => task.section === "open" && isFinished(task));
+    const parsed = parseBoardTasks(renderDoc(doc), projectId, config);
+    const recurring = parsed.filter((task) => isPendingRecurrence(task) && !skipped.has(task.raw));
+    const occurrence = recurring[recurring.length - 1];
+    if (occurrence) {
+      if (recurring.length >= previousRecurring) return moved;
+      previousRecurring = recurring.length;
+      try {
+        recurBlock(doc, config, occurrence, date);
+        moved += 1;
+      } catch (err) {
+        if (!(err instanceof BadRequestError)) throw err;
+        skipped.add(occurrence.raw);
+      }
+      continue;
+    }
+    const eligible = parsed.filter((task) => task.section === "open" && !isPendingRecurrence(task) && isFinished(task));
     const target = eligible[eligible.length - 1];
     if (!target || eligible.length >= previous) return moved;
     previous = eligible.length;
@@ -1917,6 +2320,7 @@ export function delegateBoardTask(settings: DelegationSettings, input: BoardDele
   const file = locateProject(settings, input.projectId);
   const content = readProjectFile(file);
   const task = checkFresh(content, file, settings.tasks, input.line, input.raw);
+  ensureNotOccurrence(parseBoardTasks(content, file.id, settings.tasks), task.line, settings.tasks);
   const detail = delegateTask({
     prompt: input.prompt,
     workspace: input.workspace,
@@ -1931,6 +2335,7 @@ export function delegateBoardTask(settings: DelegationSettings, input: BoardDele
   if (!settings.tasks.markDoingOnDelegate || task.status !== "todo") return { taskId: detail.task.id, task };
   try {
     const written = writeBoardTask(settings, { projectId: input.projectId, line: input.line, raw: input.raw, status: "doing" });
+    syncTodayAfterTaskWrite(settings, written.task, false);
     return { taskId: detail.task.id, task: written.task };
   } catch (err) {
     const warning = err instanceof Error ? err.message : "could not mark the task as doing";
@@ -1998,10 +2403,13 @@ interface TaskMatch {
   candidates: string[];
 }
 
+function taskNeedle(text: string, config: TasksFeatureSettings): string {
+  const clean = removePriorityTokens(splitSignifiers(text.trim(), config).text, config);
+  return normalizeText(matchPrefix(clean, config)?.title ?? clean);
+}
+
 function matchTask(text: string, projectId: string | null, pool: BoardTask[], config: TasksFeatureSettings): TaskMatch {
-  const clean = removePriorityTokens(text.trim(), config);
-  const stripped = matchPrefix(clean, config)?.title ?? clean;
-  const needle = normalizeText(stripped);
+  const needle = taskNeedle(text, config);
   if (needle === "") return { task: null, candidates: [] };
   let bestRank = Number.POSITIVE_INFINITY;
   let best: BoardTask[] = [];
@@ -2023,44 +2431,228 @@ function matchTask(text: string, projectId: string | null, pool: BoardTask[], co
   return { task: null, candidates: best.slice(0, MAX_CANDIDATES).map((task) => task.id) };
 }
 
+const SYNCED_STATUSES: ReadonlySet<BoardStatus> = new Set<BoardStatus>(["todo", "doing", "done"]);
+
+const isSyncedStatus = (status: BoardStatus): boolean => SYNCED_STATUSES.has(status);
+
 function isMismatch(checkbox: BoardCheckbox, status: BoardStatus): boolean {
-  if (checkbox === "done") return status !== "done";
-  return status === "done" || status === "archived";
+  return isSyncedStatus(status) && checkbox !== checkboxForStatus(status);
 }
 
-function computeDailyLinks(settings: DelegationSettings, date: string, projects: BoardProject[], tasks: BoardTask[]): DailyLinksResult {
-  const daily = readDaily(settings, date);
-  const result: DailyLinksResult = { date, exists: daily.exists, path: daily.path, items: [], taskIds: [] };
-  if (!daily.exists) return result;
-  const lines = daily.content.split(LINE_SPLIT_RE);
+const CHECKBOX_MARK: Record<BoardCheckbox, string> = { todo: " ", doing: "-", done: "x" };
+const DAILY_MARK_RE = /^(\s*[-*]\s+\[)([ xX-])(\])/;
+const DAILY_SUBTASK_INDENT = "  ";
+
+export function checkboxForStatus(status: BoardStatus): BoardCheckbox {
+  if (status === "done" || status === "archived") return "done";
+  return status === "doing" ? "doing" : "todo";
+}
+
+export function effectiveProjectOrder(projects: BoardProject[], order: string[]): string[] {
+  const known = new Set(projects.map((project) => project.id));
+  const head = [...new Set(order)].filter((id) => known.has(id));
+  const listed = new Set(head);
+  return [...head, ...projects.map((project) => project.id).filter((id) => !listed.has(id))];
+}
+
+export function composeBoardFor(settings: DelegationSettings): ComposeBoard | null {
+  if (!settings.features.daily || !settings.features.tasks) return null;
+  const root = tasksRoot(settings);
+  if (!root) return null;
+  try {
+    const { projects } = loadBoard(root, settings.tasks);
+    if (projects.length === 0) return null;
+    return {
+      projects: projects.map((project) => ({ id: project.id, name: project.name, title: project.title })),
+      order: effectiveProjectOrder(projects, settings.daily.projectOrder),
+      projectOfLabel: (label) => resolveProjectLabel(label, projects),
+      projectOfLine: (text) => splitLabel(text, projects).projectId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+interface FocusRange {
+  heading: number;
+  end: number;
+}
+
+function focusRange(lines: string[], settings: DelegationSettings): FocusRange | null {
   const heading = findHeadingIndex(lines, settings.daily.headings.focus);
-  if (heading === -1) return result;
-  let end = lines.length;
+  if (heading === -1) return null;
   for (let index = heading + 1; index < lines.length; index += 1) {
-    if (/^##\s+/.test(lines[index] ?? "")) {
-      end = index;
-      break;
+    if (/^##\s+/.test(lines[index] ?? "")) return { heading, end: index };
+  }
+  return { heading, end: lines.length };
+}
+
+interface RecurrenceIndex {
+  pool: BoardTask[];
+  roots: Map<string, BoardTask>;
+  originals: BoardTask[];
+  occurrences: BoardTask[];
+}
+
+const isRecurringOriginal = (task: BoardTask): boolean => task.section === "open" && task.repeat !== null && task.doneAt === null;
+
+function recurrenceIndex(tasks: BoardTask[]): RecurrenceIndex {
+  const roots = new Map<string, BoardTask>();
+  const excluded = new Set<string>();
+  const occurrences: BoardTask[] = [];
+  for (const task of tasks) {
+    const members = flattenTasks([task]);
+    for (const member of members) roots.set(member.id, task);
+    if (task.repeat === null || task.doneAt === null) continue;
+    occurrences.push(task);
+    for (const member of members) excluded.add(member.id);
+  }
+  return { pool: flattenTasks(tasks).filter((task) => !excluded.has(task.id)), roots, originals: tasks.filter(isRecurringOriginal), occurrences };
+}
+
+function occurrenceOf(index: RecurrenceIndex, original: BoardTask, needle: string, copy: BoardTask): boolean {
+  const title = normalizeText(copy.title);
+  const own = normalizeText(original.title);
+  if (title === own) return true;
+  if (index.originals.some((other) => other.id !== original.id && other.projectId === copy.projectId && normalizeText(other.title) === title)) return false;
+  return title === needle || prefixMatches(title, own) || prefixMatches(title, needle);
+}
+
+function recurringRoot(index: RecurrenceIndex, task: BoardTask | null): BoardTask | null {
+  const original = task === null ? undefined : index.roots.get(task.id);
+  return original && isRecurringOriginal(original) ? original : null;
+}
+
+function recurredOn(index: RecurrenceIndex, original: BoardTask | null, needle: string, date: string): boolean {
+  if (!original) return false;
+  return index.occurrences.some((copy) => copy.projectId === original.projectId && copy.doneAt === date && occurrenceOf(index, original, needle, copy));
+}
+
+interface FocusChild {
+  line: number;
+  depth: number;
+  raw: string;
+  checkbox: BoardCheckbox;
+  text: string;
+  task: BoardTask | null;
+}
+
+interface FocusEntry {
+  line: number;
+  raw: string;
+  checkbox: BoardCheckbox;
+  label: string | null;
+  projectId: string | null;
+  text: string;
+  match: TaskMatch;
+  recurred: boolean;
+  recurring: boolean;
+  held: boolean;
+  children: FocusChild[];
+}
+
+interface DailyLineLink {
+  line: number;
+  depth: number;
+  raw: string;
+  checkbox: BoardCheckbox;
+  task: BoardTask;
+  held: boolean;
+}
+
+interface FocusScan {
+  entries: FocusEntry[];
+  links: DailyLineLink[];
+}
+
+function focusEntries(settings: DelegationSettings, date: string, content: string, projects: BoardProject[], index: RecurrenceIndex): FocusEntry[] {
+  const range = focusRange(content.split(LINE_SPLIT_RE), settings);
+  if (!range) return [];
+  const entries: FocusEntry[] = [];
+  let current: FocusEntry | null = null;
+  let blockEnd = -1;
+  let stack: { depth: number; task: BoardTask | null }[] = [];
+  for (const entry of parseTaskLines(content)) {
+    if (entry.line <= range.heading || entry.line >= range.end) continue;
+    if (entry.depth === 0 || entry.line >= blockEnd) {
+      current = null;
+      stack = [];
+      blockEnd = -1;
+      if (entry.depth !== 0 || entry.text.trim() === "") continue;
+      const split = splitLabel(entry.text.trim(), projects);
+      const match = matchTask(split.text, split.projectId, index.pool, settings.tasks);
+      blockEnd = entry.line + taskBlock(content, entry.line).split(LINE_SPLIT_RE).length;
+      const root = recurringRoot(index, match.task);
+      const recurred = recurredOn(index, root, taskNeedle(split.text, settings.tasks), date);
+      const held = root !== null && (date !== localDate() || match.task?.id !== root.id || recurred);
+      current = { line: entry.line, raw: entry.raw, checkbox: entry.state, label: split.label, projectId: split.projectId, text: split.text, match, recurred, recurring: root !== null, held, children: [] };
+      entries.push(current);
+      stack.push({ depth: 0, task: match.task });
+      continue;
+    }
+    if (!current) continue;
+    while (stack.length > 1 && (stack[stack.length - 1] as { depth: number }).depth >= entry.depth) stack.pop();
+    const parent = stack[stack.length - 1]?.task ?? null;
+    const text = entry.text.trim();
+    const task = parent && text !== "" ? matchTask(text, null, parent.subtasks, settings.tasks).task : null;
+    stack.push({ depth: entry.depth, task });
+    if (text !== "") current.children.push({ line: entry.line, depth: entry.depth, raw: entry.raw, checkbox: entry.state, text, task });
+  }
+  return entries;
+}
+
+function scanDaily(settings: DelegationSettings, date: string, content: string, projects: BoardProject[], tasks: BoardTask[]): FocusScan {
+  const index = recurrenceIndex(tasks);
+  const entries = focusEntries(settings, date, content, projects, index);
+  const links: DailyLineLink[] = [];
+  for (const entry of entries) {
+    if (entry.match.task) links.push({ line: entry.line, depth: 0, raw: entry.raw, checkbox: entry.checkbox, task: entry.match.task, held: entry.held });
+    if (entry.recurring) continue;
+    for (const child of entry.children) {
+      if (child.task) links.push({ line: child.line, depth: child.depth, raw: child.raw, checkbox: child.checkbox, task: child.task, held: false });
     }
   }
-  const pool = flattenTasks(tasks);
+  return { entries, links };
+}
+
+function computeDailyLinks(
+  settings: DelegationSettings,
+  date: string,
+  projects: BoardProject[],
+  tasks: BoardTask[],
+  daily: DailyReadResult = readDaily(settings, date),
+  scan: FocusScan | null = null,
+): DailyLinksResult {
+  const result: DailyLinksResult = { date, exists: daily.exists, path: daily.path, items: [], taskIds: [] };
+  if (!daily.exists) return result;
+  const { entries } = scan ?? scanDaily(settings, date, daily.content, projects, tasks);
   const ids = new Set<string>();
-  for (const entry of parseTaskLines(daily.content)) {
-    if (entry.line <= heading || entry.line >= end || entry.depth !== 0 || entry.text.trim() === "") continue;
-    const split = splitLabel(entry.text.trim(), projects);
-    const match = matchTask(split.text, split.projectId, pool, settings.tasks);
-    if (match.task) ids.add(match.task.id);
+  for (const entry of entries) {
+    const task = entry.match.task;
+    if (task) ids.add(task.id);
     result.items.push({
       line: entry.line,
       raw: entry.raw,
-      checkbox: entry.state,
-      label: split.label,
-      projectId: split.projectId,
-      text: split.text,
-      taskId: match.task?.id ?? null,
-      candidates: match.candidates,
-      taskStatus: match.task?.status ?? null,
-      taskPriority: match.task?.priority ?? null,
-      mismatch: match.task ? isMismatch(entry.state, match.task.status) : false,
+      checkbox: entry.checkbox,
+      label: entry.label,
+      projectId: entry.projectId,
+      text: entry.text,
+      taskId: task?.id ?? null,
+      candidates: entry.match.candidates,
+      taskStatus: task?.status ?? null,
+      taskPriority: task?.priority ?? null,
+      mismatch: task !== null && !entry.held && isMismatch(entry.checkbox, task.status),
+      recurredToday: entry.recurred,
+      children: entry.children.map((child) => ({
+        line: child.line,
+        depth: child.depth,
+        raw: child.raw,
+        checkbox: child.checkbox,
+        text: child.text,
+        taskId: child.task?.id ?? null,
+        taskStatus: child.task?.status ?? null,
+        mismatch: child.task !== null && !entry.recurring && isMismatch(child.checkbox, child.task.status),
+      })),
     });
   }
   result.taskIds = [...ids];
@@ -2071,12 +2663,19 @@ function todayBlock(settings: DelegationSettings, projects: BoardProject[], task
   if (!settings.features.daily || !settings.features.tasks) return null;
   const date = localDate();
   try {
-    const links = computeDailyLinks(settings, date, projects, tasks);
+    const daily = readDaily(settings, date);
+    const scan = daily.exists ? scanDaily(settings, date, daily.content, projects, tasks) : null;
+    const links = computeDailyLinks(settings, date, projects, tasks, daily, scan);
     const states: Record<string, BoardCheckbox> = {};
     for (const item of links.items) {
       if (item.taskId && states[item.taskId] === undefined) states[item.taskId] = item.checkbox;
     }
-    return { date, exists: links.exists, taskIds: links.taskIds, states };
+    const mismatch = new Set<string>();
+    for (const link of scan?.links ?? []) {
+      if (states[link.task.id] === undefined) states[link.task.id] = link.checkbox;
+      if (!link.held && isMismatch(link.checkbox, link.task.status)) mismatch.add(link.task.id);
+    }
+    return { date, exists: links.exists, taskIds: links.taskIds, states, mismatch: [...mismatch] };
   } catch {
     return null;
   }
@@ -2098,7 +2697,163 @@ export function dailyTaskLinks(settings: DelegationSettings, date: string): Dail
   return computeDailyLinks(settings, date, loaded.projects, tasks);
 }
 
+function subtaskDailyLines(subtasks: BoardTask[], level: number): string[] {
+  return subtasks.flatMap((subtask) => [
+    `${DAILY_SUBTASK_INDENT.repeat(level)}- [${CHECKBOX_MARK[checkboxForStatus(subtask.status)]}] ${subtask.title}`,
+    ...subtaskDailyLines(subtask.subtasks, level + 1),
+  ]);
+}
+
+interface FocusItem {
+  start: number;
+  last: number;
+  projectId: string | null;
+}
+
+function focusItems(doc: ParsedDoc, range: FocusRange, projects: BoardProject[]): FocusItem[] {
+  const items: FocusItem[] = [];
+  let index = range.heading + 1;
+  while (index < range.end) {
+    const line = doc.lines[index] as DocLine;
+    if (isBlank(line)) {
+      index += 1;
+      continue;
+    }
+    const last = Math.min(index + blockLength(doc, index), range.end) - 1;
+    const match = indentDepth(line.text) === 0 ? line.text.match(TASK_LINE_RE) : null;
+    const text = match ? (match[3] as string).trim() : "";
+    items.push({ start: index, last, projectId: text === "" ? null : splitLabel(text, projects).projectId });
+    index = last + 1;
+  }
+  return items;
+}
+
+function placeInFocus(doc: ParsedDoc, settings: DelegationSettings, block: DocLine[], projectId: string, projects: BoardProject[]): number {
+  const texts = textsOf(doc);
+  const range = focusRange(texts, settings);
+  if (!range) {
+    const last = lastNonBlank(doc);
+    const at = last + 1;
+    doc.lines.splice(at, 0, ...(last >= 0 ? [docLine("")] : []), docLine(`## ${settings.daily.headings.focus}`), docLine(""), ...block);
+    return at + (last >= 0 ? 1 : 0) + 2;
+  }
+  const contentIndexes: number[] = [];
+  for (let index = range.heading + 1; index < range.end; index += 1) if (!isBlank(doc.lines[index])) contentIndexes.push(index);
+  if (contentIndexes.length === 0) return appendToSection(doc, { heading: range.heading, level: 2, end: range.end }, block);
+  if (contentIndexes.every((index) => isPlaceholderLine(texts[index] ?? ""))) {
+    const at = contentIndexes[0] as number;
+    const lastPlaceholder = contentIndexes[contentIndexes.length - 1] as number;
+    doc.lines.splice(at, lastPlaceholder - at + 1, ...block);
+    return at;
+  }
+  const items = focusItems(doc, range, projects);
+  const own = items.filter((item) => item.projectId === projectId).pop();
+  if (own) {
+    doc.lines.splice(own.last + 1, 0, ...block);
+    return own.last + 1;
+  }
+  const order = effectiveProjectOrder(projects, settings.daily.projectOrder);
+  const rank = (id: string | null): number => {
+    const position = id === null ? -1 : order.indexOf(id);
+    return position === -1 ? Number.POSITIVE_INFINITY : position;
+  };
+  const wanted = rank(projectId);
+  const nextIndex = items.findIndex((item) => rank(item.projectId) > wanted);
+  if (nextIndex === -1) {
+    const last = (items[items.length - 1] as FocusItem).last;
+    doc.lines.splice(last + 1, 0, docLine(""), ...block);
+    return last + 2;
+  }
+  const next = items[nextIndex] as FocusItem;
+  if (nextIndex === 0) {
+    doc.lines.splice(next.start, 0, ...block, docLine(""));
+    return next.start;
+  }
+  const previousLast = (items[nextIndex - 1] as FocusItem).last;
+  doc.lines.splice(previousLast + 1, next.start - previousLast - 1, docLine(""), ...block, docLine(""));
+  return previousLast + 2;
+}
+
 export function addTaskToDaily(settings: DelegationSettings, input: AddToDailyInput): AddToDailyResult {
+  const root = requireBothFeatures(settings);
+  const date = input.date ?? localDate();
+  requireDailyDate(date);
+  const file = locateProject(settings, input.projectId);
+  const content = readProjectFile(file);
+  const task = checkFresh(content, file, settings.tasks, input.line, input.raw);
+  const parsed = parseBoardTasks(content, file.id, settings.tasks);
+  ensureNotOccurrence(parsed, task.line, settings.tasks);
+  const topLevel = parentTaskOf(parsed, task.line) === null;
+  const daily = readDaily(settings, date);
+  if (!daily.exists) throw new NotFoundError("create the daily first");
+  const { loaded, tasks } = collectBoard(root, settings.tasks);
+  const project = loaded.projects.find((candidate) => candidate.id === input.projectId);
+  if (!project) throw new NotFoundError("project not found");
+  const listed = computeDailyLinks(settings, date, loaded.projects, tasks, daily);
+  if (listed.items.some((item) => item.taskId === task.id || item.candidates.includes(task.id))) throw new AlreadyInDailyError();
+  const label = settings.daily.wikilinks ? `[[${project.name}|${project.title}]]` : project.title;
+  const line = `- [${CHECKBOX_MARK[checkboxForStatus(task.status)]}] ${label} - ${task.title}`;
+  const children = topLevel ? subtaskDailyLines(task.subtasks, 1) : [];
+  const doc = openDoc(daily.content);
+  const at = placeInFocus(doc, settings, [line, ...children].map(docLine), project.id, loaded.projects);
+  writeDaily(settings, date, renderDoc(doc), daily.updatedAt ?? undefined);
+  return { date, line: at, raw: line, subtasks: children.length };
+}
+
+interface DailyMark {
+  line: number;
+  checkbox: BoardCheckbox;
+  wanted: BoardCheckbox;
+}
+
+const syncedMark = (link: DailyLineLink): DailyMark => ({ line: link.line, checkbox: link.checkbox, wanted: checkboxForStatus(link.task.status) });
+
+function writeDailyMarks(settings: DelegationSettings, daily: DailyReadResult, marks: DailyMark[]): number {
+  const doc = openDoc(daily.content);
+  let updated = 0;
+  for (const { line: at, checkbox, wanted } of marks) {
+    const line = doc.lines[at];
+    if (checkbox === wanted || !line) continue;
+    line.text = line.text.replace(DAILY_MARK_RE, (_whole, open: string, _mark: string, close: string) => `${open}${CHECKBOX_MARK[wanted]}${close}`);
+    updated += 1;
+  }
+  if (updated > 0) writeDaily(settings, daily.date, renderDoc(doc), daily.updatedAt ?? undefined);
+  return updated;
+}
+
+function linksOfTask(links: DailyLineLink[], task: BoardTask, withDescendants: boolean): DailyLineLink[] {
+  const descendants = new Set(withDescendants ? flattenTasks(task.subtasks).map((subtask) => subtask.id) : []);
+  return links.filter((link) => !link.held && (link.task.id === task.id || (link.depth > 0 && descendants.has(link.task.id))));
+}
+
+function recurredItemMarks(entries: FocusEntry[], task: BoardTask): DailyMark[] {
+  return entries.filter((entry) => entry.recurred && entry.match.task?.id === task.id).map((entry) => ({ line: entry.line, checkbox: entry.checkbox, wanted: "done" }));
+}
+
+function syncTodayAfterTaskWrite(settings: DelegationSettings, task: BoardTask, recurred: boolean): boolean {
+  if (!settings.features.daily || !settings.features.tasks) return false;
+  try {
+    const root = requireBoardRoot(settings);
+    const date = localDate();
+    const daily = readDaily(settings, date);
+    if (!daily.exists) return false;
+    const { loaded, tasks } = collectBoard(root, settings.tasks);
+    const scan = scanDaily(settings, date, daily.content, loaded.projects, tasks);
+    const marks = recurred ? recurredItemMarks(scan.entries, task) : linksOfTask(scan.links, task, false).map(syncedMark);
+    return writeDailyMarks(settings, daily, marks) > 0;
+  } catch (err) {
+    console.error(`daily sync after a task write failed: ${err instanceof Error ? err.message : String(err)}`);
+    return false;
+  }
+}
+
+export function writeBoardTaskSynced(settings: DelegationSettings, input: BoardWriteInput): BoardSyncedWriteResult {
+  const result = writeBoardTask(settings, input);
+  const dailySynced = input.status !== undefined && syncTodayAfterTaskWrite(settings, result.task, result.recurred);
+  return { ...result, dailySynced };
+}
+
+export function syncTaskToDaily(settings: DelegationSettings, input: SyncDailyInput): SyncDailyResult {
   const root = requireBothFeatures(settings);
   const date = input.date ?? localDate();
   requireDailyDate(date);
@@ -2107,42 +2862,148 @@ export function addTaskToDaily(settings: DelegationSettings, input: AddToDailyIn
   const daily = readDaily(settings, date);
   if (!daily.exists) throw new NotFoundError("create the daily first");
   const { loaded, tasks } = collectBoard(root, settings.tasks);
-  const project = loaded.projects.find((candidate) => candidate.id === input.projectId);
-  if (!project) throw new NotFoundError("project not found");
-  const listed = computeDailyLinks(settings, date, loaded.projects, tasks);
-  if (listed.items.some((item) => item.taskId === task.id || item.candidates.includes(task.id))) throw new AlreadyInDailyError();
-  const sameName = project.title.toLowerCase() === project.name.toLowerCase();
-  const label = settings.daily.wikilinks ? (sameName ? `[[${project.name}]]` : `[[${project.name}|${project.title}]]`) : project.title;
-  const line = `- [${task.status === "doing" ? "-" : " "}] ${label} - ${task.title}`;
-  const doc = openDoc(daily.content);
-  const texts = textsOf(doc);
-  const heading = findHeadingIndex(texts, settings.daily.headings.focus);
-  let at: number;
-  if (heading === -1) {
-    const last = lastNonBlank(doc);
-    at = last + 1;
-    doc.lines.splice(at, 0, ...(last >= 0 ? [docLine("")] : []), docLine(`## ${settings.daily.headings.focus}`), docLine(""), docLine(line));
-    at += (last >= 0 ? 1 : 0) + 2;
-  } else {
-    let end = doc.lines.length;
-    for (let index = heading + 1; index < doc.lines.length; index += 1) {
-      if (/^##\s+/.test(texts[index] ?? "")) {
-        end = index;
-        break;
+  const scan = scanDaily(settings, date, daily.content, loaded.projects, tasks);
+  if (!scan.links.some((link) => link.task.id === task.id)) throw new NotFoundError("the task is not in the daily");
+  return { date, updated: writeDailyMarks(settings, daily, linksOfTask(scan.links, task, true).map(syncedMark)) };
+}
+
+interface DailyStatusChange {
+  task: BoardTask;
+  status: BoardStatus;
+}
+
+const unmarkedLine = (raw: string): string => raw.replace(DAILY_MARK_RE, "$1$3");
+
+function statusFromCheckbox(current: BoardStatus, checkbox: BoardCheckbox): BoardStatus | null {
+  if (!isSyncedStatus(current)) return null;
+  if (checkbox === "done") return current === "done" ? null : "done";
+  if (checkbox === "doing") return current === "doing" ? null : "doing";
+  return current === "done" || current === "doing" ? "todo" : null;
+}
+
+function statusChange(task: BoardTask, checkbox: BoardCheckbox): DailyStatusChange | null {
+  const status = statusFromCheckbox(task.status, checkbox);
+  return status === null ? null : { task, status };
+}
+
+function relocatedTask(settings: DelegationSettings, task: BoardTask): BoardTask {
+  const file = locateProject(settings, task.projectId);
+  const candidates = flattenTasks(parseBoardTasks(readProjectFile(file), file.id, settings.tasks)).filter((candidate) => candidate.raw === task.raw);
+  const found = candidates.find((candidate) => candidate.line === task.line) ?? (candidates.length === 1 ? candidates[0] : undefined);
+  if (!found) throw new TaskConflictError(null);
+  return found;
+}
+
+function applyStatusChange(settings: DelegationSettings, change: DailyStatusChange): void {
+  const task = relocatedTask(settings, change.task);
+  writeBoardTask(settings, { projectId: task.projectId, line: task.line, raw: task.raw, status: change.status });
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function dailyStatusChanges(settings: DelegationSettings, date: string, before: string, after: string, projects: BoardProject[], tasks: BoardTask[]): DailyStatusChange[] {
+  const previous = new Map<string, BoardCheckbox[]>();
+  for (const link of scanDaily(settings, date, before, projects, tasks).links) {
+    const key = `${link.task.id}\u0000${unmarkedLine(link.raw)}`;
+    previous.set(key, [...(previous.get(key) ?? []), link.checkbox]);
+  }
+  const afterScan = scanDaily(settings, date, after, projects, tasks);
+  const wanted = new Map<string, { task: BoardTask; targets: Set<BoardCheckbox> }>();
+  for (const link of afterScan.links) {
+    if (link.held) continue;
+    const old = previous.get(`${link.task.id}\u0000${unmarkedLine(link.raw)}`)?.shift();
+    if (old === undefined || old === link.checkbox) continue;
+    const entry = wanted.get(link.task.id) ?? { task: link.task, targets: new Set<BoardCheckbox>() };
+    entry.targets.add(link.checkbox);
+    wanted.set(link.task.id, entry);
+  }
+  const changes: DailyStatusChange[] = [];
+  for (const { task, targets } of wanted.values()) {
+    const [target] = [...targets];
+    if (targets.size !== 1 || target === undefined) continue;
+    const change = statusChange(task, target);
+    if (change) changes.push(change);
+  }
+  return changes;
+}
+
+function syncsDaily(settings: DelegationSettings, date: string): boolean {
+  return settings.features.daily && settings.features.tasks && date === localDate();
+}
+
+export function dailySyncBaseline(settings: DelegationSettings, date: string): string | null {
+  if (!syncsDaily(settings, date)) return null;
+  try {
+    return readDaily(settings, date).content;
+  } catch {
+    return null;
+  }
+}
+
+export function syncTasksFromDaily(settings: DelegationSettings, date: string, before: string, after: string): number {
+  if (!syncsDaily(settings, date)) return 0;
+  let applied = 0;
+  try {
+    const { loaded, tasks } = collectBoard(requireBoardRoot(settings), settings.tasks);
+    for (const change of dailyStatusChanges(settings, date, before, after, loaded.projects, tasks)) {
+      try {
+        applyStatusChange(settings, change);
+        applied += 1;
+      } catch (err) {
+        console.error(`task sync from the daily failed for ${change.task.id}: ${errorMessage(err)}`);
       }
     }
-    const section: SectionRange = { heading, level: 2, end };
-    const contentIndexes: number[] = [];
-    for (let index = heading + 1; index < end; index += 1) if (!isBlank(doc.lines[index])) contentIndexes.push(index);
-    if (contentIndexes.length > 0 && contentIndexes.every((index) => isPlaceholderLine(texts[index] ?? ""))) {
-      at = contentIndexes[0] as number;
-      (doc.lines[at] as DocLine).text = line;
-    } else {
-      at = appendToSection(doc, section, [docLine(line)]);
+  } catch (err) {
+    console.error(`task sync from the daily failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return applied;
+}
+
+function entryStatusChanges(entry: FocusEntry): DailyStatusChange[] {
+  if (entry.held || !entry.match.task) return [];
+  const lines: { task: BoardTask; checkbox: BoardCheckbox }[] = [
+    ...(entry.recurring ? [] : entry.children.flatMap((child) => (child.task ? [{ task: child.task, checkbox: child.checkbox }] : []))),
+    { task: entry.match.task, checkbox: entry.checkbox },
+  ];
+  const seen = new Set<string>();
+  const changes: DailyStatusChange[] = [];
+  for (const line of lines) {
+    if (seen.has(line.task.id)) continue;
+    seen.add(line.task.id);
+    const change = statusChange(line.task, line.checkbox);
+    if (change) changes.push(change);
+  }
+  return changes;
+}
+
+export function syncTaskFromDaily(settings: DelegationSettings, input: SyncFromDailyInput): SyncFromDailyResult {
+  const root = requireBothFeatures(settings);
+  const date = input.date ?? localDate();
+  requireDailyDate(date);
+  if (!Number.isInteger(input.line) || input.line < 0) throw new BadRequestError("line must be a non-negative integer");
+  const daily = readDaily(settings, date);
+  if (!daily.exists) throw new NotFoundError("create the daily first");
+  const { loaded, tasks } = collectBoard(root, settings.tasks);
+  const scan = scanDaily(settings, date, daily.content, loaded.projects, tasks);
+  const entry = scan.entries.find((candidate) => candidate.line === input.line);
+  if (!entry) throw new NotFoundError("no focus item at that line of the daily");
+  if (!entry.match.task) throw new NotFoundError("the daily item links to no task");
+  const failed: SyncFailure[] = [];
+  const errors: unknown[] = [];
+  let updated = 0;
+  for (const change of entryStatusChanges(entry)) {
+    try {
+      applyStatusChange(settings, change);
+      updated += 1;
+    } catch (err) {
+      failed.push({ taskId: change.task.id, error: errorMessage(err) });
+      errors.push(err);
     }
   }
-  writeDaily(settings, date, renderDoc(doc), daily.updatedAt ?? undefined);
-  return { date, line: at, raw: line };
+  if (updated === 0 && errors.length > 0) throw errors[0];
+  return { date, updated, failed };
 }
 
 let currentWatcher: FSWatcher | null = null;

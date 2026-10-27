@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addToTasksDefaults, dailyLinkState, syncStatusFor, appendNewItem, carryOverFromYesterday, formatNewItemLine, defaultYesterdayCarry, defaultYesterdayDone, focusPreviewLines, doingFocusItem, hasFocusItem, isDoingBlock, keepPickedDoingItems, mergeTrailIntoSummary, parseMeetings, parseNewItems, shouldPersistWizardDraft } from "./daily-plan";
+import { addToTasksDefaults, canOrganizeFocus, organizeFocusNotice, dailyLinkState, syncStatusFor, appendNewItem, carryOverFromYesterday, formatNewItemLine, defaultYesterdayCarry, defaultYesterdayDone, focusPreviewLines, doingFocusItem, hasFocusItem, isDoingBlock, keepPickedDoingItems, mergeTrailIntoSummary, parseMeetings, parseNewItems, shouldPersistWizardDraft } from "./daily-plan";
 import type { BoardProject, DailyLinkItem, DailyYesterdayTask } from "./delegation";
 
 test("parseNewItems splits project from text on the first ' - '", () => {
@@ -203,6 +203,14 @@ test("doingFocusItem builds a [-] block labelled like the diary composer", () =>
   });
 });
 
+test("doingFocusItem labels the block [[name|Title]] with wikilinks and the title without, even when they match ignoring case", () => {
+  assert.equal(doingFocusItem({ project: "globex", text: "Ship export" }, true, "Globex").block, "- [-] [[globex|Globex]] - Ship export");
+  assert.equal(doingFocusItem({ project: "acme", text: "Renew" }, true, "Acme Corp").block, "- [-] [[acme|Acme Corp]] - Renew");
+  assert.equal(doingFocusItem({ project: "acme", text: "Renew" }, false, "Acme Corp").block, "- [-] Acme Corp - Renew");
+  assert.equal(doingFocusItem({ project: "acme", text: "Renew" }, true, null).block, "- [-] [[acme]] - Renew");
+  assert.equal(doingFocusItem({ project: null, text: "Review" }, true, "Acme Corp").block, "- [-] Review");
+});
+
 test("doingFocusItem keeps a bare title when there is no project", () => {
   assert.equal(doingFocusItem({ project: null, text: "Review" }, true).block, "- [-] Review");
 });
@@ -295,4 +303,20 @@ test("addToTasksDefaults preselects the resolved project and carries the daily s
 test("addToTasksDefaults leaves the project empty when it is unresolved or unknown", () => {
   assert.equal(addToTasksDefaults(linkItem({ projectId: null, label: null }), LINK_PROJECTS).projectId, "");
   assert.equal(addToTasksDefaults(linkItem({ projectId: "gone" }), LINK_PROJECTS).projectId, "");
+});
+
+test("canOrganizeFocus needs an existing daily, the feature on and no unsaved, saving, busy or conflicting state", () => {
+  const ready = { enabled: true, exists: true, dirty: false, saving: false, busy: false, conflict: false };
+  assert.equal(canOrganizeFocus(ready), true);
+  assert.equal(canOrganizeFocus({ ...ready, enabled: false }), false);
+  assert.equal(canOrganizeFocus({ ...ready, exists: false }), false);
+  assert.equal(canOrganizeFocus({ ...ready, dirty: true }), false);
+  assert.equal(canOrganizeFocus({ ...ready, saving: true }), false);
+  assert.equal(canOrganizeFocus({ ...ready, busy: true }), false);
+  assert.equal(canOrganizeFocus({ ...ready, conflict: true }), false);
+});
+
+test("organizeFocusNotice tells whether the focus changed", () => {
+  assert.equal(organizeFocusNotice(true), "Focus organized by project");
+  assert.equal(organizeFocusNotice(false), "Focus already organized");
 });

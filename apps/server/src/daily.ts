@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { listSessions } from "./db.js";
-import { BadRequestError, createInternalTask, startRun } from "./delegation-launch.js";
+import { BadRequestError, createInternalTask, NotFoundError, startRun } from "./delegation-launch.js";
 import { activeDailyTask, getSettings } from "./delegation-store.js";
 import type { DailyHeadings, DelegationSettings, TaskRecord } from "./delegation-types.js";
 import { localDate, readAllBlockBullets, trailFilePath } from "./second-brain.js";
@@ -216,10 +216,24 @@ export interface ComposeInput {
   sessions: DailySessionSummary[];
 }
 
+export interface ComposeBoardProject {
+  id: string;
+  name: string;
+  title: string;
+}
+
+export interface ComposeBoard {
+  projects: ComposeBoardProject[];
+  order: string[];
+  projectOfLabel: (label: string) => string | null;
+  projectOfLine: (text: string) => string | null;
+}
+
 export interface ComposeOptions {
   date: string;
   headings: DailyHeadings;
   wikilinks: boolean;
+  board?: ComposeBoard | null;
 }
 
 export function isPlaceholderLine(line: string): boolean {
@@ -271,25 +285,73 @@ function renderProjectLabel(project: string | null, wikilinks: boolean): string 
   return wikilinks ? `[[${project}]]` : project;
 }
 
-function renderFocusItem(item: ComposeFocusItem, wikilinks: boolean): string[] {
+const BARE_WIKILINK_LABEL_RE = /^(\s*[-*]\s+\[[ xX-]\]\s+)\[\[([^\]|#]*)\]\]/;
+const BLOCK_FIRST_LINE_RE = /^\s*[-*]\s+\[[ xX-]\]\s?(.*)$/;
+
+function boardProject(board: ComposeBoard, id: string | null): ComposeBoardProject | null {
+  return id === null ? null : (board.projects.find((project) => project.id === id) ?? null);
+}
+
+function blockProjectId(item: ComposeFocusItem, board: ComposeBoard | null): string | null {
+  if (!board) return null;
+  if (item.block) {
+    const first = (item.block.split(LINE_SPLIT_RE)[0] ?? "").match(BLOCK_FIRST_LINE_RE);
+    const text = first ? (first[1] ?? "").trim() : "";
+    return text === "" ? null : board.projectOfLine(text);
+  }
+  return item.project === null ? null : board.projectOfLabel(item.project);
+}
+
+function renderFocusItem(item: ComposeFocusItem, wikilinks: boolean, board: ComposeBoard | null): string[] {
   if (item.block) {
     const blockLines = item.block.split(LINE_SPLIT_RE);
     blockLines[0] = (blockLines[0] ?? "").replace(TASK_MARKER_RE, (whole, lead: string, marker: string) =>
       marker === "-" ? whole : `${lead}[ ]`,
     );
+    if (board && wikilinks) {
+      blockLines[0] = (blockLines[0] ?? "").replace(BARE_WIKILINK_LABEL_RE, (whole, lead: string, target: string) => {
+        const project = boardProject(board, board.projectOfLabel((target.split("/").pop() ?? "").replace(/\.md$/i, "")));
+        return project ? `${lead}[[${target}|${project.title}]]` : whole;
+      });
+    }
     return blockLines;
   }
-  const label = renderProjectLabel(item.project, wikilinks);
+  const project = board ? boardProject(board, blockProjectId(item, board)) : null;
+  const label = project ? (wikilinks ? `[[${project.name}|${project.title}]]` : project.title) : renderProjectLabel(item.project, wikilinks);
   return [label ? `- [ ] ${label} - ${item.text}` : `- [ ] ${item.text}`];
 }
 
-function renderFocusLines(items: ComposeFocusItem[], wikilinks: boolean): string[] {
+interface RankedFocusItem {
+  item: ComposeFocusItem;
+  key: string;
+  rank: number;
+}
+
+function rankFocusItems(items: ComposeFocusItem[], board: ComposeBoard): RankedFocusItem[] {
+  const ranked = items.map((item) => {
+    const id = blockProjectId(item, board);
+    const position = id === null ? -1 : board.order.indexOf(id);
+    const resolved = id !== null && position !== -1;
+    return {
+      item,
+      key: resolved ? `id:${id}` : `raw:${item.project ?? ""}`,
+      rank: resolved ? position : Number.POSITIVE_INFINITY,
+    };
+  });
+  return ranked
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => (a.entry.rank === b.entry.rank ? a.index - b.index : a.entry.rank < b.entry.rank ? -1 : 1))
+    .map(({ entry }) => entry);
+}
+
+function renderFocusLines(items: ComposeFocusItem[], wikilinks: boolean, board: ComposeBoard | null): string[] {
   const out: string[] = [];
-  let prevProject: string | null | undefined;
-  items.forEach((item, index) => {
-    if (index > 0 && item.project !== prevProject) out.push("");
-    out.push(...renderFocusItem(item, wikilinks));
-    prevProject = item.project;
+  const keyed = board ? rankFocusItems(items, board) : items.map((item) => ({ item, key: `raw:${item.project ?? ""}`, rank: 0 }));
+  let prevKey: string | undefined;
+  keyed.forEach((entry, index) => {
+    if (index > 0 && entry.key !== prevKey) out.push("");
+    out.push(...renderFocusItem(entry.item, wikilinks, board));
+    prevKey = entry.key;
   });
   return out;
 }
@@ -310,7 +372,7 @@ export function composeDaily(template: string, input: ComposeInput, opts: Compos
       lines.splice(headingIndex + 1, skipTo - (headingIndex + 1), ...block);
     }
   }
-  const focusContent = input.focus.length > 0 ? renderFocusLines(input.focus, opts.wikilinks) : ["- [ ]"];
+  const focusContent = input.focus.length > 0 ? renderFocusLines(input.focus, opts.wikilinks, opts.board ?? null) : ["- [ ]"];
   const meetingsContent = input.meetings.length > 0 ? input.meetings.map((entry) => `- ${entry}`) : ["-"];
   const sessionsContent =
     input.sessions.length > 0
@@ -320,6 +382,213 @@ export function composeDaily(template: string, input: ComposeInput, opts: Compos
   lines = insertSection(lines, opts.headings.meetings, meetingsContent);
   lines = insertSection(lines, opts.headings.sessions, sessionsContent);
   return lines.join("\n");
+}
+
+export interface OrganizeFocusOptions {
+  heading: string;
+  wikilinks: boolean;
+  board: ComposeBoard | null;
+}
+
+export interface OrganizeFocusResult {
+  content: string;
+  changed: boolean;
+  groups: number;
+}
+
+const BOM = String.fromCharCode(0xfeff);
+const SECTION_HEADING_RE = /^##\s+/;
+const FOCUS_FENCE_RE = /^\s*(`{3,}|~{3,})(.*)$/;
+const LIST_ITEM_RE = /^[-*+](?:\s+(.*))?$/;
+const LEADING_CHECKBOX_RE = /^\[[ xX-]\]\s*/;
+const LEAD_WIKILINK_RE = /^\[\[([^\]|#]*)/;
+const BARE_LABEL_ANY_ITEM_RE = /^([-*+]\s+(?:\[[ xX-]\]\s+)?)\[\[([^\]|#]*)\]\]/;
+const ORGANIZE_UNSAFE_ERROR = "could not organize the focus safely";
+
+interface FocusBlock {
+  lines: string[];
+  key: string;
+  tier: number;
+  rank: number;
+  placeholder: boolean;
+}
+
+function fenceOpener(line: string): string | null {
+  const match = line.match(FOCUS_FENCE_RE);
+  return match ? (match[1] as string) : null;
+}
+
+function closesFenceLine(line: string, marker: string): boolean {
+  const match = line.match(FOCUS_FENCE_RE);
+  if (!match) return false;
+  const found = match[1] as string;
+  return found[0] === marker[0] && found.length >= marker.length && (match[2] ?? "").trim() === "";
+}
+
+function splitFocusBlocks(section: string[]): string[][] {
+  const blocks: string[][] = [];
+  let index = 0;
+  while (index < section.length) {
+    const first = section[index] as string;
+    if (first.trim() === "") {
+      index += 1;
+      continue;
+    }
+    const base = indentDepth(first);
+    const collected = [first];
+    let fence = fenceOpener(first);
+    index += 1;
+    while (index < section.length) {
+      const current = section[index] as string;
+      if (fence !== null) {
+        collected.push(current);
+        index += 1;
+        if (closesFenceLine(current, fence)) fence = null;
+        continue;
+      }
+      if (current.trim() === "") {
+        let next = index;
+        while (next < section.length && (section[next] as string).trim() === "") next += 1;
+        if (next < section.length && indentDepth(section[next] as string) > base) {
+          collected.push(...section.slice(index, next));
+          index = next;
+          continue;
+        }
+        break;
+      }
+      if (indentDepth(current) <= base) break;
+      collected.push(current);
+      fence = fenceOpener(current);
+      index += 1;
+    }
+    blocks.push(collected);
+  }
+  return blocks;
+}
+
+function labelTextOf(line: string): string | null {
+  if (indentDepth(line) !== 0) return null;
+  const match = line.trimStart().match(LIST_ITEM_RE);
+  if (!match) return null;
+  return (match[1] ?? "").replace(LEADING_CHECKBOX_RE, "").trim();
+}
+
+function literalLabelKey(text: string): string | null {
+  const wiki = text.match(LEAD_WIKILINK_RE);
+  const raw = wiki ? ((wiki[1] ?? "").split("/").pop() ?? "").replace(/\.md$/i, "") : text.indexOf(" - ") > 0 ? text.slice(0, text.indexOf(" - ")) : "";
+  const key = raw.replace(/\s+/g, " ").trim().toLowerCase();
+  return key === "" ? null : key;
+}
+
+function rewriteBareLabel(line: string, projectId: string, board: ComposeBoard): string {
+  const lead = line.length - line.trimStart().length;
+  const body = line.slice(lead).replace(BARE_LABEL_ANY_ITEM_RE, (whole, prefix: string, target: string) => {
+    const name = (target.split("/").pop() ?? "").replace(/\.md$/i, "");
+    if (board.projectOfLabel(name) !== projectId) return whole;
+    const project = board.projects.find((entry) => entry.id === projectId);
+    return project ? `${prefix}[[${target}|${project.title}]]` : whole;
+  });
+  return line.slice(0, lead) + body;
+}
+
+function lineCounts(lines: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const line of lines) if (line.trim() !== "") counts.set(line, (counts.get(line) ?? 0) + 1);
+  return counts;
+}
+
+export function focusLinesPreserved(before: string[], after: string[], rewrites: [string, string][], dropped: string[]): boolean {
+  const expected = lineCounts(before);
+  const adjust = (line: string, delta: number): void => {
+    if (line.trim() === "") return;
+    expected.set(line, (expected.get(line) ?? 0) + delta);
+  };
+  for (const line of dropped) adjust(line, -1);
+  for (const [from, to] of rewrites) {
+    adjust(from, -1);
+    adjust(to, 1);
+  }
+  const actual = lineCounts(after);
+  for (const [line, count] of expected) {
+    if (count < 0) return false;
+    if (count !== (actual.get(line) ?? 0)) return false;
+  }
+  for (const line of actual.keys()) if (!expected.has(line)) return false;
+  return true;
+}
+
+export function organizeFocus(content: string, opts: OrganizeFocusOptions): OrganizeFocusResult {
+  const bom = content.startsWith(BOM) ? BOM : "";
+  const parts = content.slice(bom.length).split(/(\r\n|\n)/);
+  const lines = parts.filter((_, index) => index % 2 === 0);
+  const heading = findHeadingIndex(lines, opts.heading);
+  if (heading === -1) throw new BadRequestError("the daily has no focus heading");
+  let end = lines.length;
+  for (let index = heading + 1; index < lines.length; index += 1) {
+    if (SECTION_HEADING_RE.test(lines[index] as string)) {
+      end = index;
+      break;
+    }
+  }
+  const section = lines.slice(heading + 1, end);
+  const rawBlocks = splitFocusBlocks(section);
+  if (rawBlocks.length === 0) return { content, changed: false, groups: 0 };
+  const board = opts.board;
+  const firstSeen = new Map<string, number>();
+  const rewrites: [string, string][] = [];
+  const blocks: FocusBlock[] = rawBlocks.map((blockLines) => {
+    const first = blockLines[0] as string;
+    const placeholder = blockLines.length === 1 && isPlaceholderLine(first);
+    const text = labelTextOf(first);
+    const projectId = board && text ? board.projectOfLine(text) : null;
+    const position = projectId === null || !board ? -1 : board.order.indexOf(projectId);
+    if (board && projectId !== null && position !== -1) {
+      const linesOut = [...blockLines];
+      if (opts.wikilinks) {
+        const rewritten = rewriteBareLabel(first, projectId, board);
+        if (rewritten !== first) {
+          rewrites.push([first, rewritten]);
+          linesOut[0] = rewritten;
+        }
+      }
+      return { lines: linesOut, key: `id:${projectId}`, tier: 0, rank: position, placeholder };
+    }
+    const literal = text ? literalLabelKey(text) : null;
+    if (literal !== null) {
+      if (!firstSeen.has(literal)) firstSeen.set(literal, firstSeen.size);
+      return { lines: blockLines, key: `raw:${literal}`, tier: 1, rank: firstSeen.get(literal) as number, placeholder };
+    }
+    return { lines: blockLines, key: "none", tier: 2, rank: 0, placeholder };
+  });
+  const hasContent = blocks.some((block) => !block.placeholder);
+  const kept = hasContent ? blocks.filter((block) => !block.placeholder) : blocks;
+  const dropped = hasContent ? blocks.filter((block) => block.placeholder).map((block) => block.lines[0] as string) : [];
+  const sorted = kept
+    .map((block, index) => ({ block, index }))
+    .sort((a, b) => a.block.tier - b.block.tier || a.block.rank - b.block.rank || a.index - b.index)
+    .map(({ block }) => block);
+  const organized: string[] = [""];
+  let groups = 0;
+  let previousKey: string | null = null;
+  for (const block of sorted) {
+    if (block.key !== previousKey) {
+      if (previousKey !== null) organized.push("");
+      groups += 1;
+    }
+    organized.push(...block.lines);
+    previousKey = block.key;
+  }
+  let lastContent = section.length - 1;
+  while (lastContent >= 0 && (section[lastContent] as string).trim() === "") lastContent -= 1;
+  if (lastContent < section.length - 1) organized.push("");
+  if (!focusLinesPreserved(section, organized, rewrites, dropped)) throw new BadRequestError(ORGANIZE_UNSAFE_ERROR);
+  const changed = organized.length !== section.length || organized.some((line, index) => line !== section[index]);
+  if (!changed) return { content, changed: false, groups };
+  const eol = parts[heading * 2 + 1] ?? "\n";
+  const prefix = parts.slice(0, (heading + 1) * 2).join("");
+  const suffix = end < lines.length ? parts.slice(end * 2).join("") : "";
+  const body = end < lines.length ? organized.map((line) => line + eol).join("") : organized.join(eol);
+  return { content: bom + prefix + body + suffix, changed: true, groups };
 }
 
 export interface DailyPromptVars {
@@ -491,6 +760,9 @@ export function readDaily(settings: DelegationSettings, date: string): DailyRead
 }
 
 const lastHubHash = new Map<string, string>();
+const lastServerWriteAt = new Map<string, number>();
+
+export type DailyWriteOrigin = "client" | "server";
 
 export function hashDailyContent(content: string): string {
   return createHash("sha1").update(content).digest("hex");
@@ -566,12 +838,17 @@ export function writeDaily(
   content: string,
   baseUpdatedAt?: number,
   writeId?: string | null,
+  origin: DailyWriteOrigin = "server",
 ): DailyWriteResult {
   const root = dailyRoot(settings);
   if (!root) throw new BadRequestError("second brain root not set");
   const path = dailyFile(settings, date) as string;
   if (typeof baseUpdatedAt === "number" && existsSync(path)) {
     const currentStat = statSync(path);
+    const serverWriteAt = lastServerWriteAt.get(path);
+    if (origin === "client" && serverWriteAt !== undefined && baseUpdatedAt + 1 < serverWriteAt) {
+      throw new DailyConflictError(readFileSync(path, "utf8"), currentStat.mtimeMs);
+    }
     if (Math.abs(currentStat.mtimeMs - baseUpdatedAt) > 1) {
       const currentContent = readFileSync(path, "utf8");
       if (lastHubHash.get(path) !== hashOf(currentContent)) {
@@ -583,8 +860,32 @@ export function writeDaily(
   writeFileAtomic(path, content);
   const stat = statSync(path);
   lastHubHash.set(path, hashOf(content));
+  if (origin === "server") lastServerWriteAt.set(path, stat.mtimeMs);
   broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "hub", writeId: writeId ?? null });
   return { date, path, updatedAt: stat.mtimeMs };
+}
+
+export interface OrganizeDailyFocusResult {
+  date: string;
+  path: string;
+  updatedAt: number | null;
+  changed: boolean;
+  groups: number;
+}
+
+export function organizeDailyFocus(
+  settings: DelegationSettings,
+  date: string,
+  board: ComposeBoard | null,
+  baseUpdatedAt?: number,
+): OrganizeDailyFocusResult {
+  if (!settings.features.daily) throw new BadRequestError("the daily feature is disabled");
+  const daily = readDaily(settings, date);
+  if (!daily.exists) throw new NotFoundError("daily not found");
+  const result = organizeFocus(daily.content, { heading: settings.daily.headings.focus, wikilinks: settings.daily.wikilinks, board });
+  if (!result.changed) return { date, path: daily.path, updatedAt: daily.updatedAt, changed: false, groups: result.groups };
+  const written = writeDaily(settings, date, result.content, baseUpdatedAt ?? daily.updatedAt ?? undefined);
+  return { date, path: written.path, updatedAt: written.updatedAt, changed: true, groups: result.groups };
 }
 
 export class DailyBusyError extends Error {

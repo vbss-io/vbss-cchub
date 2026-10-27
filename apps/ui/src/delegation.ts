@@ -68,6 +68,7 @@ export interface DailySettings {
   headings: DailyHeadings;
   closedKey: string;
   wikilinks: boolean;
+  projectOrder?: string[];
 }
 
 export type TrailDetail = "light" | "medium" | "high";
@@ -836,6 +837,30 @@ export async function saveDailyEntry(
   return json as { date: string; path: string; updatedAt: number };
 }
 
+export interface DailyOrganizeResult {
+  date: string;
+  path: string;
+  updatedAt: number | null;
+  changed: boolean;
+  groups: number;
+}
+
+export async function organizeDailyFocus(date: string, baseUpdatedAt: number | null): Promise<DailyOrganizeResult> {
+  const res = await fetch(`${base}/daily/${encodeURIComponent(date)}/organize-focus`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(baseUpdatedAt === null ? {} : { baseUpdatedAt }),
+  });
+  const text = await res.text();
+  const json: unknown = text.length > 0 ? JSON.parse(text) : null;
+  if (res.status === 409) {
+    const body = json as { error?: string; content?: string; updatedAt?: number | null } | null;
+    throw new DailyConflictError(body?.error ?? "changed on disk", body?.content ?? "", body?.updatedAt ?? null);
+  }
+  if (!res.ok) throw new Error((json as { error?: string } | null)?.error ?? `request failed (${res.status})`);
+  return json as DailyOrganizeResult;
+}
+
 export const generateDaily = (date: string, focus?: string, context?: string): Promise<{ taskId: string }> =>
   call("POST", `/daily/${encodeURIComponent(date)}/generate`, {
     ...(focus?.trim() ? { focus: focus.trim() } : {}),
@@ -872,6 +897,10 @@ export interface BoardTask {
   doneAt: string | null;
   group: string | null;
   priority: number | null;
+  start?: string | null;
+  scheduled?: string | null;
+  due?: string | null;
+  repeat?: string | null;
   notes: string[];
   noteItems: BoardNoteItem[];
   subtasks: BoardTask[];
@@ -893,6 +922,7 @@ export interface BoardToday {
   exists: boolean;
   taskIds: string[];
   states: Record<string, BoardCheckbox>;
+  mismatch?: string[];
 }
 
 export interface BoardPayload {
@@ -951,9 +981,16 @@ export interface BoardChange {
   title?: string;
   reason?: string | null;
   priority?: number | null;
+  start?: string | null;
+  scheduled?: string | null;
+  due?: string | null;
+  repeat?: string | null;
 }
 
-export const patchBoardItem = (target: BoardTarget, change: BoardChange): Promise<{ task: BoardTask; updatedAt: number; moved: boolean }> =>
+export const patchBoardItem = (
+  target: BoardTarget,
+  change: BoardChange,
+): Promise<{ task: BoardTask; updatedAt: number; moved: boolean; dailySynced?: boolean; recurred?: boolean }> =>
   callBoard("PATCH", "/tasks-board/item", { ...target, ...change });
 
 export interface BoardCreateInput {
@@ -962,6 +999,10 @@ export interface BoardCreateInput {
   status?: BoardStatus;
   reason?: string;
   priority?: number;
+  start?: string;
+  scheduled?: string;
+  due?: string;
+  repeat?: string;
   parentLine?: number;
   parentRaw?: string;
 }
@@ -983,6 +1024,16 @@ export const openBoardProjectInEditor = (projectId: string): Promise<{ ok: boole
 export const sweepBoardDone = (projectId?: string): Promise<{ moved: number; projects: string[] }> =>
   callBoard("POST", "/tasks-board/sweep-done", projectId ? { projectId } : {});
 
+export interface DailyLinkChild {
+  line: number;
+  raw: string;
+  checkbox: BoardCheckbox;
+  text: string;
+  taskId: string | null;
+  taskStatus: BoardStatus | null;
+  mismatch: boolean;
+}
+
 export interface DailyLinkItem {
   line: number;
   raw: string;
@@ -995,6 +1046,8 @@ export interface DailyLinkItem {
   taskStatus: BoardStatus | null;
   taskPriority: number | null;
   mismatch: boolean;
+  recurredToday?: boolean;
+  children?: DailyLinkChild[];
 }
 
 export interface DailyLinks {
@@ -1009,6 +1062,23 @@ export const getDailyLinks = (date: string): Promise<DailyLinks> => call("GET", 
 
 export const addBoardTaskToDaily = (target: BoardTarget, date?: string): Promise<{ date: string; line: number; raw: string }> =>
   callBoard("POST", "/tasks-board/add-to-daily", { ...target, ...(date ? { date } : {}) });
+
+export const syncBoardTaskToDaily = (target: BoardTarget, date?: string): Promise<{ date: string; updated: number }> =>
+  callBoard("POST", "/tasks-board/sync-daily", { ...target, ...(date ? { date } : {}) });
+
+export interface DailySyncFailure {
+  taskId: string;
+  error: string;
+}
+
+export interface DailySyncResult {
+  date: string;
+  updated: number;
+  failed?: DailySyncFailure[];
+}
+
+export const syncBoardFromDaily = (line: number, date?: string): Promise<DailySyncResult> =>
+  callBoard("POST", "/tasks-board/sync-from-daily", { line, ...(date ? { date } : {}) });
 
 export const delegateBoardTask = (input: BoardDelegateInput): Promise<{ taskId: string; task: BoardTask; warning?: string }> =>
   callBoard("POST", "/tasks-board/delegate", input);

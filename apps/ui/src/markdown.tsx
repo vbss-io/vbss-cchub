@@ -1,29 +1,36 @@
 import { createElement, type ReactNode } from "react";
+import { openExternal } from "./notify";
 
 const SAFE_LINK = /^https?:\/\//i;
 
 interface Candidate {
   index: number;
   length: number;
-  kind: "code" | "strong" | "em" | "link" | "wikilink";
+  kind: "code" | "strong" | "em" | "del" | "link" | "wikilink";
   match: RegExpMatchArray;
 }
 
-function parseInline(input: string, keyBase: string): ReactNode[] {
+export interface InlineOptions {
+  onOpenLink?: (url: string) => void;
+}
+
+function parseInline(input: string, keyBase: string, options: InlineOptions = {}): ReactNode[] {
   const out: ReactNode[] = [];
   let text = input;
   let counter = 0;
   const nextKey = () => `${keyBase}-${counter++}`;
   while (text.length > 0) {
     const code = text.match(/`([^`]+)`/);
-    const strong = text.match(/\*\*([^*]+)\*\*|__([^_]+)__/);
-    const em = text.match(/\*([^*]+)\*|_([^_]+)_/);
+    const strong = text.match(/\*\*(?!\s)([^*]+?)(?<!\s)\*\*|(?<![A-Za-z0-9_])__(?![\s_])([^_]+?)(?<!\s)__(?![A-Za-z0-9_])/);
+    const em = text.match(/\*(?![\s*])([^*]+?)(?<!\s)\*|(?<![A-Za-z0-9_])_(?![\s_])([^_]+?)(?<!\s)_(?![A-Za-z0-9_])/);
+    const del = text.match(/~~(?!\s)([^~]+?)(?<!\s)~~/);
     const link = text.match(/\[([^\]]+)\]\(([^)\s]+)\)/);
     const wikilink = text.match(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/);
     const candidates: Candidate[] = [];
     if (code && code.index !== undefined) candidates.push({ index: code.index, length: code[0].length, kind: "code", match: code });
     if (strong && strong.index !== undefined) candidates.push({ index: strong.index, length: strong[0].length, kind: "strong", match: strong });
     if (em && em.index !== undefined) candidates.push({ index: em.index, length: em[0].length, kind: "em", match: em });
+    if (del && del.index !== undefined) candidates.push({ index: del.index, length: del[0].length, kind: "del", match: del });
     if (link && link.index !== undefined) candidates.push({ index: link.index, length: link[0].length, kind: "link", match: link });
     if (wikilink && wikilink.index !== undefined) candidates.push({ index: wikilink.index, length: wikilink[0].length, kind: "wikilink", match: wikilink });
     if (candidates.length === 0) {
@@ -37,9 +44,11 @@ function parseInline(input: string, keyBase: string): ReactNode[] {
     if (chosen.kind === "code") {
       out.push(<code key={key} className="md__inline">{chosen.match[1]}</code>);
     } else if (chosen.kind === "strong") {
-      out.push(<strong key={key}>{parseInline(chosen.match[1] ?? chosen.match[2] ?? "", key)}</strong>);
+      out.push(<strong key={key}>{parseInline(chosen.match[1] ?? chosen.match[2] ?? "", key, options)}</strong>);
     } else if (chosen.kind === "em") {
-      out.push(<em key={key}>{parseInline(chosen.match[1] ?? chosen.match[2] ?? "", key)}</em>);
+      out.push(<em key={key}>{parseInline(chosen.match[1] ?? chosen.match[2] ?? "", key, options)}</em>);
+    } else if (chosen.kind === "del") {
+      out.push(<del key={key}>{parseInline(chosen.match[1] ?? "", key, options)}</del>);
     } else if (chosen.kind === "wikilink") {
       const target = chosen.match[1] ?? "";
       const label = chosen.match[2] ?? target;
@@ -52,9 +61,24 @@ function parseInline(input: string, keyBase: string): ReactNode[] {
       const href = chosen.match[2] ?? "";
       const label = chosen.match[1] ?? "";
       if (SAFE_LINK.test(href)) {
+        const open = options.onOpenLink;
         out.push(
-          <a key={key} href={href} target="_blank" rel="noopener noreferrer">
-            {parseInline(label, key)}
+          <a
+            key={key}
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={
+              open
+                ? (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    open(href);
+                  }
+                : undefined
+            }
+          >
+            {parseInline(label, key, options)}
           </a>,
         );
       } else {
@@ -66,8 +90,16 @@ function parseInline(input: string, keyBase: string): ReactNode[] {
   return out;
 }
 
-export function renderInline(text: string, keyBase: string): ReactNode {
-  return parseInline(text, keyBase);
+export function renderInline(text: string, keyBase: string, options: InlineOptions = {}): ReactNode {
+  return parseInline(text, keyBase, options);
+}
+
+const openLink = (url: string): void => {
+  openExternal(url).catch(() => undefined);
+};
+
+export function InlineText({ text }: { text: string }): ReactNode {
+  return <span className="inline-md">{renderInline(text, "inline", { onOpenLink: openLink })}</span>;
 }
 
 function CodeBlock({ code }: { code: string }): ReactNode {

@@ -34,6 +34,7 @@ const defaultDaily: DelegationSettings["daily"] = {
   headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" },
   closedKey: "closed",
   wikilinks: false,
+  projectOrder: [],
 };
 
 function fixtureSettings(root: string, overrides: Partial<DelegationSettings> = {}): DelegationSettings {
@@ -644,6 +645,21 @@ describe("read/write round-trip", () => {
     const second = daily.writeDaily(settings, "2026-09-17", "hub v2", first.updatedAt);
     assert.equal(daily.readDaily(settings, "2026-09-17").content, "hub v2");
     assert.ok(second.updatedAt >= first.updatedAt);
+  });
+
+  it("rejects a client write whose base is older than a server-side write, but not one based on it", async () => {
+    const settings = fixtureSettings(root);
+    const first = daily.writeDaily(settings, "2026-09-18", "client v1", undefined, null, "client");
+    await sleep(20);
+    const server = daily.writeDaily(settings, "2026-09-18", "server v2", first.updatedAt);
+    assert.throws(
+      () => daily.writeDaily(settings, "2026-09-18", "client stale", first.updatedAt, null, "client"),
+      (err: unknown) => err instanceof daily.DailyConflictError && err.content === "server v2" && err.updatedAt === server.updatedAt,
+    );
+    const based = daily.writeDaily(settings, "2026-09-18", "client v3", server.updatedAt, null, "client");
+    const next = daily.writeDaily(settings, "2026-09-18", "client v4", based.updatedAt, null, "client");
+    assert.equal(daily.readDaily(settings, "2026-09-18").content, "client v4");
+    assert.ok(next.updatedAt >= based.updatedAt);
   });
 
   it("throws a conflict when the disk changed since baseUpdatedAt", async () => {

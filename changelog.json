@@ -1,5 +1,20 @@
 [
   {
+    "version": "1.4.0",
+    "date": "2026-10-27",
+    "highlights": [
+      "Tasks: Timeline view next to Kanban and Table, with start-to-due bars grouped by project, a today line and Week, Month and Quarter zoom",
+      "Tasks: start, scheduled and due dates and repeat rules written in the Obsidian Tasks format (🛫 ⏳ 📅 🔁), with due chips on cards and Start and Due columns in the table",
+      "Recurring tasks: completing one copies it to Done loops with the date and reopens the original with its dates moved to the next occurrence; finished occurrences are read-only in the hub",
+      "Calmer board and table: cards show priority, title, reason and one context line with actions in the ⋯ menu, and the table has one line per task grouped by project",
+      "Light Markdown in task titles: bold, italic, code, strikethrough and links",
+      "Daily and Tasks stay in sync both ways for tasks and subtasks: status changes in the hub update today's daily, ticks in the daily update the task, and out-of-sync items get Use daily and Use board actions",
+      "Add to today takes a task with its subtasks, or a single subtask, and places it in its project group following a project order you set in Settings › Daily",
+      "Daily: Organize focus regroups an existing focus section by project order with one blank line between projects and fixes bare [[project]] links",
+      "Fixes: date fields save only complete dates, Use daily never rewrites archived, blocked or hold tasks, and a past day's daily never completes tasks again"
+    ]
+  },
+  {
     "version": "1.3.0",
     "date": "2026-10-24",
     "highlights": [

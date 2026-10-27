@@ -56,8 +56,15 @@ function projectLabel(project: string | null, wikilinks: boolean): string | null
   return wikilinks ? `[[${project}]]` : project;
 }
 
-export function doingFocusItem(item: DailyFocusDraftItem, wikilinks: boolean): DailyFocusDraftItem {
-  const label = projectLabel(item.project, wikilinks);
+function doingLabel(project: string | null, wikilinks: boolean, title: string | null): string | null {
+  if (!project) return null;
+  const shown = title !== null && title.trim() !== "" ? title.trim() : null;
+  if (!wikilinks) return shown ?? project;
+  return shown ? `[[${project}|${shown}]]` : `[[${project}]]`;
+}
+
+export function doingFocusItem(item: DailyFocusDraftItem, wikilinks: boolean, projectTitle: string | null = null): DailyFocusDraftItem {
+  const label = doingLabel(item.project, wikilinks, projectTitle);
   const block = label ? `- [-] ${label} - ${item.text}` : `- [-] ${item.text}`;
   return { project: null, text: item.text, block };
 }
@@ -137,4 +144,21 @@ export function syncStatusFor(checkbox: BoardCheckbox): BoardStatus {
 export function addToTasksDefaults(item: DailyLinkItem, projects: BoardProject[]): { projectId: string; title: string; status: BoardStatus } {
   const known = item.projectId !== null && projects.some((project) => project.id === item.projectId);
   return { projectId: known ? (item.projectId as string) : "", title: item.text, status: syncStatusFor(item.checkbox) };
+}
+
+export interface OrganizeFocusGate {
+  enabled: boolean;
+  exists: boolean;
+  dirty: boolean;
+  saving: boolean;
+  busy: boolean;
+  conflict: boolean;
+}
+
+export function canOrganizeFocus(gate: OrganizeFocusGate): boolean {
+  return gate.enabled && gate.exists && !gate.dirty && !gate.saving && !gate.busy && !gate.conflict;
+}
+
+export function organizeFocusNotice(changed: boolean): string {
+  return changed ? "Focus organized by project" : "Focus already organized";
 }

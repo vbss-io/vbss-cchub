@@ -47,6 +47,7 @@ interface WireToday {
   exists: boolean;
   taskIds: string[];
   states: Record<string, string>;
+  mismatch: string[];
 }
 
 const FOCUS_DATE = "2026-03-10";
@@ -212,7 +213,7 @@ describe("daily and tasks links", () => {
     assert.equal(globex.checkbox, "doing");
     assert.equal(globex.projectId, "globex");
     assert.equal(globex.taskId, (await find("globex", "Rollout checklist")).id);
-    assert.equal(globex.mismatch, false);
+    assert.equal(globex.mismatch, true);
 
     const plain = itemOf(result.body, "Initech - Pilot validation");
     assert.equal(plain.label, "Initech");
@@ -289,7 +290,7 @@ describe("daily and tasks links", () => {
     const full = itemOf(result.body, "Legal review - waiting counsel");
     assert.equal(full.taskId, legal.id);
     assert.equal(full.checkbox, "done");
-    assert.equal(full.mismatch, true);
+    assert.equal(full.mismatch, false);
     const initech = itemOf(result.body, "Initech - Pilot validation");
     assert.equal(initech.mismatch, true);
     const closed = itemOf(result.body, "[[acme]]: Close audit");
@@ -353,11 +354,12 @@ describe("daily and tasks links", () => {
     assert.equal(todayBlock.exists, true);
     assert.deepEqual([...todayBlock.taskIds].sort(), [renew.id, rollout.id].sort());
     assert.deepEqual(todayBlock.states, { [renew.id]: "done", [rollout.id]: "doing" });
+    assert.deepEqual([...todayBlock.mismatch].sort(), [renew.id, rollout.id].sort());
 
     const hidden = dailyPath(today());
     renameSync(hidden, `${hidden}.bak`);
     const without = (await http("GET", "/delegation/tasks-board")).json.today as WireToday;
-    assert.deepEqual(without, { date: today(), exists: false, taskIds: [], states: {} });
+    assert.deepEqual(without, { date: today(), exists: false, taskIds: [], states: {}, mismatch: [] });
     renameSync(`${hidden}.bak`, hidden);
 
     await features(false, true);
@@ -382,16 +384,16 @@ describe("daily and tasks links", () => {
   describe("add to daily", () => {
     const BASE_DAILY = "---\ndate: 2026-03-11\n---\n\n# 2026-03-11\n\n## Focus\n\n- [ ] Existing item\n\n## Meetings\n\n- [ ] Sync\n";
 
-    it("appends a wikilinked line with the project alias after the last focus line and then refuses a duplicate", async () => {
+    it("opens a new group with the wikilinked project alias before an unresolved item and then refuses a duplicate", async () => {
       writeDailyFile(ADD_DATE, BASE_DAILY);
       await wikilinks(true);
       const banner = await find("globex", "Banner copy review");
       const res = await addToDaily(banner);
       assert.equal(res.status, 201);
       assert.equal(res.json.date, ADD_DATE);
-      assert.equal(res.json.line, 9);
+      assert.equal(res.json.line, 8);
       assert.equal(res.json.raw, "- [ ] [[globex|Globex Industries]] - Banner copy review");
-      assert.equal(readDailyFile(ADD_DATE), BASE_DAILY.replace("- [ ] Existing item\n", "- [ ] Existing item\n- [ ] [[globex|Globex Industries]] - Banner copy review\n"));
+      assert.equal(readDailyFile(ADD_DATE), BASE_DAILY.replace("- [ ] Existing item\n", "- [ ] [[globex|Globex Industries]] - Banner copy review\n\n- [ ] Existing item\n"));
       const after = await links(ADD_DATE);
       assert.equal(itemOf(after.body, "Banner copy review").taskId, banner.id);
       const again = await addToDaily(banner);
@@ -399,15 +401,15 @@ describe("daily and tasks links", () => {
       assert.equal(again.json.error, "already in the daily");
     });
 
-    it("uses a bare wikilink when the title matches the name and [-] for a doing task", async () => {
+    it("keeps the alias when the title matches the name ignoring case and uses [-] for a doing task", async () => {
       writeDailyFile(ADD_DATE, BASE_DAILY);
       await wikilinks(true);
       const kickoff = await find("initech", "Simulate kickoff call");
       assert.equal(kickoff.status, "doing");
       const res = await addToDaily(kickoff);
       assert.equal(res.status, 201);
-      assert.equal(res.json.raw, "- [-] [[initech]] - Simulate kickoff call");
-      assert.ok(readDailyFile(ADD_DATE).includes("- [ ] Existing item\n- [-] [[initech]] - Simulate kickoff call\n\n## Meetings"));
+      assert.equal(res.json.raw, "- [-] [[initech|Initech]] - Simulate kickoff call");
+      assert.ok(readDailyFile(ADD_DATE).includes("## Focus\n\n- [-] [[initech|Initech]] - Simulate kickoff call\n\n- [ ] Existing item\n\n## Meetings"));
     });
 
     it("writes the plain project title when wikilinks are off", async () => {
@@ -417,7 +419,7 @@ describe("daily and tasks links", () => {
       const res = await addToDaily(plan);
       assert.equal(res.status, 201);
       assert.equal(res.json.raw, "- [ ] Acme Corp - Plan Q4");
-      assert.ok(readDailyFile(ADD_DATE).includes("- [ ] Existing item\n- [ ] Acme Corp - Plan Q4\n"));
+      assert.ok(readDailyFile(ADD_DATE).includes("## Focus\n\n- [ ] Acme Corp - Plan Q4\n\n- [ ] Existing item\n"));
       await wikilinks(true);
     });
 
@@ -502,7 +504,7 @@ describe("daily and tasks links", () => {
       assert.equal((await addToDaily(banner)).status, 201);
       const crlf = readDailyFile(ADD_DATE);
       assert.equal(crlf.replace(/\r\n/g, "").includes("\n"), false);
-      assert.ok(crlf.includes("- [ ] Existing item\r\n- [ ] [[globex|Globex Industries]] - Banner copy review\r\n\r\n## Meetings\r\n"));
+      assert.ok(crlf.includes("## Focus\r\n\r\n- [ ] [[globex|Globex Industries]] - Banner copy review\r\n\r\n- [ ] Existing item\r\n\r\n## Meetings\r\n"));
     });
   });
 });

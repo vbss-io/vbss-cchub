@@ -1,23 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DailyStreamEvent, TasksBoardStreamEvent } from "../api";
-import { BOARD_STATUS_LABEL, candidateLabels, findBoardTask, projectBreadcrumb, projectOptions } from "../board-model";
+import {
+  BOARD_STATUS_LABEL,
+  candidateLabels,
+  dailyItemOutOfSync,
+  dailyItemRecurredToday,
+  findBoardTask,
+  projectBreadcrumb,
+  projectOptions,
+  syncFailureNotice,
+} from "../board-model";
 import { addToTasksDefaults, dailyLinkState, syncStatusFor } from "../daily-plan";
 import {
   createBoardItem,
   getDailyLinks,
   getTasksBoard,
   patchBoardItem,
+  syncBoardFromDaily,
+  syncBoardTaskToDaily,
   type BoardPayload,
   type BoardStatus,
+  type DailyLinkChild,
   type DailyLinkItem,
   type DailyLinks,
 } from "../delegation";
+import { InlineText } from "../markdown";
 import { BoardPriorityBadge } from "./BoardParts";
 
 const REFRESH_DELAY_MS = 300;
 
 interface Props {
   date: string;
+  onNotice?: (kind: "ok" | "error", text: string) => void;
   subscribeDaily: (listener: (event: DailyStreamEvent) => void) => () => void;
   subscribeBoard: (listener: (event: TasksBoardStreamEvent) => void) => () => void;
 }
@@ -26,35 +40,85 @@ interface RowProps {
   item: DailyLinkItem;
   board: BoardPayload;
   busy: boolean;
-  onSync: (item: DailyLinkItem) => void;
+  onUseDaily: (item: DailyLinkItem) => void;
+  onUseBoard: (item: DailyLinkItem) => void;
+  onSyncChild: (item: DailyLinkItem, child: DailyLinkChild) => void;
   onAdd: (item: DailyLinkItem, projectId: string) => void;
 }
 
-function TaskCheckRow({ item, board, busy, onSync, onAdd }: RowProps) {
+const CHECKBOX_MARK: Record<DailyLinkChild["checkbox"], string> = { todo: "[ ]", doing: "[-]", done: "[x]" };
+
+interface ChildRowProps {
+  item: DailyLinkItem;
+  child: DailyLinkChild;
+  busy: boolean;
+  frozen: boolean;
+  onSync: (item: DailyLinkItem, child: DailyLinkChild) => void;
+}
+
+function ChildRow({ item, child, busy, frozen, onSync }: ChildRowProps) {
+  const target = syncStatusFor(child.checkbox);
+  return (
+    <li className="dtc__child" title={child.raw}>
+      <span className="dtc__child-mark muted small">{CHECKBOX_MARK[child.checkbox]}</span>
+      <span className="dtc__child-text">
+        <InlineText text={child.text} />
+      </span>
+      {child.taskId === null && <span className="chip">Not in Tasks</span>}
+      {child.taskStatus && <span className={`tag tag--board-${child.taskStatus}`}>{BOARD_STATUS_LABEL[child.taskStatus]}</span>}
+      {!frozen && child.mismatch && child.taskId !== null && (
+        <button className="act" disabled={busy} title={`Set the subtask to ${BOARD_STATUS_LABEL[target]}`} onClick={() => onSync(item, child)}>
+          Sync
+        </button>
+      )}
+    </li>
+  );
+}
+
+function TaskCheckRow({ item, board, busy, onUseDaily, onUseBoard, onSyncChild, onAdd }: RowProps) {
   const state = dailyLinkState(item);
   const defaults = addToTasksDefaults(item, board.projects);
   const [projectId, setProjectId] = useState(defaults.projectId);
   const options = useMemo(() => projectOptions(board.projects), [board.projects]);
   const linked = item.taskId ? findBoardTask(board.tasks, item.taskId) : null;
   const project = linked ? (projectBreadcrumb(board.projects, linked.projectId).slice(-1)[0] ?? linked.projectId) : (item.label ?? null);
-  const target = syncStatusFor(item.checkbox);
+  const outOfSync = dailyItemOutOfSync(item);
+  const recurred = dailyItemRecurredToday(item);
+  const children = item.children ?? [];
 
   return (
     <li className="dtc__row">
       <span className="dtc__text" title={item.raw}>
-        {item.text}
+        <InlineText text={item.text} />
       </span>
       {state === "linked" && (
         <div className="dtc__meta">
           {project && <span className="muted small">{project}</span>}
           <BoardPriorityBadge priority={item.taskPriority} />
           {item.taskStatus && <span className={`tag tag--board-${item.taskStatus}`}>{BOARD_STATUS_LABEL[item.taskStatus]}</span>}
-          {item.mismatch && (
-            <button className="act" disabled={busy || !linked} title={`Set the task to ${BOARD_STATUS_LABEL[target]}`} onClick={() => onSync(item)}>
-              Sync
-            </button>
+          {recurred && (
+            <span className="muted small" title="This recurring task was finished today; the open one already moved to its next date">
+              recurring - done today
+            </span>
+          )}
+          {outOfSync && (
+            <>
+              <button className="act" disabled={busy || !linked} title="Set the task and its subtasks from the daily" onClick={() => onUseDaily(item)}>
+                Use daily
+              </button>
+              <button className="act" disabled={busy || !linked} title="Write the board statuses into the daily" onClick={() => onUseBoard(item)}>
+                Use board
+              </button>
+            </>
           )}
         </div>
+      )}
+      {children.length > 0 && (
+        <ul className="plainlist dtc__children">
+          {children.map((child) => (
+            <ChildRow key={`${child.line}:${child.raw}`} item={item} child={child} busy={busy} frozen={recurred} onSync={onSyncChild} />
+          ))}
+        </ul>
       )}
       {state === "ambiguous" && (
         <div className="dtc__meta dtc__meta--col">
@@ -88,7 +152,7 @@ function TaskCheckRow({ item, board, busy, onSync, onAdd }: RowProps) {
   );
 }
 
-export function DailyTasksCheck({ date, subscribeDaily, subscribeBoard }: Props) {
+export function DailyTasksCheck({ date, onNotice, subscribeDaily, subscribeBoard }: Props) {
   const [links, setLinks] = useState<DailyLinks | null>(null);
   const [board, setBoard] = useState<BoardPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -157,13 +221,30 @@ export function DailyTasksCheck({ date, subscribeDaily, subscribeBoard }: Props)
     }
   };
 
-  const sync = (item: DailyLinkItem) => {
+  const useDaily = (item: DailyLinkItem) => {
+    void run(item, async () => {
+      const result = await syncBoardFromDaily(item.line, date);
+      const failed = result.failed ?? [];
+      if (failed.length > 0) onNotice?.("error", syncFailureNotice(failed, result.updated));
+    });
+  };
+
+  const useBoard = (item: DailyLinkItem) => {
     const task = board && item.taskId ? findBoardTask(board.tasks, item.taskId) : null;
     if (!task) {
       setError("That task is no longer on the board.");
       return;
     }
-    const status: BoardStatus = syncStatusFor(item.checkbox);
+    void run(item, () => syncBoardTaskToDaily({ projectId: task.projectId, line: task.line, raw: task.raw }, date));
+  };
+
+  const syncChild = (item: DailyLinkItem, child: DailyLinkChild) => {
+    const task = board && child.taskId ? findBoardTask(board.tasks, child.taskId) : null;
+    if (!task) {
+      setError("That subtask is no longer on the board.");
+      return;
+    }
+    const status: BoardStatus = syncStatusFor(child.checkbox);
     void run(item, () => patchBoardItem({ projectId: task.projectId, line: task.line, raw: task.raw }, { status }));
   };
 
@@ -173,7 +254,7 @@ export function DailyTasksCheck({ date, subscribeDaily, subscribeBoard }: Props)
   };
 
   const missing = links ? links.items.filter((item) => dailyLinkState(item) === "missing").length : 0;
-  const outOfSync = links ? links.items.filter((item) => item.mismatch).length : 0;
+  const outOfSync = links ? links.items.filter(dailyItemOutOfSync).length : 0;
 
   return (
     <div className="panel daily__side dtc">
@@ -189,7 +270,7 @@ export function DailyTasksCheck({ date, subscribeDaily, subscribeBoard }: Props)
           </p>
           <ul className="plainlist dtc__list">
             {links.items.map((item) => (
-              <TaskCheckRow key={`${item.line}:${item.raw}`} item={item} board={board} busy={busy.has(item.line)} onSync={sync} onAdd={add} />
+              <TaskCheckRow key={`${item.line}:${item.raw}`} item={item} board={board} busy={busy.has(item.line)} onUseDaily={useDaily} onUseBoard={useBoard} onSyncChild={syncChild} onAdd={add} />
             ))}
           </ul>
         </>

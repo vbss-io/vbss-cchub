@@ -23,7 +23,11 @@ const MAX_PRIORITY_DIGIT = 9;
 
 export const supportsReason = (status: BoardStatus): boolean => REASON_STATUSES.includes(status);
 
-export type BoardViewMode = "kanban" | "table";
+export type BoardViewMode = "kanban" | "table" | "timeline";
+
+export type TimelineZoom = "week" | "month" | "quarter";
+
+export const TIMELINE_ZOOMS: readonly TimelineZoom[] = ["week", "month", "quarter"];
 
 export interface BoardFilters {
   projectId: string | null;
@@ -34,7 +38,7 @@ export interface BoardFilters {
   hiddenPriorities: (number | null)[];
 }
 
-export type TableSortKey = "priority" | "status" | "project" | "title";
+export type TableSortKey = "priority" | "status" | "project" | "title" | "due";
 
 export type TableSortDir = "asc" | "desc";
 
@@ -43,12 +47,13 @@ export interface TableSort {
   dir: TableSortDir;
 }
 
-export const TABLE_SORT_KEYS: readonly TableSortKey[] = ["priority", "status", "project", "title"];
+export const TABLE_SORT_KEYS: readonly TableSortKey[] = ["priority", "status", "project", "title", "due"];
 
 export interface BoardPrefs {
   view: BoardViewMode;
   hideEmptyColumns: boolean;
   tableSort: TableSort;
+  timelineZoom: TimelineZoom;
   filters: BoardFilters;
 }
 
@@ -56,6 +61,7 @@ export const DEFAULT_BOARD_PREFS: BoardPrefs = {
   view: "kanban",
   hideEmptyColumns: true,
   tableSort: { key: "priority", dir: "asc" },
+  timelineZoom: "month",
   filters: { projectId: null, includeSubprojects: true, statuses: [...WORKING_STATUSES], search: "", todayOnly: false, hiddenPriorities: [] },
 };
 
@@ -111,13 +117,14 @@ export function parseBoardPrefs(raw: string | null): BoardPrefs {
     return DEFAULT_BOARD_PREFS;
   }
   if (typeof parsed !== "object" || parsed === null) return DEFAULT_BOARD_PREFS;
-  const stored = parsed as { view?: unknown; hideEmptyColumns?: unknown; tableSort?: unknown; filters?: unknown };
+  const stored = parsed as { view?: unknown; hideEmptyColumns?: unknown; tableSort?: unknown; timelineZoom?: unknown; filters?: unknown };
   const filters = typeof stored.filters === "object" && stored.filters !== null ? (stored.filters as Record<string, unknown>) : {};
   const defaults = DEFAULT_BOARD_PREFS.filters;
   return {
-    view: stored.view === "table" || stored.view === "kanban" ? stored.view : DEFAULT_BOARD_PREFS.view,
+    view: stored.view === "table" || stored.view === "kanban" || stored.view === "timeline" ? stored.view : DEFAULT_BOARD_PREFS.view,
     hideEmptyColumns: typeof stored.hideEmptyColumns === "boolean" ? stored.hideEmptyColumns : DEFAULT_BOARD_PREFS.hideEmptyColumns,
     tableSort: parseTableSort(stored.tableSort),
+    timelineZoom: TIMELINE_ZOOMS.find((zoom) => zoom === stored.timelineZoom) ?? DEFAULT_BOARD_PREFS.timelineZoom,
     filters: {
       projectId: typeof filters.projectId === "string" && filters.projectId !== "" ? filters.projectId : defaults.projectId,
       includeSubprojects: typeof filters.includeSubprojects === "boolean" ? filters.includeSubprojects : defaults.includeSubprojects,
@@ -272,12 +279,20 @@ export function nextTableSort(current: TableSort, key: TableSortKey): TableSort 
   return { key, dir: "asc" };
 }
 
+function compareDue(a: string | null, b: string | null, sign: number): number {
+  if (a === b) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return sign * a.localeCompare(b);
+}
+
 export function sortTableTasks(tasks: BoardTask[], sort: TableSort, projectLabels: ReadonlyMap<string, string>): BoardTask[] {
   const sign = sort.dir === "asc" ? 1 : -1;
   const primary = (a: BoardTask, b: BoardTask): number => {
     if (sort.key === "priority") return a.priority === null || b.priority === null ? comparePriority(a.priority, b.priority) : sign * comparePriority(a.priority, b.priority);
     if (sort.key === "status") return sign * (BOARD_STATUSES.indexOf(a.status) - BOARD_STATUSES.indexOf(b.status));
     if (sort.key === "project") return sign * (projectLabels.get(a.projectId) ?? a.projectId).localeCompare(projectLabels.get(b.projectId) ?? b.projectId);
+    if (sort.key === "due") return compareDue(a.due ?? null, b.due ?? null, sign);
     return sign * a.title.localeCompare(b.title);
   };
   return [...tasks].sort((a, b) => primary(a, b) || comparePriority(a.priority, b.priority));
@@ -432,6 +447,7 @@ export interface NewTaskDraft {
   status: BoardStatus;
   reason: string;
   priority: number | null;
+  due?: string;
 }
 
 const MULTILINE = /[\r\n]/;
@@ -441,6 +457,8 @@ export function validateNewTask(draft: NewTaskDraft): string | null {
   if (draft.title.trim() === "") return "Give the task a title";
   if (MULTILINE.test(draft.title.trim())) return "The title must be a single line";
   if (supportsReason(draft.status) && MULTILINE.test(draft.reason.trim())) return "The reason must be a single line";
+  if ((draft.due ?? "") !== "" && !isIsoDay(draft.due ?? "")) return "The due date must be a valid date";
+  if ((draft.due ?? "") !== "" && !isDayInRange(draft.due ?? "")) return DATE_RANGE_MESSAGE;
   return null;
 }
 
@@ -452,6 +470,7 @@ export function newTaskBody(draft: NewTaskDraft, parent: BoardTask | null): Boar
     status: draft.status,
     ...(supportsReason(draft.status) && reason !== "" ? { reason } : {}),
     ...(draft.priority !== null ? { priority: draft.priority } : {}),
+    ...((draft.due ?? "") !== "" ? { due: draft.due } : {}),
     ...(parent ? { parentLine: parent.line, parentRaw: parent.raw } : {}),
   };
 }
@@ -715,3 +734,285 @@ export const obsidianUrl = (absolutePath: string): string => `obsidian://open?pa
 
 export const parentCandidateLabel = (candidate: ParentCandidate): string =>
   `${NBSP.repeat(candidate.level * INDENT_PER_DEPTH)}${candidate.task.title}${candidate.task.section === "done" ? " (done section)" : ""}`;
+
+export function effectiveProjectOrder(projects: BoardProject[], order: readonly string[]): string[] {
+  const known = new Set(projects.map((project) => project.id));
+  const first = order.filter((id, index) => known.has(id) && order.indexOf(id) === index);
+  const placed = new Set(first);
+  return [...first, ...projects.filter((project) => !placed.has(project.id)).map((project) => project.id)];
+}
+
+export function moveInProjectOrder(order: readonly string[], id: string, direction: MoveDirection): string[] {
+  const index = order.indexOf(id);
+  const target = direction === "up" ? index - 1 : index + 1;
+  const next = [...order];
+  if (index < 0 || target < 0 || target >= next.length) return next;
+  [next[index], next[target]] = [next[target] as string, next[index] as string];
+  return next;
+}
+
+export interface ProjectTaskGroup {
+  project: BoardProject;
+  tasks: BoardTask[];
+}
+
+function unknownProject(projectId: string): BoardProject {
+  return { id: projectId, name: projectId, title: projectId, parent: null, depth: 0, path: "", workspace: null, workspaceSource: null };
+}
+
+export function groupTasksByProject(tasks: BoardTask[], projects: BoardProject[], order: readonly string[]): ProjectTaskGroup[] {
+  const byProject = new Map<string, BoardTask[]>();
+  for (const task of tasks) byProject.set(task.projectId, [...(byProject.get(task.projectId) ?? []), task]);
+  const byId = new Map(projects.map((project) => [project.id, project]));
+  const known = effectiveProjectOrder(projects, order).flatMap((id) => {
+    const project = byId.get(id);
+    const items = byProject.get(id);
+    return project && items ? [{ project, tasks: items }] : [];
+  });
+  const extra = [...byProject.keys()].filter((id) => !byId.has(id)).map((id) => ({ project: unknownProject(id), tasks: byProject.get(id) ?? [] }));
+  return [...known, ...extra];
+}
+
+export interface TodayStatusBadge {
+  tone: "linked" | "sync";
+  label: string;
+  title: string;
+}
+
+export function todayStatusBadge(inToday: boolean, checkbox: BoardCheckbox | null, outOfSync: boolean, subtaskNames: readonly string[] = []): TodayStatusBadge | null {
+  const subtaskNote = subtaskNames.length > 0 ? `Subtask out of sync with the daily: ${subtaskNames.join(", ")}` : null;
+  if (!inToday) return subtaskNote === null ? null : { tone: "sync", label: "Subtask out of sync", title: subtaskNote };
+  const linked = checkbox ? `Linked in today's daily as ${BOARD_STATUS_LABEL[checkbox]}.` : "Linked in today's daily.";
+  if (!outOfSync && subtaskNote === null) {
+    return { tone: "linked", label: checkbox ? `Today · ${BOARD_STATUS_LABEL[checkbox]}` : "Today", title: "Linked in today's daily" };
+  }
+  if (!outOfSync) return { tone: "sync", label: "Today · subtask out of sync", title: `${linked} ${subtaskNote}` };
+  const own = `${linked} The daily checkbox differs from this status`;
+  return { tone: "sync", label: "Today · out of sync", title: subtaskNote === null ? own : `${own}. ${subtaskNote}` };
+}
+
+export function subtaskMismatches(task: BoardTask, today: BoardToday | null): BoardTask[] {
+  const ids = mismatchIdSet(today);
+  if (ids.size === 0) return [];
+  return flattenTasks(task.subtasks).filter((subtask) => ids.has(subtask.id));
+}
+
+export interface DailyOutOfSyncShape {
+  mismatch: boolean;
+  recurredToday?: boolean;
+  children?: readonly { mismatch: boolean }[];
+}
+
+export const dailyItemRecurredToday = (item: DailyOutOfSyncShape): boolean => item.recurredToday === true;
+
+export const dailyItemOutOfSync = (item: DailyOutOfSyncShape): boolean =>
+  !dailyItemRecurredToday(item) && (item.mismatch || (item.children ?? []).some((child) => child.mismatch));
+
+export const FINISHED_OCCURRENCE_HINT = "Finished occurrence - edit it in Obsidian";
+
+export function isFinishedOccurrence(task: BoardTask, doneEnabled: boolean): boolean {
+  if ((task.repeat ?? null) === null || task.doneAt === null) return false;
+  return task.section === "done" || !doneEnabled;
+}
+
+export function finishedOccurrenceIds(tasks: BoardTask[], doneEnabled: boolean): ReadonlySet<string> {
+  return new Set(tasks.filter((task) => isFinishedOccurrence(task, doneEnabled)).flatMap((task) => flattenTasks([task]).map((item) => item.id)));
+}
+
+export interface TaskDates {
+  start: string | null;
+  scheduled: string | null;
+  due: string | null;
+  repeat: string | null;
+}
+
+export const taskDates = (task: BoardTask): TaskDates => ({
+  start: task.start ?? null,
+  scheduled: task.scheduled ?? null,
+  due: task.due ?? null,
+  repeat: task.repeat ?? null,
+});
+
+const ISO_DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+export function isIsoDay(value: string): boolean {
+  const match = ISO_DAY.exec(value);
+  if (!match) return false;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+export const DATE_MIN_YEAR = 2000;
+
+export const DATE_MAX_YEAR = 2100;
+
+export const DATE_RANGE_MESSAGE = `The year must be between ${DATE_MIN_YEAR} and ${DATE_MAX_YEAR}`;
+
+export const isDayInRange = (value: string): boolean => {
+  const year = Number(value.slice(0, 4));
+  return isIsoDay(value) && year >= DATE_MIN_YEAR && year <= DATE_MAX_YEAR;
+};
+
+export type DateDraftOutcome = { kind: "none" } | { kind: "commit"; value: string | null } | { kind: "invalid"; message: string };
+
+export function resolveDateDraft(draft: string, committed: string | null, badInput: boolean): DateDraftOutcome {
+  if (draft === "") {
+    if (badInput) return { kind: "invalid", message: "Enter a complete date" };
+    return committed === null ? { kind: "none" } : { kind: "commit", value: null };
+  }
+  if (!isIsoDay(draft)) return { kind: "invalid", message: "Enter a valid date" };
+  if (!isDayInRange(draft)) return { kind: "invalid", message: DATE_RANGE_MESSAGE };
+  return draft === committed ? { kind: "none" } : { kind: "commit", value: draft };
+}
+
+export function formatDayMonth(value: string | null): string {
+  if (value === null || !isIsoDay(value)) return "";
+  return `${value.slice(8, 10)}/${value.slice(5, 7)}`;
+}
+
+export type DueTone = "overdue" | "today" | "later";
+
+export function dueTone(due: string | null, status: BoardStatus, today: string): DueTone | null {
+  if (due === null) return null;
+  if (status === "done" || status === "archived") return "later";
+  if (due < today) return "overdue";
+  return due === today ? "today" : "later";
+}
+
+export interface DueChip {
+  label: string;
+  tone: DueTone;
+  title: string;
+}
+
+export function dueChip(task: BoardTask, today: string): DueChip | null {
+  const due = task.due ?? null;
+  const tone = dueTone(due, task.status, today);
+  if (due === null || tone === null || !isIsoDay(due)) return null;
+  const full = `${formatDayMonth(due)}/${due.slice(0, 4)}`;
+  return { label: formatDayMonth(due), tone, title: tone === "overdue" ? `Due ${full} - overdue` : tone === "today" ? `Due ${full} - today` : `Due ${full}` };
+}
+
+export const recurrenceNotice = (task: BoardTask): string => {
+  const due = formatDayMonth(task.due ?? null);
+  return due === "" ? "Done - reopened" : `Done - next one on ${due}`;
+};
+
+export interface RepeatPreset {
+  value: string;
+  label: string;
+}
+
+export const REPEAT_NONE = "";
+
+export const REPEAT_CUSTOM = "__custom";
+
+export const REPEAT_PRESETS: readonly RepeatPreset[] = [
+  { value: "every day", label: "Every day" },
+  { value: "every weekday", label: "Every weekday" },
+  { value: "every week", label: "Every week" },
+  { value: "every 2 weeks", label: "Every 2 weeks" },
+  { value: "every month", label: "Every month" },
+  { value: "every year", label: "Every year" },
+];
+
+const normalizeRule = (rule: string): string => rule.trim().replace(/\s+/g, " ").toLowerCase();
+
+export function repeatChoice(repeat: string | null): { select: string; custom: string } {
+  if (repeat === null || repeat.trim() === "") return { select: REPEAT_NONE, custom: "" };
+  const preset = REPEAT_PRESETS.find((item) => item.value === normalizeRule(repeat));
+  return preset ? { select: preset.value, custom: "" } : { select: REPEAT_CUSTOM, custom: repeat };
+}
+
+export function repeatFromChoice(select: string, custom: string): string | null | undefined {
+  if (select === REPEAT_NONE) return null;
+  if (select !== REPEAT_CUSTOM) return select;
+  const rule = custom.trim();
+  return rule === "" || MULTILINE.test(rule) ? undefined : rule;
+}
+
+export function syncFailureNotice(failed: readonly { taskId: string; error: string }[], updated: number): string {
+  const lines = failed.map((entry) => `${entry.taskId}: ${entry.error}`).join("; ");
+  const done = updated > 0 ? `${updated} updated, ` : "";
+  return `${done}${failed.length} could not be synced - ${lines}`;
+}
+
+export const mismatchIdSet = (today: BoardToday | null): ReadonlySet<string> => new Set(today?.mismatch ?? []);
+
+export const isOutOfSync = (today: BoardToday | null, id: string): boolean => (today?.mismatch ?? []).includes(id);
+
+export const isLinkedToday = (today: BoardToday | null, id: string): boolean => today !== null && (today.taskIds.includes(id) || id in today.states);
+
+export function countSubtasks(task: BoardTask): number {
+  return task.subtasks.reduce((total, subtask) => total + 1 + countSubtasks(subtask), 0);
+}
+
+export function addToTodayNotice(task: BoardTask, projectTitle: string, subtask: boolean): string {
+  if (subtask) return `Added subtask "${task.title}" to today under ${projectTitle}`;
+  const count = countSubtasks(task);
+  const suffix = count === 0 ? "" : ` with ${count} subtask${count === 1 ? "" : "s"}`;
+  return `Added "${task.title}" to today under ${projectTitle}${suffix}`;
+}
+
+export type TaskMenuAction =
+  | { type: "status"; status: BoardStatus }
+  | { type: "priority"; priority: number | null }
+  | { type: "today" }
+  | { type: "sync-daily" }
+  | { type: "use-daily" }
+  | { type: "delegate" }
+  | { type: "details" };
+
+export interface TaskMenuEntry {
+  id: string;
+  label: string;
+  title?: string;
+  disabled: boolean;
+  separator: boolean;
+  action: TaskMenuAction;
+}
+
+export interface TaskMenuContext {
+  levels?: number | null;
+  addState: { visible: boolean; allowed: boolean; hint: string };
+  inToday: boolean;
+  outOfSync: boolean;
+  dailyState: BoardCheckbox | null;
+  subtask: boolean;
+  finished?: boolean;
+}
+
+export function taskMenuEntries(task: BoardTask, context: TaskMenuContext): TaskMenuEntry[] {
+  const entry = (id: string, label: string, action: TaskMenuAction, extra: Partial<Pick<TaskMenuEntry, "title" | "disabled" | "separator">> = {}): TaskMenuEntry => ({
+    id,
+    label,
+    disabled: false,
+    separator: false,
+    action,
+    ...extra,
+  });
+  if (context.finished) return [entry("details", "Open details", { type: "details" })];
+  const entries: TaskMenuEntry[] = BOARD_STATUSES.filter((status) => status !== task.status).map((status) =>
+    entry(`status:${status}`, `Move to ${BOARD_STATUS_LABEL[status]}`, { type: "status", status }),
+  );
+  const levels = priorityLevelList(context.levels).filter((level) => level !== task.priority);
+  const priorities = levels.map((level) => entry(`priority:${level}`, `Priority ${priorityLabel(level)}`, { type: "priority", priority: level }));
+  if (task.priority !== null) priorities.push(entry("priority:none", "No priority", { type: "priority", priority: null }));
+  entries.push(...priorities.map((item, index) => (index === 0 ? { ...item, separator: true } : item)));
+  const today: TaskMenuEntry[] = [];
+  if (context.inToday && context.outOfSync) {
+    today.push(entry("sync-daily", "Sync to daily", { type: "sync-daily" }, { title: "Write this status into today's daily" }));
+    if (context.dailyState !== null) {
+      today.push(entry("use-daily", `Use daily (${BOARD_STATUS_LABEL[context.dailyState]})`, { type: "use-daily" }, { title: "Set this task from today's daily checkbox" }));
+    }
+  }
+  if (!context.inToday && context.addState.visible) {
+    today.push(
+      entry("today", context.subtask ? "Add this subtask to today" : "Add to today", { type: "today" }, { disabled: !context.addState.allowed, title: context.addState.hint }),
+    );
+  }
+  entries.push(...today.map((item, index) => (index === 0 ? { ...item, separator: true } : item)));
+  entries.push(entry("delegate", "Delegate...", { type: "delegate" }, { separator: true }), entry("details", "Open details", { type: "details" }));
+  return entries;
+}

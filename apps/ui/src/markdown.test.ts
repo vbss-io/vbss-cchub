@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createElement } from "react";
+import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { countTasks, Markdown, splitFrontmatter, toggleTaskLine } from "./markdown";
+import { countTasks, InlineText, Markdown, renderInline, splitFrontmatter, toggleTaskLine } from "./markdown";
 
 const render = (props: Parameters<typeof Markdown>[0]) => renderToStaticMarkup(createElement(Markdown, props) as never);
 
@@ -256,4 +256,71 @@ test("countTasks ignores lines toggleTaskLine would not touch", () => {
 
 test("countTasks handles CRLF sources", () => {
   assert.deepEqual(countTasks("- [ ] a\r\n1. [x] b\r\n"), { open: 1, done: 1 });
+});
+
+const inline = (text: string): string => renderToStaticMarkup(createElement("span", null, renderInline(text, "t")) as never);
+
+test("renderInline renders bold, italic, code and strike", () => {
+  const html = inline("**bold** and *it* and _also_ and `code` and ~~gone~~");
+  assert.ok(html.includes("<strong>bold</strong>"));
+  assert.ok(html.includes("<em>it</em>"));
+  assert.ok(html.includes("<em>also</em>"));
+  assert.ok(html.includes('<code class="md__inline">code</code>'));
+  assert.ok(html.includes("<del>gone</del>"));
+});
+
+test("renderInline keeps identifiers with underscores and spaced asterisks as plain text", () => {
+  assert.equal(inline("fix get_user_by_id now"), "<span>fix get_user_by_id now</span>");
+  assert.equal(inline("math 2 * 3 * 4"), "<span>math 2 * 3 * 4</span>");
+  assert.ok(inline("call __init__ first").includes("<strong>init</strong>"));
+});
+
+test("renderInline does not format inside code spans", () => {
+  const html = inline("run `a **b** c` now");
+  assert.ok(html.includes('<code class="md__inline">a **b** c</code>'));
+  assert.ok(!html.includes("<strong>"));
+});
+
+test("renderInline shows a wikilink as its alias, or its target without one", () => {
+  assert.ok(inline("see [[Roadmap Q4|the roadmap]] today").includes('<span class="md__wikilink">the roadmap</span>'));
+  assert.ok(inline("see [[Roadmap Q4]] today").includes('<span class="md__wikilink">Roadmap Q4</span>'));
+});
+
+test("renderInline links only http(s) urls and nests formatting in the label", () => {
+  const html = inline("[**docs**](https://example.com/a) and [bad](javascript:alert(1))");
+  assert.ok(html.includes('<a href="https://example.com/a" target="_blank" rel="noopener noreferrer"><strong>docs</strong></a>'));
+  assert.ok(html.includes("[bad](javascript:alert(1))"));
+});
+
+function findAnchor(node: ReactNode): ReactElement<{ href: string; onClick?: (event: { preventDefault: () => void; stopPropagation: () => void }) => void }> | null {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const found = findAnchor(child);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!isValidElement(node)) return null;
+  const element = node as ReactElement<{ href?: string; children?: ReactNode; onClick?: never }>;
+  if (element.type === "a") return element as never;
+  return findAnchor(element.props.children);
+}
+
+test("renderInline hands link clicks to onOpenLink instead of navigating", () => {
+  const opened: string[] = [];
+  const node = renderInline("go [docs](https://example.com/x)", "t", { onOpenLink: (url) => opened.push(url) });
+  const anchor = findAnchor(node);
+  assert.ok(anchor?.props.onClick);
+  let prevented = 0;
+  let stopped = 0;
+  anchor?.props.onClick?.({ preventDefault: () => (prevented += 1), stopPropagation: () => (stopped += 1) });
+  assert.deepEqual(opened, ["https://example.com/x"]);
+  assert.equal(prevented, 1);
+  assert.equal(stopped, 1);
+  assert.equal(findAnchor(renderInline("go [docs](https://example.com/x)", "t"))?.props.onClick, undefined);
+});
+
+test("InlineText renders the same inline markup inside a span", () => {
+  const html = renderToStaticMarkup(createElement(InlineText, { text: "ship **now**" }) as never);
+  assert.equal(html, '<span class="inline-md">ship <strong>now</strong></span>');
 });

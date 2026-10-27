@@ -102,7 +102,7 @@ describe("hub surface", () => {
       runTimeoutMinutes: 60,
       features: { daily: false, trail: false, usage: false, limits: false, tasks: false },
       tasks: { root: null, section: "Open loops", prefixes: { blocked: ["BLOCK", "BLOCKED"], hold: ["HOLD"], archived: ["ARCHIVED"] }, separator: " - ", exclude: ["_*"], workspaceKey: "workspace", parentKey: "parent", delegatePrompt: null, markDoingOnDelegate: true, reasonSeparator: " - ", doneSection: "", doneStamp: " ✅ {{date}}", priorityTag: "p", priorityLevels: 4 },
-      daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false },
+      daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false, projectOrder: [] },
       trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true },
       widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions", autostart: true },
       limits: { claude: false, codex: false, codexLive: false, refreshMinutes: 5 },

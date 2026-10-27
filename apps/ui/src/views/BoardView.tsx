@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DailyStreamEvent, TasksBoardStreamEvent } from "../api";
 import {
   activeFilterNotes,
@@ -10,11 +10,19 @@ import {
   DEFAULT_BOARD_PREFS,
   DONE_SECTION_PAGE,
   doneColumnView,
+  effectiveProjectOrder,
   emptyResultsMessage,
   expandableIds,
   filterBoardTasks,
   findBoardTask,
   groupByStatus,
+  groupTasksByProject,
+  isLinkedToday,
+  isOutOfSync,
+  isSubtask,
+  addToTodayNotice,
+  supportsReason,
+  taskMenuEntries,
   hasCustomFilters,
   hasDefaultStatuses,
   kanbanColumns,
@@ -43,32 +51,40 @@ import {
   viewSummary,
   visibleKanbanColumns,
   findTaskAfterRefetch,
+  formatDayMonth,
   moveTargetProjects,
   obsidianUrl,
   organizeFocus,
   parentCandidates,
+  recurrenceNotice,
   remapTaskId,
+  subtaskMismatches,
+  finishedOccurrenceIds,
+  FINISHED_OCCURRENCE_HINT,
+  TIMELINE_ZOOMS,
   type BoardPrefs,
   type BoardViewMode,
   type TableSortKey,
+  type TaskMenuAction,
+  type TimelineZoom,
 } from "../board-model";
 import { BoardDelegateDialog, type BoardDelegateRequest } from "../components/BoardDelegateDialog";
+import { BoardActionsMenu, type BoardMenuItem } from "../components/BoardActionsMenu";
 import { BoardDrawer, type BoardOrganizeActions } from "../components/BoardDrawer";
 import { BoardNewTaskDialog } from "../components/BoardNewTaskDialog";
+import { BoardTimeline } from "../components/BoardTimeline";
 import { BoardMoveProjectDialog, BoardParentPickerDialog } from "../components/BoardOrganizeDialogs";
 import {
-  BoardDetailsButton,
   BoardDoneStamp,
+  BoardDueChip,
   BoardExpandButton,
   BoardNotes,
   BoardPriorityBadge,
-  BoardPrioritySelect,
-  BoardReason,
-  BoardStatusSelect,
+  BoardRepeatMark,
   BoardSubtasks,
-  BoardTitle,
-  BoardTodayBadge,
+  BoardTodayStatus,
   type BoardNoteActions,
+  type BoardTodayControls,
 } from "../components/BoardParts";
 import {
   addBoardNote,
@@ -84,6 +100,7 @@ import {
   patchBoardItem,
   reparentBoardTask,
   sweepBoardDone,
+  syncBoardTaskToDaily,
   openBoardProjectInEditor,
   type BoardChange,
   type BoardCheckbox,
@@ -96,9 +113,11 @@ import {
   type DelegationSettings,
   type WorkspaceRecord,
 } from "../delegation";
-import { IconCalendarPlus, IconRun, IconSearch } from "../icons";
+import { IconChevron, IconSearch } from "../icons";
 import { MultiSelectDropdown, type MultiSelectOption } from "../components/MultiSelectDropdown";
+import { InlineText } from "../markdown";
 import { openExternal } from "../notify";
+import { localDayKey, ZOOM_LABEL } from "../timeline-model";
 
 const PREFS_KEY = "hub.board.prefs";
 const REFRESH_DELAY_MS = 200;
@@ -120,7 +139,7 @@ function rebindDelegateTask(tasks: BoardTask[], target: BoardTask, current: Boar
 
 const ALREADY_IN_DAILY = "already in the daily";
 
-const CARD_CONTROLS = "button, input, select, textarea, a, label, .board-title, .board-reason, .board-details";
+const CARD_CONTROLS = "button, input, select, textarea, a, label, .board-details";
 
 const targetOf = (task: BoardTask): BoardTarget => ({ projectId: task.projectId, line: task.line, raw: task.raw });
 
@@ -168,64 +187,66 @@ interface ItemProps {
   onDelegate: (task: BoardTask) => void;
   onAddSubtask: (task: BoardTask) => void;
   todayCheckbox: BoardCheckbox | null;
+  todayKey: string;
   inToday: boolean;
+  outOfSync: boolean;
+  subtaskSync: string[];
   addState: { visible: boolean; allowed: boolean; hint: string };
+  today: BoardTodayControls;
   onAddToday: (task: BoardTask) => void;
+  onSyncDaily: (task: BoardTask) => void;
+  onUseDaily: (task: BoardTask) => void;
   onOpenDetails: (task: BoardTask) => void;
+  finished: boolean;
+  finishedIds: ReadonlySet<string>;
 }
 
-function AddTodayButton({ task, busy, inToday, addState, onAddToday, compact = false }: Pick<ItemProps, "task" | "inToday" | "addState" | "onAddToday"> & { busy: boolean; compact?: boolean }) {
-  if (inToday || !addState.visible) return null;
-  if (compact) {
-    return (
-      <button
-        className="act act--icon board-act"
-        disabled={busy || !addState.allowed}
-        title={addState.hint}
-        aria-label={`Add ${task.title} to today`}
-        onClick={() => onAddToday(task)}
-      >
-        <IconCalendarPlus />
-      </button>
-    );
-  }
-  return (
-    <button className="act" disabled={busy || !addState.allowed} title={addState.hint} onClick={() => onAddToday(task)}>
-      Add to today
-    </button>
-  );
-}
+type TaskMenuProps = Pick<
+  ItemProps,
+  "pending" | "levels" | "addState" | "inToday" | "outOfSync" | "subtaskSync" | "todayCheckbox" | "onStatus" | "onPriority" | "onAddToday" | "onSyncDaily" | "onUseDaily" | "onDelegate" | "onOpenDetails" | "finished"
+>;
 
-function TaskMeta({ task, breadcrumb, inToday, todayCheckbox, levels }: Pick<ItemProps, "task" | "inToday" | "todayCheckbox" | "levels"> & { breadcrumb: string }) {
-  const progress = subtaskProgress(task);
-  return (
-    <div className="board-meta">
-      <BoardPriorityBadge priority={task.priority} levels={levels} />
-      <span className="board-meta__project" title={breadcrumb}>
-        {breadcrumb}
-      </span>
-      <BoardTodayBadge inToday={inToday} checkbox={todayCheckbox} />
-      <BoardDoneStamp task={task} />
-      {task.group && <span className="chip">{task.group}</span>}
-      {progress.total > 0 && (
-        <span className="chip board-meta__progress" title="Subtasks done">
-          {progress.done}/{progress.total}
-        </span>
-      )}
-    </div>
-  );
+function TaskMenu({ task, ...props }: TaskMenuProps & { task: BoardTask }) {
+  const busy = props.pending.has(task.id);
+  const run = (action: TaskMenuAction) => {
+    if (action.type === "status") props.onStatus(task, action.status);
+    else if (action.type === "priority") props.onPriority(task, action.priority);
+    else if (action.type === "today") props.onAddToday(task);
+    else if (action.type === "sync-daily") props.onSyncDaily(task);
+    else if (action.type === "use-daily") props.onUseDaily(task);
+    else if (action.type === "delegate") props.onDelegate(task);
+    else props.onOpenDetails(task);
+  };
+  const items: BoardMenuItem[] = taskMenuEntries(task, {
+    levels: props.levels,
+    addState: props.addState,
+    inToday: props.inToday,
+    outOfSync: props.inToday && (props.outOfSync || props.subtaskSync.length > 0),
+    dailyState: props.outOfSync ? props.todayCheckbox : null,
+    subtask: false,
+    finished: props.finished,
+  }).map((entry) => ({
+    id: entry.id,
+    label: entry.label,
+    title: entry.title,
+    separator: entry.separator,
+    disabled: busy || entry.disabled,
+    onSelect: () => run(entry.action),
+  }));
+  return <BoardActionsMenu label={`Actions for ${task.title}`} disabled={busy} items={items} />;
 }
 
 type DetailsProps = Pick<
   ItemProps,
-  "task" | "pending" | "expandedIds" | "levels" | "onToggleId" | "onStatus" | "onRename" | "onReason" | "onPriority" | "noteActions" | "onAddSubtask"
+  "task" | "pending" | "expandedIds" | "levels" | "onToggleId" | "onStatus" | "onRename" | "onReason" | "onPriority" | "noteActions" | "onAddSubtask" | "today" | "finishedIds"
 >;
 
-function TaskDetails({ task, pending, expandedIds, levels, onToggleId, onStatus, onRename, onReason, onPriority, noteActions, onAddSubtask }: DetailsProps) {
+function TaskDetails({ task, pending, expandedIds, levels, onToggleId, onStatus, onRename, onReason, onPriority, noteActions, onAddSubtask, today, finishedIds }: DetailsProps) {
   const busy = pending.has(task.id);
+  const locked = finishedIds.has(task.id);
   return (
     <div className="board-details">
-      <BoardNotes task={task} disabled={busy} actions={noteActions} />
+      <BoardNotes task={task} disabled={busy} readOnly={locked} actions={noteActions} />
       {task.subtasks.length > 0 && (
         <BoardSubtasks
           tasks={task.subtasks}
@@ -238,13 +259,17 @@ function TaskDetails({ task, pending, expandedIds, levels, onToggleId, onStatus,
           onReason={onReason}
           onPriority={onPriority}
           noteActions={noteActions}
+          today={today}
+          finished={finishedIds}
         />
       )}
-      <div className="frow">
-        <button className="act" disabled={busy} onClick={() => onAddSubtask(task)}>
-          Add subtask
-        </button>
-      </div>
+      {!locked && (
+        <div className="frow">
+          <button className="act" disabled={busy} onClick={() => onAddSubtask(task)}>
+            Add subtask
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -256,15 +281,18 @@ interface CardProps extends ItemProps {
 }
 
 function BoardCard(props: CardProps) {
-  const { task, breadcrumb, pending, expanded, dragging, onToggle, onStatus, onRename, onReason, onDelegate, onAddSubtask, onDragStart, onDragEnd } = props;
-  const [editing, setEditing] = useState(false);
+  const { task, breadcrumb, pending, expanded, dragging, onToggle, onDragStart, onDragEnd } = props;
   const [typing, setTyping] = useState(false);
   const dragged = useRef(false);
   const busy = pending.has(task.id);
+  const progress = subtaskProgress(task);
+  const hasChildren = task.subtasks.length > 0 || task.noteItems.length > 0;
+  const showReason = supportsReason(task.status) && task.reason !== null;
   return (
     <article
       className={`board-card ${dragging ? "board-card--drag" : ""} ${busy ? "board-card--busy" : ""}`}
-      draggable={!editing && !busy && !typing}
+      draggable={!busy && !typing && !props.finished}
+      title={props.finished ? FINISHED_OCCURRENCE_HINT : undefined}
       onFocusCapture={(event) => setTyping(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)}
       onBlurCapture={() => setTyping(false)}
       onDragStart={(event) => {
@@ -280,35 +308,40 @@ function BoardCard(props: CardProps) {
         onDragEnd();
       }}
       onClick={(event) => {
-        if (dragged.current || editing || typing || event.detail > 1) return;
+        if (dragged.current || typing) return;
         if (event.target instanceof Element && event.target.closest(CARD_CONTROLS)) return;
         if ((window.getSelection()?.toString() ?? "") !== "") return;
         props.onOpenDetails(task);
       }}
     >
       <div className="board-card__head">
-        <BoardTitle task={task} editing={editing} disabled={busy} onEditingChange={setEditing} onRename={(title) => onRename(task, title)} />
+        <BoardPriorityBadge priority={task.priority} levels={props.levels} />
+        <span className="board-card__title" title={task.title}>
+          <InlineText text={task.title} />
+        </span>
         <span className="board-card__tools">
-          <BoardDetailsButton title={task.title} onOpen={() => props.onOpenDetails(task)} />
-          <BoardExpandButton title={task.title} expanded={expanded} onToggle={onToggle} />
+          {hasChildren && <BoardExpandButton title={task.title} expanded={expanded} onToggle={onToggle} />}
+          <TaskMenu {...props} />
         </span>
       </div>
-      <BoardReason task={task} disabled={busy} onChange={(reason) => onReason(task, reason)} />
-      <TaskMeta task={task} breadcrumb={breadcrumb} inToday={props.inToday} todayCheckbox={props.todayCheckbox} levels={props.levels} />
-      <div className="board-card__foot">
-        <BoardStatusSelect value={task.status} label={`Status of ${task.title}`} disabled={busy} onChange={(status) => onStatus(task, status)} />
-        <BoardPrioritySelect
-          value={task.priority}
-          levels={props.levels}
-          label={`Priority of ${task.title}`}
-          disabled={busy}
-          compact
-          onChange={(priority) => props.onPriority(task, priority)}
-        />
-        <button className="act act--icon board-act" onClick={() => onDelegate(task)} disabled={busy} title="Delegate" aria-label={`Delegate ${task.title}`}>
-          <IconRun />
-        </button>
-        <AddTodayButton task={task} busy={busy} inToday={props.inToday} addState={props.addState} onAddToday={props.onAddToday} compact />
+      {showReason && (
+        <p className="board-card__reason" title={task.reason ?? undefined}>
+          {task.reason}
+        </p>
+      )}
+      <div className="board-meta">
+        <span className="board-meta__project" title={breadcrumb}>
+          {breadcrumb}
+        </span>
+        {progress.total > 0 && (
+          <span className="chip board-meta__progress" title="Subtasks done">
+            {progress.done}/{progress.total}
+          </span>
+        )}
+        <BoardDueChip task={task} today={props.todayKey} />
+        <BoardRepeatMark task={task} />
+        <BoardTodayStatus inToday={props.inToday} checkbox={props.todayCheckbox} outOfSync={props.outOfSync} subtaskNames={props.subtaskSync} />
+        <BoardDoneStamp task={task} />
       </div>
       {expanded && (
         <TaskDetails
@@ -317,76 +350,90 @@ function BoardCard(props: CardProps) {
           expandedIds={props.expandedIds}
           levels={props.levels}
           onToggleId={props.onToggleId}
-          onStatus={onStatus}
-          onRename={onRename}
-          onReason={onReason}
+          onStatus={props.onStatus}
+          onRename={props.onRename}
+          onReason={props.onReason}
           onPriority={props.onPriority}
           noteActions={props.noteActions}
-          onAddSubtask={onAddSubtask}
+          onAddSubtask={props.onAddSubtask}
+          today={props.today}
+          finishedIds={props.finishedIds}
         />
       )}
     </article>
   );
 }
 
+const TABLE_COLUMNS = 9;
+
 function BoardRow(props: ItemProps) {
-  const { task, breadcrumb, pending, expanded, onToggle, onStatus, onRename, onReason, onDelegate, onAddSubtask } = props;
-  const [editing, setEditing] = useState(false);
+  const { task, pending, expanded, onToggle } = props;
   const busy = pending.has(task.id);
   const progress = subtaskProgress(task);
+  const reason = supportsReason(task.status) ? task.reason : null;
+  const open = () => props.onOpenDetails(task);
   return (
     <>
-      <tr className={busy ? "board-row--busy" : ""}>
-        <td className="board-table__task">
-          <div className="board-card__head">
-            <BoardExpandButton title={task.title} expanded={expanded} onToggle={onToggle} />
-            <BoardTitle task={task} editing={editing} disabled={busy} onEditingChange={setEditing} onRename={(title) => onRename(task, title)} />
-          </div>
-          <BoardReason task={task} disabled={busy} onChange={(reason) => onReason(task, reason)} />
-          {(props.inToday || task.section === "done" || task.priority !== null) && (
-            <div className="board-meta">
-              <BoardPriorityBadge priority={task.priority} levels={props.levels} />
-              <BoardTodayBadge inToday={props.inToday} checkbox={props.todayCheckbox} />
-              <BoardDoneStamp task={task} />
-            </div>
+      <tr
+        className={`board-row ${busy ? "board-row--busy" : ""}`}
+        tabIndex={0}
+        onClick={(event) => {
+          if (event.target instanceof Element && event.target.closest(CARD_CONTROLS)) return;
+          if ((window.getSelection()?.toString() ?? "") !== "") return;
+          open();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && event.target === event.currentTarget) open();
+        }}
+      >
+        <td className="board-table__pri">{task.priority === null ? <span className="muted">-</span> : <BoardPriorityBadge priority={task.priority} levels={props.levels} />}</td>
+        <td className="board-table__status">
+          <span className={`tag tag--board-${task.status}`}>{BOARD_STATUS_LABEL[task.status]}</span>
+        </td>
+        <td className="board-table__start">{task.start ? formatDayMonth(task.start) : <span className="muted">-</span>}</td>
+        <td className="board-table__due">{task.due ? <BoardDueChip task={task} today={props.todayKey} /> : <span className="muted">-</span>}</td>
+        <td className="board-table__task" title={task.title}>
+          <InlineText text={task.title} />
+          <BoardRepeatMark task={task} />
+        </td>
+        <td className="board-table__reason" title={reason ?? undefined}>
+          {reason}
+        </td>
+        <td className="board-table__subs">
+          {progress.total > 0 ? (
+            <span className="board-table__subs-inner">
+              <BoardExpandButton title={task.title} expanded={expanded} onToggle={onToggle} />
+              {progress.done}/{progress.total}
+            </span>
+          ) : (
+            <span className="muted">-</span>
           )}
         </td>
-        <td>
-          <BoardPrioritySelect value={task.priority} levels={props.levels} label={`Priority of ${task.title}`} disabled={busy} onChange={(priority) => props.onPriority(task, priority)} />
+        <td className="board-table__today">
+          <BoardTodayStatus inToday={props.inToday} checkbox={props.todayCheckbox} outOfSync={props.outOfSync} subtaskNames={props.subtaskSync} />
+          <BoardDoneStamp task={task} />
         </td>
-        <td className="board-table__project" title={breadcrumb}>
-          {breadcrumb}
-        </td>
-        <td>{task.group ? <span className="chip">{task.group}</span> : <span className="muted">-</span>}</td>
-        <td>{progress.total > 0 ? `${progress.done}/${progress.total}` : <span className="muted">-</span>}</td>
-        <td>
-          <BoardStatusSelect value={task.status} label={`Status of ${task.title}`} disabled={busy} onChange={(status) => onStatus(task, status)} />
-        </td>
-        <td>
-          <div className="board-row__actions">
-            <BoardDetailsButton title={task.title} onOpen={() => props.onOpenDetails(task)} />
-            <button className="act" onClick={() => onDelegate(task)} disabled={busy}>
-              <IconRun /> Delegate
-            </button>
-            <AddTodayButton task={task} busy={busy} inToday={props.inToday} addState={props.addState} onAddToday={props.onAddToday} />
-          </div>
+        <td className="board-table__actions">
+          <TaskMenu {...props} />
         </td>
       </tr>
       {expanded && (
         <tr className="board-table__detail">
-          <td colSpan={7}>
+          <td colSpan={TABLE_COLUMNS}>
             <TaskDetails
               task={task}
               pending={pending}
               expandedIds={props.expandedIds}
               levels={props.levels}
               onToggleId={props.onToggleId}
-              onStatus={onStatus}
-              onRename={onRename}
-              onReason={onReason}
+              onStatus={props.onStatus}
+              onRename={props.onRename}
+              onReason={props.onReason}
               onPriority={props.onPriority}
               noteActions={props.noteActions}
-              onAddSubtask={onAddSubtask}
+              onAddSubtask={props.onAddSubtask}
+              today={props.today}
+              finishedIds={props.finishedIds}
             />
           </td>
         </tr>
@@ -433,6 +480,9 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
   const [drawerId, setDrawerId] = useState<string | null>(null);
   const [organizing, setOrganizing] = useState(false);
   const [picker, setPicker] = useState<{ kind: "parent" | "project"; taskId: string } | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set());
+  const [undatedOpen, setUndatedOpen] = useState(false);
+  const [todayJump, setTodayJump] = useState(0);
   const holdDrawer = useRef(false);
   const delegateProject = useRef<BoardProject | null>(null);
   const refreshTimer = useRef<number | null>(null);
@@ -512,10 +562,16 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
   const todayIds = useMemo(() => todayIdSet(today), [today]);
   const addState = todayAddState(today);
   const doneEnabled = (settings?.tasks.doneSection ?? "").trim() !== "";
+  const finishedIds = useMemo(() => finishedOccurrenceIds(allTasks, doneEnabled), [allTasks, doneEnabled]);
   const visible = useMemo(() => filterBoardTasks(allTasks, projects, filters, todayIds), [allTasks, projects, filters, todayIds]);
   const columns = useMemo(() => groupByStatus(sortByPriority(visible)), [visible]);
   const doneView = useMemo(() => doneColumnView(columns.done, doneShown), [columns, doneShown]);
   const tableView = useMemo(() => capDoneSection(sortTableTasks(visible, prefs.tableSort, breadcrumbs), doneShown), [visible, prefs.tableSort, breadcrumbs, doneShown]);
+  const projectOrder = settings?.daily.projectOrder;
+  const tableGroups = useMemo(() => groupTasksByProject(tableView.tasks, projects, projectOrder ?? []), [tableView, projects, projectOrder]);
+  const timelineView = useMemo(() => capDoneSection(visible, doneShown), [visible, doneShown]);
+  const timelineOrder = useMemo(() => effectiveProjectOrder(projects, projectOrder ?? []), [projects, projectOrder]);
+  const todayKey = localDayKey(new Date());
   const levels = settings?.tasks.priorityLevels;
   const priorityChips = useMemo(() => [...priorityFilterLevels(levels, allTasks), null], [levels, allTasks]);
   const priorityCounts = useMemo(() => {
@@ -549,6 +605,7 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
 
   const setFilters = (patch: Partial<BoardPrefs["filters"]>) => setPrefs((current) => ({ ...current, filters: { ...current.filters, ...patch } }));
   const setView = (next: BoardViewMode) => setPrefs((current) => ({ ...current, view: next }));
+  const setZoom = (timelineZoom: TimelineZoom) => setPrefs((current) => ({ ...current, timelineZoom }));
 
   const sortTable = (key: TableSortKey) => setPrefs((current) => ({ ...current, tableSort: nextTableSort(current.tableSort, key) }));
 
@@ -631,8 +688,12 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
     try {
       const result = await patchBoardItem({ projectId: task.projectId, line: task.line, raw: task.raw }, change);
       setBoard((current) => (current ? { ...current, tasks: replaceBoardTask(current.tasks, result.task) } : current));
-      if (result.moved && task.id === drawerId) await followAfterLoad(result.task);
+      if (result.recurred === true) {
+        onNotice(recurrenceNotice(result.task));
+        await load();
+      } else if (result.moved && task.id === drawerId) await followAfterLoad(result.task);
       else if (result.moved) await load();
+      else if (result.dailySynced === true || (change.status !== undefined && hasToday.current)) scheduleRefresh();
     } catch (err) {
       if (err instanceof BoardConflictError) await handleConflict();
       else onError(err instanceof Error ? err.message : "could not update the task");
@@ -655,6 +716,10 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
 
   const changePriority = (task: BoardTask, priority: number | null) => {
     if (task.priority !== priority) void write(task, { priority });
+  };
+
+  const changeDates = (task: BoardTask, change: BoardChange) => {
+    void write(task, change);
   };
 
   const runNote = async (task: BoardTask, action: () => Promise<{ task: BoardTask }>, refetch: boolean): Promise<boolean> => {
@@ -754,7 +819,8 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
     markPending(task.id, true);
     try {
       await addBoardTaskToDaily({ projectId: task.projectId, line: task.line, raw: task.raw });
-      onNotice(`Added "${task.title}" to today's daily`);
+      const projectTitle = projects.find((project) => project.id === task.projectId)?.title ?? task.projectId;
+      onNotice(addToTodayNotice(task, projectTitle, isSubtask(allTasks, task)));
       await load();
     } catch (err) {
       if (err instanceof BoardConflictError && err.message === ALREADY_IN_DAILY) {
@@ -766,6 +832,33 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
       markPending(task.id, false);
     }
   };
+
+  const syncToDaily = async (task: BoardTask) => {
+    markPending(task.id, true);
+    try {
+      await syncBoardTaskToDaily(targetOf(task));
+      onNotice(`Synced "${task.title}" to today's daily`);
+      await load();
+    } catch (err) {
+      if (err instanceof BoardConflictError) await handleConflict();
+      else onError(err instanceof Error ? err.message : "could not sync the task to the daily");
+    } finally {
+      markPending(task.id, false);
+    }
+  };
+
+  const useDaily = (task: BoardTask) => {
+    const state = todayHint(today, task.id);
+    if (state !== null) changeStatus(task, state);
+  };
+
+  const toggleGroup = (projectId: string) =>
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
 
   const sweepDone = async () => {
     setSweeping(true);
@@ -898,6 +991,13 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
   const foundProject = delegating ? (projects.find((project) => project.id === delegating.projectId) ?? null) : null;
   if (foundProject) delegateProject.current = foundProject;
   const delegatingProject = delegating ? (foundProject ?? delegateProject.current) : null;
+  const todayControls: BoardTodayControls = {
+    isLinked: (id) => isLinkedToday(today, id),
+    isOutOfSync: (id) => isOutOfSync(today, id),
+    dailyState: (id) => todayHint(today, id),
+    addState,
+    onAdd: (item) => void addToToday(item),
+  };
   const detailProps = (task: BoardTask): ItemProps => ({
     task,
     breadcrumb: breadcrumbs.get(task.projectId) ?? task.projectId,
@@ -915,10 +1015,18 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
     onDelegate: openDelegate,
     onAddSubtask: (parent) => setCreating({ parent }),
     todayCheckbox: todayHint(today, task.id),
-    inToday: todayIds !== null && todayIds.has(task.id),
+    todayKey,
+    inToday: isLinkedToday(today, task.id),
+    outOfSync: isOutOfSync(today, task.id),
+    subtaskSync: subtaskMismatches(task, today).map((item) => item.title),
     addState,
+    today: todayControls,
     onAddToday: (item) => void addToToday(item),
+    onSyncDaily: (item) => void syncToDaily(item),
+    onUseDaily: useDaily,
     onOpenDetails: (item) => setDrawerId(item.id),
+    finished: finishedIds.has(task.id),
+    finishedIds,
   });
 
   return (
@@ -931,11 +1039,29 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
           <button className={`pill ${view === "table" ? "pill--on" : ""}`} aria-pressed={view === "table"} onClick={() => setView("table")}>
             Table
           </button>
-        </div>
-        <div className="toolbar__right">
-          <button className="act" aria-pressed={everythingExpanded} disabled={visible.length === 0} onClick={toggleExpandAll}>
-            {everythingExpanded ? "Collapse all" : "Expand all"}
+          <button className={`pill ${view === "timeline" ? "pill--on" : ""}`} aria-pressed={view === "timeline"} onClick={() => setView("timeline")}>
+            Timeline
           </button>
+        </div>
+        {view === "timeline" && (
+          <div className="pillpair" role="group" aria-label="Timeline zoom">
+            {TIMELINE_ZOOMS.map((zoom) => (
+              <button key={zoom} className={`pill ${prefs.timelineZoom === zoom ? "pill--on" : ""}`} aria-pressed={prefs.timelineZoom === zoom} onClick={() => setZoom(zoom)}>
+                {ZOOM_LABEL[zoom]}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="toolbar__right">
+          {view === "timeline" ? (
+            <button className="act" title="Scroll the timeline to today" onClick={() => setTodayJump((count) => count + 1)}>
+              Today
+            </button>
+          ) : (
+            <button className="act" aria-pressed={everythingExpanded} disabled={visible.length === 0} onClick={toggleExpandAll}>
+              {everythingExpanded ? "Collapse all" : "Expand all"}
+            </button>
+          )}
           {doneEnabled && (
             <button className="act" disabled={sweeping} title="Move finished tasks to the done section" onClick={() => void sweepDone()}>
               {sweeping ? "Moving…" : "Move done"}
@@ -1096,19 +1222,41 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
           <table className="board-table">
             <thead>
               <tr>
-                <SortHeader label="Task" sortKey="title" sort={prefs.tableSort} onSort={sortTable} />
-                <SortHeader label="Priority" sortKey="priority" sort={prefs.tableSort} onSort={sortTable} />
-                <SortHeader label="Project" sortKey="project" sort={prefs.tableSort} onSort={sortTable} />
-                <th>Group</th>
-                <th>Subtasks</th>
+                <SortHeader label="Pri" sortKey="priority" sort={prefs.tableSort} onSort={sortTable} />
                 <SortHeader label="Status" sortKey="status" sort={prefs.tableSort} onSort={sortTable} />
+                <th>Start</th>
+                <SortHeader label="Due" sortKey="due" sort={prefs.tableSort} onSort={sortTable} />
+                <SortHeader label="Task" sortKey="title" sort={prefs.tableSort} onSort={sortTable} />
+                <th>Reason</th>
+                <th>Subtasks</th>
+                <th>Today</th>
                 <th aria-label="Actions" />
               </tr>
             </thead>
             <tbody>
-              {tableView.tasks.map((task) => (
-                <BoardRow key={task.id} {...detailProps(task)} />
-              ))}
+              {tableGroups.map((group) => {
+                const collapsed = collapsedGroups.has(group.project.id);
+                const label = breadcrumbs.get(group.project.id) ?? group.project.title;
+                return (
+                  <Fragment key={group.project.id}>
+                    <tr className="board-group">
+                      <td colSpan={TABLE_COLUMNS}>
+                        <button
+                          className={`board-group__toggle ${collapsed ? "" : "board-group__toggle--open"}`}
+                          aria-expanded={!collapsed}
+                          title={label}
+                          onClick={() => toggleGroup(group.project.id)}
+                        >
+                          <IconChevron />
+                          <span className="board-group__name">{label}</span>
+                          <span className="pill__count">{group.tasks.length}</span>
+                        </button>
+                      </td>
+                    </tr>
+                    {!collapsed && group.tasks.map((task) => <BoardRow key={task.id} {...detailProps(task)} />)}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
           {tableView.hidden > 0 && (
@@ -1117,6 +1265,31 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
             </button>
           )}
         </div>
+      )}
+
+      {projects.length > 0 && view === "timeline" && visible.length > 0 && (
+        <>
+          <BoardTimeline
+            tasks={timelineView.tasks}
+            projects={projects}
+            projectOrder={timelineOrder}
+            breadcrumbs={breadcrumbs}
+            zoom={prefs.timelineZoom}
+            today={todayKey}
+            levels={levels}
+            collapsed={collapsedGroups}
+            undatedOpen={undatedOpen}
+            jumpToToday={todayJump}
+            onToggleGroup={toggleGroup}
+            onToggleUndated={() => setUndatedOpen((open) => !open)}
+            onOpen={(item) => setDrawerId(item.id)}
+          />
+          {timelineView.hidden > 0 && (
+            <button className="act board-more" onClick={() => setDoneShown((current) => current + DONE_SECTION_PAGE)}>
+              Show more done tasks ({timelineView.hidden})
+            </button>
+          )}
+        </>
       )}
 
       {drawerTask && (
@@ -1129,15 +1302,20 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
           organizing={organizing}
           suspended={delegating !== null || creating !== null || pickerTask !== null}
           levels={levels}
-          inToday={todayIds !== null && todayIds.has(drawerTask.id)}
+          inToday={isLinkedToday(today, drawerTask.id)}
           todayCheckbox={todayHint(today, drawerTask.id)}
           addState={addState}
+          today={todayControls}
+          finished={finishedIds}
+          onSyncDaily={(item) => void syncToDaily(item)}
+          onUseDaily={useDaily}
           noteActions={noteActions}
           organize={organizeActions}
           onStatus={changeStatus}
           onRename={renameTask}
           onReason={changeReason}
           onPriority={changePriority}
+          onDates={changeDates}
           onDelegate={openDelegate}
           onAddSubtask={(parent) => setCreating({ parent })}
           onAddToday={(item) => void addToToday(item)}

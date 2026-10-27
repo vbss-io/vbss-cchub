@@ -24,6 +24,7 @@ import {
   reasonChange,
   sweepTargets,
   todayAddState,
+  todayStatusBadge,
   todayHint,
   todayIdSet,
   supportsReason,
@@ -74,8 +75,18 @@ import {
   parentCandidates,
   remapTaskId,
   taskMoveAvailability,
+  addToTodayNotice,
+  countSubtasks,
+  effectiveProjectOrder,
+  groupTasksByProject,
+  isLinkedToday,
+  isOutOfSync,
+  mismatchIdSet,
+  moveInProjectOrder,
+  taskMenuEntries,
   type BoardFilters,
   type BoardPrefs,
+  type TaskMenuContext,
 } from "./board-model";
 import type { BoardNoteItem, BoardProject, BoardStatus, BoardTask, BoardToday } from "./delegation";
 
@@ -316,6 +327,7 @@ test("parseBoardPrefs keeps valid fields and discards invalid ones", () => {
     view: "table",
     hideEmptyColumns: true,
     tableSort: { key: "priority", dir: "asc" },
+    timelineZoom: "month",
     filters: { projectId: "acme", includeSubprojects: false, statuses: ["todo", "archived"], search: "abc", todayOnly: true, hiddenPriorities: [] },
   });
   const partial = parseBoardPrefs(JSON.stringify({ view: "grid", filters: { projectId: 3, statuses: "todo" } }));
@@ -1008,4 +1020,375 @@ test("parentCandidateLabel indents by level with non-breaking spaces and tags do
   assert.equal(parentCandidateLabel({ task: task("acme", 1, "Top"), level: 0 }), "Top");
   assert.equal(parentCandidateLabel({ task: task("acme", 2, "Nested"), level: 2 }), `${nbsp.repeat(4)}Nested`);
   assert.equal(parentCandidateLabel({ task: task("acme", 3, "Old", "done", { section: "done" }), level: 1 }), `${nbsp.repeat(2)}Old (done section)`);
+});
+
+test("effectiveProjectOrder puts the saved ids first and then the rest in tree order", () => {
+  assert.deepEqual(effectiveProjectOrder(PROJECTS, []), PROJECTS.map((item) => item.id));
+  assert.deepEqual(effectiveProjectOrder(PROJECTS, ["personal", "acme/globex"]), ["personal", "acme/globex", "acme", "acme/globex/initech", "acme/globex/hooli"]);
+});
+
+test("effectiveProjectOrder ignores unknown ids and repeated ids", () => {
+  assert.deepEqual(effectiveProjectOrder(PROJECTS, ["gone", "personal", "personal", "acme"]), ["personal", "acme", "acme/globex", "acme/globex/initech", "acme/globex/hooli"]);
+});
+
+test("moveInProjectOrder swaps with the neighbour and stops at the edges", () => {
+  const order = ["a", "b", "c"];
+  assert.deepEqual(moveInProjectOrder(order, "b", "up"), ["b", "a", "c"]);
+  assert.deepEqual(moveInProjectOrder(order, "b", "down"), ["a", "c", "b"]);
+  assert.deepEqual(moveInProjectOrder(order, "a", "up"), ["a", "b", "c"]);
+  assert.deepEqual(moveInProjectOrder(order, "c", "down"), ["a", "b", "c"]);
+  assert.deepEqual(moveInProjectOrder(order, "gone", "up"), ["a", "b", "c"]);
+  assert.deepEqual(order, ["a", "b", "c"]);
+});
+
+test("groupTasksByProject follows the effective project order and drops empty projects", () => {
+  const tasks = [task("personal", 1, "Own"), task("acme", 2, "Root"), task("acme/globex", 3, "Mid"), task("acme", 4, "Root two")];
+  const groups = groupTasksByProject(tasks, PROJECTS, []);
+  assert.deepEqual(groups.map((group) => group.project.id), ["acme", "acme/globex", "personal"]);
+  assert.deepEqual(groups[0]?.tasks.map((item) => item.title), ["Root", "Root two"]);
+  const reordered = groupTasksByProject(tasks, PROJECTS, ["personal"]);
+  assert.deepEqual(reordered.map((group) => group.project.id), ["personal", "acme", "acme/globex"]);
+});
+
+test("groupTasksByProject keeps the incoming task order inside a group", () => {
+  const sorted = sortTableTasks([task("acme", 1, "B", "todo", { priority: 2 }), task("acme", 2, "A", "todo", { priority: 0 })], { key: "priority", dir: "asc" }, new Map());
+  const groups = groupTasksByProject(sorted, PROJECTS, []);
+  assert.deepEqual(groups[0]?.tasks.map((item) => item.title), ["A", "B"]);
+});
+
+test("groupTasksByProject appends tasks of unknown projects after the known groups", () => {
+  const groups = groupTasksByProject([task("gone", 1, "Lost"), task("acme", 2, "Root")], PROJECTS, []);
+  assert.deepEqual(groups.map((group) => group.project.id), ["acme", "gone"]);
+  assert.equal(groups[1]?.project.title, "gone");
+});
+
+const ADD_READY = { visible: true, allowed: true, hint: "Add to today's daily" };
+
+function menuContext(patch: Partial<TaskMenuContext> = {}): TaskMenuContext {
+  return { levels: 3, addState: ADD_READY, inToday: false, outOfSync: false, dailyState: null, subtask: false, ...patch };
+}
+
+test("taskMenuEntries offers every status except the current one", () => {
+  const entries = taskMenuEntries(task("acme", 1, "Ship", "todo"), menuContext());
+  const moves = entries.filter((entry) => entry.action.type === "status");
+  assert.deepEqual(moves.map((entry) => entry.label), ["Move to Blocked", "Move to Hold", "Move to Doing", "Move to Done", "Move to Archived"]);
+});
+
+test("taskMenuEntries lists the configured priority levels without the current one and a clear option", () => {
+  const entries = taskMenuEntries(task("acme", 1, "Ship", "todo", { priority: 1 }), menuContext({ levels: 3 }));
+  const labels = entries.filter((entry) => entry.action.type === "priority").map((entry) => entry.label);
+  assert.deepEqual(labels, ["Priority P0", "Priority P2", "No priority"]);
+  const none = taskMenuEntries(task("acme", 1, "Ship"), menuContext({ levels: 2 }));
+  assert.deepEqual(none.filter((entry) => entry.action.type === "priority").map((entry) => entry.label), ["Priority P0", "Priority P1"]);
+});
+
+test("taskMenuEntries offers Add to today only when it is not linked yet and the daily is on", () => {
+  const find = (entries: ReturnType<typeof taskMenuEntries>) => entries.find((entry) => entry.action.type === "today");
+  assert.equal(find(taskMenuEntries(task("acme", 1, "Ship"), menuContext()))?.label, "Add to today");
+  assert.equal(find(taskMenuEntries(task("acme", 1, "Ship"), menuContext({ subtask: true })))?.label, "Add this subtask to today");
+  assert.equal(find(taskMenuEntries(task("acme", 1, "Ship"), menuContext({ inToday: true }))), undefined);
+  assert.equal(find(taskMenuEntries(task("acme", 1, "Ship"), menuContext({ addState: { visible: false, allowed: false, hint: "off" } }))), undefined);
+  const blocked = find(taskMenuEntries(task("acme", 1, "Ship"), menuContext({ addState: { visible: true, allowed: false, hint: "Create today's daily first" } })));
+  assert.equal(blocked?.disabled, true);
+  assert.equal(blocked?.title, "Create today's daily first");
+});
+
+test("taskMenuEntries adds the sync actions only when the task is out of sync with a known daily state", () => {
+  const plain = taskMenuEntries(task("acme", 1, "Ship"), menuContext({ inToday: true }));
+  assert.equal(plain.some((entry) => entry.action.type === "sync-daily" || entry.action.type === "use-daily"), false);
+  const drifted = taskMenuEntries(task("acme", 1, "Ship", "todo"), menuContext({ inToday: true, outOfSync: true, dailyState: "doing" }));
+  assert.equal(drifted.find((entry) => entry.action.type === "sync-daily")?.label, "Sync to daily");
+  assert.equal(drifted.find((entry) => entry.action.type === "use-daily")?.label, "Use daily (Doing)");
+  const unknown = taskMenuEntries(task("acme", 1, "Ship"), menuContext({ inToday: true, outOfSync: true, dailyState: null }));
+  assert.equal(unknown.some((entry) => entry.action.type === "use-daily"), false);
+  assert.equal(unknown.some((entry) => entry.action.type === "sync-daily"), true);
+});
+
+test("taskMenuEntries ends with Delegate and Open details, with unique ids", () => {
+  const entries = taskMenuEntries(task("acme", 1, "Ship"), menuContext());
+  assert.deepEqual(entries.slice(-2).map((entry) => entry.label), ["Delegate...", "Open details"]);
+  assert.equal(new Set(entries.map((entry) => entry.id)).size, entries.length);
+});
+
+test("mismatch helpers treat a missing list as empty", () => {
+  const withMismatch: BoardToday = { date: "2026-10-26", exists: true, taskIds: ["acme#1"], states: { "acme#1": "done", "acme#5": "doing" }, mismatch: ["acme#1"] };
+  const withoutMismatch: BoardToday = { date: "2026-10-26", exists: true, taskIds: [], states: {} };
+  assert.deepEqual([...mismatchIdSet(withMismatch)], ["acme#1"]);
+  assert.equal(mismatchIdSet(withoutMismatch).size, 0);
+  assert.equal(mismatchIdSet(null).size, 0);
+  assert.equal(isOutOfSync(withMismatch, "acme#1"), true);
+  assert.equal(isOutOfSync(withMismatch, "acme#2"), false);
+  assert.equal(isOutOfSync(null, "acme#1"), false);
+});
+
+test("isLinkedToday counts tasks in taskIds and subtasks that only appear in the states", () => {
+  const today: BoardToday = { date: "2026-10-26", exists: true, taskIds: ["acme#1"], states: { "acme#1": "todo", "acme#2": "done" } };
+  assert.equal(isLinkedToday(today, "acme#1"), true);
+  assert.equal(isLinkedToday(today, "acme#2"), true);
+  assert.equal(isLinkedToday(today, "acme#3"), false);
+  assert.equal(isLinkedToday(null, "acme#1"), false);
+});
+
+test("countSubtasks counts nested subtasks", () => {
+  const leaf = task("acme", 3, "Leaf", "todo", { depth: 2 });
+  const mid = task("acme", 2, "Mid", "todo", { depth: 1, subtasks: [leaf] });
+  const top = task("acme", 1, "Top", "todo", { subtasks: [mid, task("acme", 4, "Other", "todo", { depth: 1 })] });
+  assert.equal(countSubtasks(top), 3);
+  assert.equal(countSubtasks(leaf), 0);
+});
+
+test("addToTodayNotice names the project and the subtask count", () => {
+  const leaf = task("acme", 2, "Leaf", "todo", { depth: 1 });
+  const top = task("acme", 1, "Top", "todo", { subtasks: [leaf, task("acme", 3, "Two", "todo", { depth: 1 })] });
+  assert.equal(addToTodayNotice(top, "ACME", false), 'Added "Top" to today under ACME with 2 subtasks');
+  assert.equal(addToTodayNotice(task("acme", 5, "Solo"), "ACME", false), 'Added "Solo" to today under ACME');
+  assert.equal(addToTodayNotice(task("acme", 6, "One", "todo", { subtasks: [leaf] }), "ACME", false), 'Added "One" to today under ACME with 1 subtask');
+  assert.equal(addToTodayNotice(leaf, "ACME", true), 'Added subtask "Leaf" to today under ACME');
+});
+
+test("todayStatusBadge shows one badge, and an out of sync task shows only the out of sync one", () => {
+  assert.equal(todayStatusBadge(false, "done", true), null);
+  assert.deepEqual(todayStatusBadge(true, null, false), { tone: "linked", label: "Today", title: "Linked in today's daily" });
+  assert.deepEqual(todayStatusBadge(true, "done", false), { tone: "linked", label: `Today · ${BOARD_STATUS_LABEL.done}`, title: "Linked in today's daily" });
+  const sync = todayStatusBadge(true, "done", true);
+  assert.equal(sync?.tone, "sync");
+  assert.equal(sync?.label, "Today · out of sync");
+  assert.equal(sync?.title, `Linked in today's daily as ${BOARD_STATUS_LABEL.done}. The daily checkbox differs from this status`);
+  assert.equal(todayStatusBadge(true, null, true)?.title, "Linked in today's daily. The daily checkbox differs from this status");
+});
+
+import {
+  dailyItemOutOfSync,
+  dailyItemRecurredToday,
+  dueChip,
+  FINISHED_OCCURRENCE_HINT,
+  finishedOccurrenceIds,
+  isFinishedOccurrence,
+  dueTone,
+  formatDayMonth,
+  isDayInRange,
+  isIsoDay,
+  recurrenceNotice,
+  repeatChoice,
+  repeatFromChoice,
+  resolveDateDraft,
+  REPEAT_CUSTOM,
+  REPEAT_NONE,
+  REPEAT_PRESETS,
+  subtaskMismatches,
+  syncFailureNotice,
+  taskDates,
+  TIMELINE_ZOOMS,
+} from "./board-model";
+
+const todayWith = (mismatch: string[]): BoardToday => ({ date: "2026-10-27", exists: true, taskIds: [], states: {}, mismatch });
+
+test("taskDates falls back to null when the server does not send the new fields", () => {
+  assert.deepEqual(taskDates(task("acme", 1, "a")), { start: null, scheduled: null, due: null, repeat: null });
+  assert.deepEqual(taskDates(task("acme", 1, "a", "todo", { start: "2026-10-28", due: "2026-10-31", repeat: "every week" })), {
+    start: "2026-10-28",
+    scheduled: null,
+    due: "2026-10-31",
+    repeat: "every week",
+  });
+});
+
+test("isIsoDay accepts only real calendar dates", () => {
+  assert.equal(isIsoDay("2026-10-31"), true);
+  assert.equal(isIsoDay("2028-02-29"), true);
+  assert.equal(isIsoDay("2026-02-29"), false);
+  assert.equal(isIsoDay("2026-13-01"), false);
+  assert.equal(isIsoDay("31/10/2026"), false);
+  assert.equal(isIsoDay(""), false);
+});
+
+test("syncFailureNotice lists every failed task with the updated count", () => {
+  assert.equal(syncFailureNotice([{ taskId: "acme#4", error: "changed on disk" }], 0), "1 could not be synced - acme#4: changed on disk");
+  assert.equal(
+    syncFailureNotice(
+      [
+        { taskId: "acme#4", error: "changed on disk" },
+        { taskId: "acme#7", error: "not found" },
+      ],
+      2,
+    ),
+    "2 updated, 2 could not be synced - acme#4: changed on disk; acme#7: not found",
+  );
+});
+
+test("isDayInRange keeps real dates between 2000 and 2100 only", () => {
+  assert.equal(isDayInRange("2000-01-01"), true);
+  assert.equal(isDayInRange("2100-12-31"), true);
+  assert.equal(isDayInRange("2026-10-27"), true);
+  assert.equal(isDayInRange("1999-12-31"), false);
+  assert.equal(isDayInRange("2101-01-01"), false);
+  assert.equal(isDayInRange("0002-10-27"), false);
+  assert.equal(isDayInRange("2206-01-01"), false);
+  assert.equal(isDayInRange("2026-02-30"), false);
+  assert.equal(isDayInRange(""), false);
+  assert.equal(isIsoDay("2206-01-01"), true);
+});
+
+test("resolveDateDraft commits only complete valid dates and never writes in-between values", () => {
+  assert.deepEqual(resolveDateDraft("2026-10-31", null, false), { kind: "commit", value: "2026-10-31" });
+  assert.deepEqual(resolveDateDraft("2026-10-31", "2026-10-30", false), { kind: "commit", value: "2026-10-31" });
+  assert.deepEqual(resolveDateDraft("2026-10-31", "2026-10-31", false), { kind: "none" });
+  assert.deepEqual(resolveDateDraft("", null, false), { kind: "none" });
+  assert.deepEqual(resolveDateDraft("", "2026-10-31", false), { kind: "commit", value: null });
+  assert.equal(resolveDateDraft("", "2026-10-31", true).kind, "invalid");
+  assert.equal(resolveDateDraft("", null, true).kind, "invalid");
+  assert.equal(resolveDateDraft("0002-10-01", null, false).kind, "invalid");
+  assert.equal(resolveDateDraft("2026-10-01", null, false).kind, "commit");
+  assert.equal(resolveDateDraft("2026-02-30", null, false).kind, "invalid");
+  assert.deepEqual(resolveDateDraft("2206-01-01", null, false), { kind: "invalid", message: "The year must be between 2000 and 2100" });
+  assert.deepEqual(resolveDateDraft("1999-12-31", "2026-10-31", false), { kind: "invalid", message: "The year must be between 2000 and 2100" });
+  assert.deepEqual(resolveDateDraft("garbage", null, false), { kind: "invalid", message: "Enter a valid date" });
+});
+
+test("validateNewTask rejects a due date outside 2000-2100", () => {
+  const base = { projectId: "acme", title: "a", status: "todo" as const, reason: "" };
+  assert.equal(validateNewTask({ ...base, due: "2026-10-31" }), null);
+  assert.equal(validateNewTask({ ...base, due: "2206-10-31" }), "The year must be between 2000 and 2100");
+  assert.equal(validateNewTask({ ...base, due: "0002-10-31" }), "The due date must be a valid date");
+  assert.equal(validateNewTask({ ...base, due: "" }), null);
+});
+
+test("formatDayMonth renders dd/mm and an empty string for missing or invalid dates", () => {
+  assert.equal(formatDayMonth("2026-10-05"), "05/10");
+  assert.equal(formatDayMonth("2026-12-31"), "31/12");
+  assert.equal(formatDayMonth(null), "");
+  assert.equal(formatDayMonth("nope"), "");
+});
+
+test("dueTone marks open overdue tasks red, due today amber, and everything else later", () => {
+  assert.equal(dueTone("2026-10-26", "todo", "2026-10-27"), "overdue");
+  assert.equal(dueTone("2026-10-27", "doing", "2026-10-27"), "today");
+  assert.equal(dueTone("2026-10-28", "todo", "2026-10-27"), "later");
+  assert.equal(dueTone("2026-10-01", "done", "2026-10-27"), "later");
+  assert.equal(dueTone("2026-10-27", "archived", "2026-10-27"), "later");
+  assert.equal(dueTone(null, "todo", "2026-10-27"), null);
+});
+
+test("dueChip builds a labelled chip, or null without a due date", () => {
+  assert.equal(dueChip(task("acme", 1, "a"), "2026-10-27"), null);
+  assert.deepEqual(dueChip(task("acme", 1, "a", "todo", { due: "2026-10-26" }), "2026-10-27"), { label: "26/10", tone: "overdue", title: "Due 26/10/2026 - overdue" });
+  assert.deepEqual(dueChip(task("acme", 1, "a", "todo", { due: "2026-10-27" }), "2026-10-27"), { label: "27/10", tone: "today", title: "Due 27/10/2026 - today" });
+  assert.deepEqual(dueChip(task("acme", 1, "a", "todo", { due: "2026-11-02" }), "2026-10-27"), { label: "02/11", tone: "later", title: "Due 02/11/2026" });
+});
+
+test("repeat presets map to the select value and back", () => {
+  assert.deepEqual(
+    REPEAT_PRESETS.map((preset) => preset.value),
+    ["every day", "every weekday", "every week", "every 2 weeks", "every month", "every year"],
+  );
+  assert.deepEqual(repeatChoice(null), { select: REPEAT_NONE, custom: "" });
+  assert.deepEqual(repeatChoice("every week"), { select: "every week", custom: "" });
+  assert.deepEqual(repeatChoice("Every  Week"), { select: "every week", custom: "" });
+  assert.deepEqual(repeatChoice("every 3 days"), { select: REPEAT_CUSTOM, custom: "every 3 days" });
+  assert.equal(repeatFromChoice(REPEAT_NONE, ""), null);
+  assert.equal(repeatFromChoice("every month", "ignored"), "every month");
+  assert.equal(repeatFromChoice(REPEAT_CUSTOM, "  every 3 days "), "every 3 days");
+  assert.equal(repeatFromChoice(REPEAT_CUSTOM, "   "), undefined);
+  assert.equal(repeatFromChoice(REPEAT_CUSTOM, "a\nb"), undefined);
+});
+
+test("subtaskMismatches lists the out of sync descendants at any depth", () => {
+  const grandchild = task("acme", 3, "grandchild", "todo");
+  const child = task("acme", 2, "child", "todo", { subtasks: [grandchild] });
+  const other = task("acme", 4, "other", "done");
+  const parent = task("acme", 1, "parent", "todo", { subtasks: [child, other] });
+  assert.deepEqual(subtaskMismatches(parent, todayWith([grandchild.id])).map((item) => item.title), ["grandchild"]);
+  assert.deepEqual(subtaskMismatches(parent, todayWith([child.id, other.id, parent.id])).map((item) => item.title), ["child", "other"]);
+  assert.deepEqual(subtaskMismatches(parent, todayWith([])), []);
+  assert.deepEqual(subtaskMismatches(parent, null), []);
+});
+
+test("todayStatusBadge flags a parent whose subtasks are out of sync and names them", () => {
+  assert.equal(todayStatusBadge(false, null, false, []), null);
+  const linked = todayStatusBadge(true, "doing", false, ["Write tests"]);
+  assert.equal(linked?.tone, "sync");
+  assert.equal(linked?.label, "Today · subtask out of sync");
+  assert.equal(linked?.title, "Linked in today's daily as Doing. Subtask out of sync with the daily: Write tests");
+  const unlinked = todayStatusBadge(false, null, false, ["A", "B"]);
+  assert.equal(unlinked?.tone, "sync");
+  assert.equal(unlinked?.label, "Subtask out of sync");
+  assert.equal(unlinked?.title, "Subtask out of sync with the daily: A, B");
+  const both = todayStatusBadge(true, "done", true, ["A"]);
+  assert.equal(both?.label, "Today · out of sync");
+  assert.equal(both?.title, `Linked in today's daily as ${BOARD_STATUS_LABEL.done}. The daily checkbox differs from this status. Subtask out of sync with the daily: A`);
+});
+
+test("dailyItemOutOfSync is true when the item or any of its children differ", () => {
+  assert.equal(dailyItemOutOfSync({ mismatch: false }), false);
+  assert.equal(dailyItemOutOfSync({ mismatch: false, children: [] }), false);
+  assert.equal(dailyItemOutOfSync({ mismatch: true, children: [] }), true);
+  assert.equal(dailyItemOutOfSync({ mismatch: false, children: [{ mismatch: false }, { mismatch: true }] }), true);
+});
+
+test("dailyItemOutOfSync and dailyItemRecurredToday leave an item recurred today out of the sync checks", () => {
+  assert.equal(dailyItemOutOfSync({ mismatch: true, recurredToday: true, children: [{ mismatch: true }] }), false);
+  assert.equal(dailyItemOutOfSync({ mismatch: true, recurredToday: false }), true);
+  assert.equal(dailyItemRecurredToday({ mismatch: false, recurredToday: true }), true);
+  assert.equal(dailyItemRecurredToday({ mismatch: false }), false);
+});
+
+test("isFinishedOccurrence spots a done copy of a recurring task and finishedOccurrenceIds adds its subtasks", () => {
+  const step = task("acme", 11, "Step", "done", { section: "done", depth: 1 });
+  const deep = task("acme", 12, "Deep", "done", { section: "done", depth: 2 });
+  const copy = task("acme", 10, "Report", "done", { section: "done", repeat: "every week", doneAt: "2026-10-27", subtasks: [{ ...step, subtasks: [deep] }] });
+  const plainDone = task("acme", 20, "Shipped", "done", { section: "done", doneAt: "2026-10-27" });
+  const original = task("acme", 1, "Report", "todo", { repeat: "every week" });
+  const leftOpen = task("acme", 2, "Report", "done", { repeat: "every week", doneAt: "2026-10-27" });
+  assert.equal(isFinishedOccurrence(copy, true), true);
+  assert.equal(isFinishedOccurrence(plainDone, true), false);
+  assert.equal(isFinishedOccurrence(original, true), false);
+  assert.equal(isFinishedOccurrence(leftOpen, true), false);
+  assert.equal(isFinishedOccurrence(leftOpen, false), true);
+  assert.equal(isFinishedOccurrence(original, false), false);
+  assert.deepEqual([...finishedOccurrenceIds([original, copy, plainDone], true)].sort(), [copy.id, deep.id, step.id].sort());
+  assert.deepEqual([...finishedOccurrenceIds([original, leftOpen], false)], [leftOpen.id]);
+  assert.deepEqual([...finishedOccurrenceIds([original, leftOpen], true)], []);
+  assert.equal(FINISHED_OCCURRENCE_HINT, "Finished occurrence - edit it in Obsidian");
+});
+
+test("taskMenuEntries offers only Open details for a finished occurrence", () => {
+  const copy = task("acme", 10, "Report", "done", { section: "done", repeat: "every week", doneAt: "2026-10-27", priority: 1 });
+  const entries = taskMenuEntries(copy, { levels: 3, addState: { visible: true, allowed: true, hint: "" }, inToday: true, outOfSync: true, dailyState: "todo", subtask: false, finished: true });
+  assert.deepEqual(entries.map((entry) => entry.action.type), ["details"]);
+  const open = taskMenuEntries(copy, { levels: 3, addState: { visible: true, allowed: true, hint: "" }, inToday: false, outOfSync: false, dailyState: null, subtask: false });
+  assert.ok(open.some((entry) => entry.action.type === "status"));
+  assert.ok(open.some((entry) => entry.action.type === "delegate"));
+});
+
+test("recurrenceNotice names the next due date or says the task was reopened", () => {
+  assert.equal(recurrenceNotice(task("acme", 1, "a", "todo", { due: "2026-11-02" })), "Done - next one on 02/11");
+  assert.equal(recurrenceNotice(task("acme", 1, "a")), "Done - reopened");
+});
+
+test("timeline view and zoom are persisted and validated", () => {
+  assert.deepEqual(TIMELINE_ZOOMS, ["week", "month", "quarter"]);
+  assert.equal(DEFAULT_BOARD_PREFS.timelineZoom, "month");
+  assert.equal(parseBoardPrefs(JSON.stringify({ view: "timeline" })).view, "timeline");
+  assert.equal(parseBoardPrefs(JSON.stringify({ timelineZoom: "quarter" })).timelineZoom, "quarter");
+  assert.equal(parseBoardPrefs(JSON.stringify({ timelineZoom: "decade" })).timelineZoom, "month");
+});
+
+test("sortTableTasks sorts by due date with undated tasks last in both directions", () => {
+  const tasks = [
+    task("acme", 1, "none"),
+    task("acme", 2, "late", "todo", { due: "2026-11-20" }),
+    task("acme", 3, "soon", "todo", { due: "2026-10-30" }),
+  ];
+  const titles = (dir: "asc" | "desc") => sortTableTasks(tasks, { key: "due", dir }, new Map()).map((item) => item.title);
+  assert.deepEqual(titles("asc"), ["soon", "late", "none"]);
+  assert.deepEqual(titles("desc"), ["late", "soon", "none"]);
+});
+
+test("validateNewTask checks the optional due date and newTaskBody sends it", () => {
+  const base = { projectId: "acme", title: "a", status: "todo" as const, reason: "", priority: null };
+  assert.equal(validateNewTask({ ...base, due: "" }), null);
+  assert.equal(validateNewTask({ ...base, due: "2026-10-31" }), null);
+  assert.equal(validateNewTask({ ...base, due: "2026-02-30" }), "The due date must be a valid date");
+  assert.deepEqual(newTaskBody({ ...base, due: "2026-10-31" }, null), { projectId: "acme", title: "a", status: "todo", due: "2026-10-31" });
+  assert.deepEqual(newTaskBody({ ...base, due: "" }, null), { projectId: "acme", title: "a", status: "todo" });
 });

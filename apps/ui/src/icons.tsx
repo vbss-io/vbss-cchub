@@ -259,6 +259,17 @@ export function IconCalendarPlus({ size = 14 }: IconProps) {
   );
 }
 
+export function IconRepeat({ size = 12 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <path d="M17 2l3 3-3 3" />
+      <path d="M4 11V9a4 4 0 0 1 4-4h12" />
+      <path d="M7 22l-3-3 3-3" />
+      <path d="M20 13v2a4 4 0 0 1-4 4H4" />
+    </svg>
+  );
+}
+
 export function IconRun({ size = 14 }: IconProps) {
   return (
     <svg {...svgProps(size)}>

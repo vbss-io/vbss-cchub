@@ -381,6 +381,7 @@ export function getSettings(): DelegationSettings {
       },
       closedKey: stored.get("daily.closedKey") ?? "closed",
       wikilinks: stored.get("daily.wikilinks") === "1",
+      projectOrder: storedStringArray(stored, "daily.projectOrder", []),
     },
     tasks: {
       root: stored.get("tasks.root") ?? null,
@@ -479,6 +480,7 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     if (patch.daily?.headings?.sessions !== undefined) upsertSettingStmt.run("daily.headings.sessions", patch.daily.headings.sessions);
     if (patch.daily?.closedKey !== undefined) upsertSettingStmt.run("daily.closedKey", patch.daily.closedKey);
     if (patch.daily?.wikilinks !== undefined) upsertSettingStmt.run("daily.wikilinks", patch.daily.wikilinks ? "1" : "0");
+    if (patch.daily?.projectOrder !== undefined) upsertSettingStmt.run("daily.projectOrder", JSON.stringify(patch.daily.projectOrder));
     if (patch.tasks?.root !== undefined) upsertSettingStmt.run("tasks.root", patch.tasks.root);
     if (patch.tasks?.section !== undefined) upsertSettingStmt.run("tasks.section", patch.tasks.section);
     if (patch.tasks?.prefixes?.blocked !== undefined) upsertSettingStmt.run("tasks.prefixes.blocked", JSON.stringify(patch.tasks.prefixes.blocked));

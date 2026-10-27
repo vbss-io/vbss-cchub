@@ -1,18 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { isSubtask, noteMoveAvailability, orderedChildren, taskMoveAvailability, type MoveDirection } from "../board-model";
-import type { BoardCheckbox, BoardNoteItem, BoardProject, BoardStatus, BoardTask } from "../delegation";
+import { FINISHED_OCCURRENCE_HINT, isSubtask, noteMoveAvailability, orderedChildren, taskMenuEntries, taskMoveAvailability, type MoveDirection } from "../board-model";
+import type { BoardChange, BoardCheckbox, BoardNoteItem, BoardProject, BoardStatus, BoardTask } from "../delegation";
 import { IconClose, IconExpand, IconRun } from "../icons";
 import { BoardActionsMenu, type BoardMenuItem } from "./BoardActionsMenu";
 import {
+  BoardDateFields,
+  BoardDatesReadOnly,
   BoardDoneStamp,
   BoardNoteAdd,
   BoardNoteRow,
+  BoardOutOfSyncBadge,
   BoardPrioritySelect,
+  BoardPriorityBadge,
   BoardReason,
+  BoardStatusChip,
   BoardStatusSelect,
   BoardTitle,
   BoardTodayBadge,
   type BoardNoteActions,
+  type BoardTodayControls,
 } from "./BoardParts";
 
 export interface BoardOrganizeActions {
@@ -40,6 +46,29 @@ interface TreeContext {
   onRename: (task: BoardTask, title: string) => void;
   onReason: (task: BoardTask, reason: string | null) => void;
   onPriority: (task: BoardTask, priority: number | null) => void;
+  today: BoardTodayControls;
+  finished: ReadonlySet<string>;
+  onSyncDaily: (task: BoardTask) => void;
+  onUseDaily: (task: BoardTask) => void;
+}
+
+function todayMenuItems(task: BoardTask, context: TreeContext, disabled: boolean): BoardMenuItem[] {
+  const entries = taskMenuEntries(task, {
+    levels: context.levels,
+    addState: context.today.addState,
+    inToday: context.today.isLinked(task.id),
+    outOfSync: context.today.isOutOfSync(task.id),
+    dailyState: context.today.dailyState(task.id),
+    subtask: true,
+  });
+  const items: BoardMenuItem[] = [];
+  for (const entry of entries) {
+    const base = { id: entry.id, label: entry.label, title: entry.title, disabled: disabled || entry.disabled };
+    if (entry.action.type === "today") items.push({ ...base, onSelect: () => context.today.onAdd(task) });
+    else if (entry.action.type === "sync-daily") items.push({ ...base, onSelect: () => context.onSyncDaily(task) });
+    else if (entry.action.type === "use-daily") items.push({ ...base, onSelect: () => context.onUseDaily(task) });
+  }
+  return items;
 }
 
 export function organizeMenuItems(tasks: BoardTask[], task: BoardTask, organize: BoardOrganizeActions, disabled: boolean): BoardMenuItem[] {
@@ -70,6 +99,7 @@ export function organizeMenuItems(tasks: BoardTask[], task: BoardTask, organize:
 
 function DrawerItems({ owner, context }: { owner: BoardTask; context: TreeContext }) {
   const busy = context.pending.has(owner.id) || context.organizing;
+  const locked = context.finished.has(owner.id);
   return (
     <ul className="board-tree">
       {orderedChildren(owner).map((item) =>
@@ -79,6 +109,7 @@ function DrawerItems({ owner, context }: { owner: BoardTask; context: TreeContex
             task={owner}
             note={item.note}
             disabled={busy}
+            readOnly={locked}
             actions={context.noteActions}
             move={{
               availability: noteMoveAvailability(owner, item.note),
@@ -89,7 +120,7 @@ function DrawerItems({ owner, context }: { owner: BoardTask; context: TreeContex
           <DrawerNode key={item.task.id} task={item.task} context={context} />
         ),
       )}
-      <BoardNoteAdd task={owner} disabled={busy} onAdd={context.noteActions.onAdd} />
+      {!locked && <BoardNoteAdd task={owner} disabled={busy} onAdd={context.noteActions.onAdd} />}
     </ul>
   );
 }
@@ -97,24 +128,39 @@ function DrawerItems({ owner, context }: { owner: BoardTask; context: TreeContex
 function DrawerNode({ task, context }: { task: BoardTask; context: TreeContext }) {
   const [editing, setEditing] = useState(false);
   const busy = context.pending.has(task.id) || context.organizing;
+  const locked = context.finished.has(task.id);
   return (
     <li className="board-tree__task">
       <div className="board-sub__row">
         <span className={`board-sub__title ${task.status === "done" ? "board-sub__title--done" : ""}`}>
-          <BoardTitle task={task} editing={editing} disabled={busy} onEditingChange={setEditing} onRename={(title) => context.onRename(task, title)} />
+          <BoardTitle task={task} editing={editing} disabled={busy} readOnly={locked} onEditingChange={setEditing} onRename={(title) => context.onRename(task, title)} />
         </span>
-        <BoardStatusSelect value={task.status} label={`Status of ${task.title}`} disabled={busy} onChange={(status) => context.onStatus(task, status)} />
-        <BoardPrioritySelect
-          value={task.priority}
-          levels={context.levels}
-          label={`Priority of ${task.title}`}
-          disabled={busy}
-          compact
-          onChange={(priority) => context.onPriority(task, priority)}
-        />
-        <BoardActionsMenu label={`Actions for ${task.title}`} disabled={busy} items={organizeMenuItems(context.tasks, task, context.organize, busy)} />
+        {locked ? (
+          <>
+            <BoardStatusChip status={task.status} />
+            <BoardPriorityBadge priority={task.priority} levels={context.levels} />
+          </>
+        ) : (
+          <>
+            <BoardStatusSelect value={task.status} label={`Status of ${task.title}`} disabled={busy} onChange={(status) => context.onStatus(task, status)} />
+            <BoardPrioritySelect
+              value={task.priority}
+              levels={context.levels}
+              label={`Priority of ${task.title}`}
+              disabled={busy}
+              compact
+              onChange={(priority) => context.onPriority(task, priority)}
+            />
+            <BoardActionsMenu
+              label={`Actions for ${task.title}`}
+              disabled={busy}
+              items={[...organizeMenuItems(context.tasks, task, context.organize, busy), ...todayMenuItems(task, context, busy)]}
+            />
+          </>
+        )}
       </div>
-      <BoardReason task={task} disabled={busy} onChange={(reason) => context.onReason(task, reason)} />
+      <BoardOutOfSyncBadge outOfSync={!locked && context.today.isLinked(task.id) && context.today.isOutOfSync(task.id)} />
+      <BoardReason task={task} disabled={busy} readOnly={locked} onChange={(reason) => context.onReason(task, reason)} />
       <DrawerItems owner={task} context={context} />
     </li>
   );
@@ -132,12 +178,17 @@ interface Props {
   inToday: boolean;
   todayCheckbox: BoardCheckbox | null;
   addState: BoardTodayAdd;
+  today: BoardTodayControls;
+  finished: ReadonlySet<string>;
+  onSyncDaily: (task: BoardTask) => void;
+  onUseDaily: (task: BoardTask) => void;
   noteActions: BoardNoteActions;
   organize: BoardOrganizeActions;
   onStatus: (task: BoardTask, status: BoardStatus) => void;
   onRename: (task: BoardTask, title: string) => void;
   onReason: (task: BoardTask, reason: string | null) => void;
   onPriority: (task: BoardTask, priority: number | null) => void;
+  onDates: (task: BoardTask, change: BoardChange) => void;
   onDelegate: (task: BoardTask) => void;
   onAddSubtask: (task: BoardTask) => void;
   onAddToday: (task: BoardTask) => void;
@@ -153,6 +204,8 @@ export function BoardDrawer(props: Props) {
   const panelRef = useRef<HTMLElement | null>(null);
   const opener = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
   const busy = pending.has(task.id) || organizing;
+  const outOfSync = inToday && props.today.isOutOfSync(task.id);
+  const dailyState = props.today.dailyState(task.id);
 
   useEffect(() => {
     panelRef.current?.focus();
@@ -196,7 +249,12 @@ export function BoardDrawer(props: Props) {
     onRename: props.onRename,
     onReason: props.onReason,
     onPriority: props.onPriority,
+    today: props.today,
+    finished: props.finished,
+    onSyncDaily: props.onSyncDaily,
+    onUseDaily: props.onUseDaily,
   };
+  const locked = props.finished.has(task.id);
 
   return (
     <>
@@ -214,7 +272,7 @@ export function BoardDrawer(props: Props) {
                 <IconExpand />
               </button>
               <h2 title={task.title}>
-                <BoardTitle task={task} editing={editing} disabled={busy} onEditingChange={setEditing} onRename={(title) => props.onRename(task, title)} />
+                <BoardTitle task={task} editing={editing} disabled={busy} readOnly={locked} onEditingChange={setEditing} onRename={(title) => props.onRename(task, title)} />
               </h2>
             </div>
             <p className="board-drawer__where small">
@@ -225,25 +283,46 @@ export function BoardDrawer(props: Props) {
                 </span>
               )}
             </p>
+            {locked && (
+              <p className="board-drawer__locked muted small" title={FINISHED_OCCURRENCE_HINT}>
+                {FINISHED_OCCURRENCE_HINT}
+              </p>
+            )}
             <div className="board-drawer__fields">
-              <BoardStatusSelect value={task.status} label={`Status of ${task.title}`} disabled={busy} onChange={(status) => props.onStatus(task, status)} />
-              <BoardPrioritySelect
-                value={task.priority}
-                levels={props.levels}
-                label={`Priority of ${task.title}`}
-                disabled={busy}
-                compact
-                onChange={(priority) => props.onPriority(task, priority)}
-              />
+              {locked ? (
+                <>
+                  <BoardStatusChip status={task.status} />
+                  <BoardPriorityBadge priority={task.priority} levels={props.levels} />
+                </>
+              ) : (
+                <>
+                  <BoardStatusSelect value={task.status} label={`Status of ${task.title}`} disabled={busy} onChange={(status) => props.onStatus(task, status)} />
+                  <BoardPrioritySelect
+                    value={task.priority}
+                    levels={props.levels}
+                    label={`Priority of ${task.title}`}
+                    disabled={busy}
+                    compact
+                    onChange={(priority) => props.onPriority(task, priority)}
+                  />
+                </>
+              )}
             </div>
-            <BoardReason task={task} disabled={busy} onChange={(reason) => props.onReason(task, reason)} />
+            {locked ? (
+              <BoardDatesReadOnly task={task} />
+            ) : (
+              <BoardDateFields key={`${task.id}:${task.repeat ?? ""}`} task={task} disabled={busy} onChange={(change) => props.onDates(task, change)} />
+            )}
+            <BoardReason task={task} disabled={busy} readOnly={locked} onChange={(reason) => props.onReason(task, reason)} />
             <div className="board-drawer__buttons">
-              <button className="act" disabled={busy} onClick={() => props.onDelegate(task)}>
-                <IconRun /> Delegate
-              </button>
-              {!inToday && addState.visible && (
+              {!locked && (
+                <button className="act" disabled={busy} onClick={() => props.onDelegate(task)}>
+                  <IconRun /> Delegate
+                </button>
+              )}
+              {!locked && !inToday && addState.visible && (
                 <button className="act" disabled={busy || !addState.allowed} title={addState.hint} onClick={() => props.onAddToday(task)}>
-                  Add to today
+                  {isSubtask(tasks, task) ? "Add this subtask to today" : "Add to today"}
                 </button>
               )}
               {project && (
@@ -256,7 +335,7 @@ export function BoardDrawer(props: Props) {
                   Open in editor
                 </button>
               )}
-              <BoardActionsMenu label={`Actions for ${task.title}`} disabled={busy} items={organizeMenuItems(tasks, task, props.organize, busy)} />
+              {!locked && <BoardActionsMenu label={`Actions for ${task.title}`} disabled={busy} items={organizeMenuItems(tasks, task, props.organize, busy)} />}
             </div>
           </div>
           <div className="drawer__actions">
@@ -271,7 +350,28 @@ export function BoardDrawer(props: Props) {
             <dt>Group</dt>
             <dd>{task.group ? <span className="chip">{task.group}</span> : <span className="muted">-</span>}</dd>
             <dt>Today</dt>
-            <dd>{inToday ? <BoardTodayBadge inToday checkbox={props.todayCheckbox} /> : <span className="muted">Not linked in today's daily</span>}</dd>
+            <dd>
+              {inToday ? (
+                <span className="board-drawer__today">
+                  <BoardTodayBadge inToday checkbox={props.todayCheckbox} />
+                  <BoardOutOfSyncBadge outOfSync={outOfSync} />
+                  {outOfSync && (
+                    <>
+                      <button className="act" disabled={busy} title="Write this status into today's daily" onClick={() => props.onSyncDaily(task)}>
+                        Sync to daily
+                      </button>
+                      {dailyState !== null && (
+                        <button className="act" disabled={busy} title="Set this task from today's daily checkbox" onClick={() => props.onUseDaily(task)}>
+                          Use daily
+                        </button>
+                      )}
+                    </>
+                  )}
+                </span>
+              ) : (
+                <span className="muted">Not linked in today's daily</span>
+              )}
+            </dd>
             <dt>Section</dt>
             <dd>{task.section === "done" ? <BoardDoneStamp task={task} /> : <span>Open</span>}</dd>
           </dl>
@@ -279,11 +379,13 @@ export function BoardDrawer(props: Props) {
             <h3 className="board-drawer__heading">Notes and subtasks</h3>
             <DrawerItems owner={task} context={context} />
           </section>
-          <div className="frow">
-            <button className="act" disabled={busy} onClick={() => props.onAddSubtask(task)}>
-              Add subtask
-            </button>
-          </div>
+          {!locked && (
+            <div className="frow">
+              <button className="act" disabled={busy} onClick={() => props.onAddSubtask(task)}>
+                Add subtask
+              </button>
+            </div>
+          )}
         </div>
       </aside>
     </>

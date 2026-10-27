@@ -4,6 +4,7 @@ import { BoardTaskPicker } from "../components/BoardTaskPicker";
 import { DailyTasksCheck } from "../components/DailyTasksCheck";
 import {
   appendNewItem,
+  canOrganizeFocus,
   carryOverFromYesterday,
   defaultYesterdayCarry,
   defaultYesterdayDone,
@@ -12,6 +13,7 @@ import {
   isDoingBlock,
   keepPickedDoingItems,
   mergeTrailIntoSummary,
+  organizeFocusNotice,
   parseMeetings,
   parseNewItems,
   shouldPersistWizardDraft,
@@ -27,6 +29,7 @@ import {
   getDaily,
   getDailyEntry,
   listDailySessions,
+  organizeDailyFocus,
   prepareDaily,
   saveDailyEntry,
   type DailyEntry,
@@ -35,6 +38,7 @@ import {
   type DailySession,
   type DelegationSettings,
 } from "../delegation";
+import { IconClose } from "../icons";
 import { countTasks, Markdown, renderInline, toggleTaskLine, type TaskFilter } from "../markdown";
 
 interface Props {
@@ -433,6 +437,9 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [generateBusy, setGenerateBusy] = useState(false);
   const [taskFilter, setTaskFilter] = useState<TaskFilter>(readStoredTaskFilter);
+  const [organizeBusy, setOrganizeBusy] = useState(false);
+  const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const noticeTimerRef = useRef<number | null>(null);
 
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardDate, setWizardDate] = useState<string | null>(null);
@@ -663,6 +670,38 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
     void save(text, freshBase);
   };
 
+  const showNotice = (kind: "ok" | "error", noticeText: string) => {
+    if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    setNotice({ kind, text: noticeText });
+    noticeTimerRef.current = window.setTimeout(() => setNotice(null), kind === "error" ? 8_000 : 4_000);
+  };
+
+  useEffect(
+    () => () => {
+      if (noticeTimerRef.current !== null) window.clearTimeout(noticeTimerRef.current);
+    },
+    [],
+  );
+
+  const organizeFocus = async () => {
+    if (!date) return;
+    const startText = textRef.current;
+    setOrganizeBusy(true);
+    try {
+      const result = await organizeDailyFocus(date, baseUpdatedAt);
+      if (textRef.current === startText) await loadEntry(date);
+      showNotice("ok", organizeFocusNotice(result.changed));
+    } catch (err) {
+      if (err instanceof DailyConflictError) {
+        setConflict({ content: err.content, updatedAt: err.updatedAt });
+        return;
+      }
+      showNotice("error", err instanceof Error ? err.message : "could not organize the focus");
+    } finally {
+      setOrganizeBusy(false);
+    }
+  };
+
   const handleToggle = (lineIndex: number, checked: boolean) => {
     const next = toggleTaskLine(text, lineIndex, checked);
     if (next === text) return;
@@ -877,6 +916,23 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
             Refine with assistant
           </button>
         )}
+        <button
+          className="act"
+          disabled={
+            !canOrganizeFocus({
+              enabled,
+              exists: entry?.exists === true,
+              dirty,
+              saving: saveStatus === "saving",
+              busy: organizeBusy || wizardOpen,
+              conflict: conflict !== null,
+            })
+          }
+          title="Group the focus items by project, in the project order"
+          onClick={() => void organizeFocus()}
+        >
+          {organizeBusy ? "Organizing…" : "Organize focus"}
+        </button>
         {obsidianHref && (
           <a className="act" href={obsidianHref}>
             Open in Obsidian
@@ -1048,9 +1104,19 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
               </ul>
             )}
           </div>
-          {settings?.features.tasks === true && date && <DailyTasksCheck date={date} subscribeDaily={subscribeDaily} subscribeBoard={subscribeBoard} />}
+          {settings?.features.tasks === true && date && <DailyTasksCheck date={date} onNotice={showNotice} subscribeDaily={subscribeDaily} subscribeBoard={subscribeBoard} />}
         </div>
       </div>
+      {notice && (
+        <div className="toasts" aria-live="polite">
+          <div className={`toast toast--${notice.kind}`} role="status">
+            <span className="toast__text">{notice.text}</span>
+            <button className="toast__close" onClick={() => setNotice(null)} aria-label="Dismiss">
+              <IconClose />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

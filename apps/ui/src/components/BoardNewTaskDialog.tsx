@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BOARD_STATUSES, BOARD_STATUS_LABEL, newTaskBody, projectBreadcrumb, projectOptions, supportsReason, validateNewTask } from "../board-model";
 import type { BoardCreateInput, BoardProject, BoardStatus, BoardTask } from "../delegation";
-import { BoardPrioritySelect } from "./BoardParts";
+import { BoardDateInput, BoardPrioritySelect } from "./BoardParts";
 
 interface Props {
   projects: BoardProject[];
@@ -18,11 +18,15 @@ export function BoardNewTaskDialog({ projects, defaultProjectId, parent, levels,
   const [status, setStatus] = useState<BoardStatus>("todo");
   const [reason, setReason] = useState("");
   const [priority, setPriority] = useState<number | null>(null);
+  const [due, setDue] = useState("");
+  const [dueInvalid, setDueInvalid] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const options = projectOptions(projects);
-  const draft = { projectId, title, status, reason, priority };
+  const draft = { projectId, title, status, reason, priority, due };
   const problem = validateNewTask(draft);
+  const blocked = problem ?? (dueInvalid ? "Fix the due date first" : null);
+  const onDueInvalid = useCallback((invalid: boolean) => setDueInvalid(invalid), []);
   const heading = parent ? "Add subtask" : "New task";
 
   useEffect(() => {
@@ -34,7 +38,7 @@ export function BoardNewTaskDialog({ projects, defaultProjectId, parent, levels,
   }, [onCancel, busy]);
 
   const submit = async () => {
-    if (problem !== null || busy) return;
+    if (blocked !== null || busy) return;
     setBusy(true);
     setError(null);
     try {
@@ -96,6 +100,10 @@ export function BoardNewTaskDialog({ projects, defaultProjectId, parent, levels,
             <span>Priority</span>
             <BoardPrioritySelect value={priority} levels={levels} label="Priority" onChange={setPriority} />
           </label>
+          <label className="field">
+            <span>Due (optional)</span>
+            <BoardDateInput ariaLabel="Due date" className="in" value={due === "" ? null : due} onCommit={(value) => setDue(value ?? "")} onInvalidChange={onDueInvalid} />
+          </label>
           {supportsReason(status) && (
             <label className="field">
               <span>Reason (optional)</span>
@@ -116,7 +124,7 @@ export function BoardNewTaskDialog({ projects, defaultProjectId, parent, levels,
           <button className="act act--ghost" disabled={busy} onClick={onCancel}>
             Cancel
           </button>
-          <button className="act act--focus" disabled={problem !== null || busy} title={problem ?? undefined} onClick={() => void submit()}>
+          <button className="act act--focus" disabled={blocked !== null || busy} title={blocked ?? undefined} onClick={() => void submit()}>
             {busy ? "Creating…" : "Create"}
           </button>
         </footer>

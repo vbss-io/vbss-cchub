@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { getDesktopNotifyStatus, sendToast, subscribe, type DesktopNotifyStatus, type HooksStatus } from "../api";
 import { formatList, parseList, validateTaskSettings } from "../board-model";
 import { GroupManager } from "../components/GroupManager";
-import { flushTrail, getTrail } from "../delegation";
+import { DailyProjectOrder } from "../components/DailyProjectOrder";
+import { flushTrail, getTasksBoard, getTrail, type BoardProject } from "../delegation";
 import type { ConnectStatus, DelegationSettings, McpClient, Runner, SettingsPatch, ShellKind, TrailDetail, TrailStatus, WidgetEdge, WidgetPanel } from "../delegation";
 import { COFFEE_URL, GITHUB_URL, SPONSORS_URL, notify, openExternal, playSound } from "../notify";
 import type { SessionClient } from "../types";
@@ -193,6 +194,8 @@ export function SettingsView(props: Props) {
   const [dailyHeadingSessions, setDailyHeadingSessions] = useState(settings?.daily.headings.sessions ?? "Sessions");
   const [dailyClosedKey, setDailyClosedKey] = useState(settings?.daily.closedKey ?? "closed");
   const [dailyWikilinks, setDailyWikilinks] = useState(settings?.daily.wikilinks ?? false);
+  const [dailyProjectOrder, setDailyProjectOrder] = useState<string[]>(settings?.daily.projectOrder ?? []);
+  const [orderProjects, setOrderProjects] = useState<BoardProject[]>([]);
   const [dailyBusy, setDailyBusy] = useState(false);
 
   const [tasksRoot, setTasksRoot] = useState(settings?.tasks.root ?? "");
@@ -258,6 +261,7 @@ export function SettingsView(props: Props) {
     setDailyHeadingSessions(settings?.daily.headings.sessions ?? "Sessions");
     setDailyClosedKey(settings?.daily.closedKey ?? "closed");
     setDailyWikilinks(settings?.daily.wikilinks ?? false);
+    setDailyProjectOrder(settings?.daily.projectOrder ?? []);
     setTasksRoot(settings?.tasks.root ?? "");
     setTasksSection(settings?.tasks.section ?? "Open loops");
     setTasksBlocked(formatList(settings?.tasks.prefixes.blocked ?? ["BLOCK", "BLOCKED"]));
@@ -280,6 +284,25 @@ export function SettingsView(props: Props) {
     setTrailPrompt(settings?.trail?.prompt ?? "");
     setTrailHubEvents(settings?.trail?.hubEvents ?? true);
   }, [settings]);
+
+  const dailyFeatureOn = settings?.features.daily ?? false;
+  useEffect(() => {
+    if (!dailyFeatureOn) {
+      setOrderProjects([]);
+      return;
+    }
+    let alive = true;
+    getTasksBoard()
+      .then((board) => {
+        if (alive) setOrderProjects(board.projects);
+      })
+      .catch(() => {
+        if (alive) setOrderProjects([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [dailyFeatureOn]);
 
   const trailDirty =
     trailDir.trim() !== (settings?.trail?.dir ?? "") ||
@@ -336,7 +359,8 @@ export function SettingsView(props: Props) {
     dailyHeadingMeetings.trim() !== (settings?.daily.headings.meetings ?? "Meetings") ||
     dailyHeadingSessions.trim() !== (settings?.daily.headings.sessions ?? "Sessions") ||
     dailyClosedKey.trim() !== (settings?.daily.closedKey ?? "closed") ||
-    dailyWikilinks !== (settings?.daily.wikilinks ?? false);
+    dailyWikilinks !== (settings?.daily.wikilinks ?? false) ||
+    JSON.stringify(dailyProjectOrder) !== JSON.stringify(settings?.daily.projectOrder ?? []);
 
   const saveDaily = async () => {
     setDailyBusy(true);
@@ -354,6 +378,7 @@ export function SettingsView(props: Props) {
           },
           closedKey: dailyClosedKey.trim() || "closed",
           wikilinks: dailyWikilinks,
+          projectOrder: dailyProjectOrder,
         },
       });
     } finally {
@@ -858,6 +883,7 @@ export function SettingsView(props: Props) {
               <input type="checkbox" checked={dailyWikilinks} onChange={(event) => setDailyWikilinks(event.target.checked)} disabled={!enabled} />
               Link projects as [[Project]] in focus items
             </label>
+            <DailyProjectOrder projects={orderProjects} order={dailyProjectOrder} disabled={!enabled} onChange={setDailyProjectOrder} />
             <div className="actions">
               <button className="act" disabled={!enabled || dailyBusy} onClick={() => void resetDailyPrompt()}>
                 Reset to default

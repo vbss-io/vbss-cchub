@@ -143,6 +143,7 @@ export interface DailyFeatureSettings {
   headings: DailyHeadings;
   closedKey: string;
   wikilinks: boolean;
+  projectOrder: string[];
 }
 
 export interface TasksPrefixes {
