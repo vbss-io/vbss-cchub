@@ -52,8 +52,13 @@ const FEATURES: Feature[] = [
     body: "A link, on the LAN or public through ngrok, that lets a teammate and their assistant ask your Claude about a workspace or delegate into it. Trust levels, a key per link, expiry, rate limits and a log of every answer.",
   },
   {
+    title: "Tasks from your notes",
+    body: "Kanban, Table and Timeline over the project notes in your vault. Status, priority, start and due dates and repeat rules live in the Markdown itself, edits flow both ways with Obsidian, and any task can be handed to an agent.",
+    tag: "opt-in",
+  },
+  {
     title: "Daily note & session trail",
-    body: "Point it at your Markdown or Obsidian vault for a guided daily note (close yesterday, plan today) that syncs both ways, and a trail that keeps the key points of every session, light, medium or high detail.",
+    body: "Point it at your Markdown or Obsidian vault for a guided daily note (close yesterday, plan today) that stays in sync with Tasks, and a trail that keeps the key points of every session, light, medium or high detail.",
     tag: "opt-in",
   },
 ];
@@ -96,6 +101,34 @@ const TOUR: TourItem[] = [
     ],
     image: "/shot-flow.png",
     alt: "CCHUB flow map with workspaces, sessions, subagents and delegated tasks",
+  },
+  {
+    id: "tasks",
+    eyebrow: "Tasks",
+    title: "Your project notes, as a board.",
+    body: "Every note in your projects folder is a project, and its checkboxes are the tasks. Move a card and the line in the note changes; edit the note in Obsidian and the board follows.",
+    points: [
+      "To-do, doing and done checkboxes, plus Blocked, Hold and Archived with a reason",
+      "Priorities, subtasks and notes, filtered by project, status and priority",
+      "Finished tasks move to a Done section with the date they closed",
+      "Delegate a task to a workspace with a prompt built from it",
+    ],
+    image: "/shot-tasks.png",
+    alt: "CCHUB Tasks board with Blocked, Hold, To-Do, Doing and Done columns built from Markdown project notes",
+  },
+  {
+    id: "timeline",
+    eyebrow: "Timeline",
+    title: "See what lands this week, and what slipped.",
+    body: "Give a task a start and a due date and it shows up on the Timeline, grouped by project, next to today. Dates use the Obsidian Tasks format, so your other tools read them too.",
+    points: [
+      "Start, scheduled and due dates, with overdue work in red",
+      "Repeat rules: finishing a recurring task logs it and schedules the next one",
+      "Week, month and quarter zoom",
+      "Add a task to today's daily note in one click, subtasks included",
+    ],
+    image: "/shot-timeline.png",
+    alt: "CCHUB Timeline view with start-to-due bars grouped by project and a line marking today",
   },
   {
     id: "daily",
@@ -259,7 +292,7 @@ export function App() {
 
         <section id="tour" className="section tour">
           <h2>A closer look</h2>
-          <p className="section__sub">Real screens from v1.2, with demo data.</p>
+          <p className="section__sub">Real screens from v1.2 and v1.4, with demo data.</p>
           {TOUR.map((item, index) => (
             <article key={item.id} id={item.id} className={`tour__row${index % 2 === 1 ? " tour__row--flip" : ""}`}>
               <div className="tour__text">
