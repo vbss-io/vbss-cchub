@@ -8,6 +8,7 @@ on:
       - 'apps/landing/**'
       - package-lock.json
       - .github/workflows/deploy.yml
+      - '.github/deploy/**'
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -22,9 +23,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
@@ -33,9 +34,12 @@ jobs:
           npm ci -w @cch/landing
           npm run build -w @cch/landing
 
+      - name: Install publish tool
+        run: npm ci --prefix .github/deploy --ignore-scripts --no-audit --no-fund
+
       - name: Publish
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.STATIC_DEPLOY_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.STATIC_DEPLOY_ACCOUNT }}
           PROJECT: ${{ secrets.STATIC_DEPLOY_PROJECT }}
-        run: npx --yes wrangler@4.151.0 pages deploy apps/landing/dist --project-name="$PROJECT" --branch=prd --commit-hash="$GITHUB_SHA"
+        run: .github/deploy/node_modules/.bin/wrangler pages deploy apps/landing/dist --project-name="$PROJECT" --branch=prd --commit-hash="$GITHUB_SHA"
