@@ -24,3 +24,5 @@ PLANO.md
 
 # Claude Code agent worktrees
 .claude/worktrees/
+
+coverage/

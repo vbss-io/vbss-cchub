@@ -18,5 +18,20 @@
   },
   "devDependencies": {
     "concurrently": "^10.0.3"
+  },
+  "overrides": {
+    "@asamuzakjp/css-color": "7.1.7",
+    "@asamuzakjp/dom-selector": "10.0.4",
+    "@babel/helper-string-parser": "7.29.7",
+    "@babel/parser": "7.29.8",
+    "@babel/runtime": "7.29.10",
+    "@babel/types": "7.29.8",
+    "@csstools/css-color-parser": "4.2.6",
+    "@csstools/css-syntax-patches-for-csstree": "1.1.15",
+    "@types/estree": "1.0.9",
+    "magic-string": "1.4.3",
+    "parse5": "8.0.1",
+    "tinybench": "6.2.2",
+    "tldts-core": "7.4.19"
   }
 }
