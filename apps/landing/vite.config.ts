@@ -20,6 +20,7 @@ export default defineConfig({
         "src/test-support/**",
       ],
       reporter: ["text", "html", "lcov", "json-summary"],
+      thresholds: { statements: 90, branches: 80, functions: 90, lines: 90 },
     },
   },
 });

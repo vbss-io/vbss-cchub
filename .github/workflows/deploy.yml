@@ -29,10 +29,17 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install
+        run: npm ci -w @cch/landing
+
+      - name: Typecheck
+        run: npm run typecheck -w @cch/landing
+
+      - name: Coverage gate
+        run: npm run test:coverage -w @cch/landing
+
       - name: Build
-        run: |
-          npm ci -w @cch/landing
-          npm run build -w @cch/landing
+        run: npm run build -w @cch/landing
 
       - name: Install publish tool
         run: npm ci --prefix .github/deploy --ignore-scripts --no-audit --no-fund
