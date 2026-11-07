@@ -18,19 +18,41 @@ permissions:
   contents: read
 
 jobs:
-  publish:
-    name: Publish landing
+  build:
+    name: Build landing
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
-      - name: Install
-        run: npm ci -w @cch/landing
+      - name: Install (locked, no scripts)
+        run: npm ci -w @cch/landing --ignore-scripts --no-audit --no-fund
+
+      - name: Lock guard (lockfile diff and installed tree)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -o pipefail
+          BASE=origin/main
+          if [ "$EVENT_NAME" = "push" ]; then
+            BASE="$BEFORE_SHA"
+            if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+              BASE=HEAD~1
+            fi
+          fi
+          echo "lock-guard base: $BASE"
+          node .github/lock-guard.mjs --base "$BASE"
+          node .github/lock-guard.mjs --base HEAD --installed .
+
+      - name: Audit production dependencies
+        run: node .github/audit-gate.mjs
 
       - name: Typecheck
         run: npm run typecheck -w @cch/landing
@@ -40,6 +62,31 @@ jobs:
 
       - name: Build
         run: npm run build -w @cch/landing
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # audited
+        with:
+          name: landing-dist
+          path: apps/landing/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish landing
+    needs: build
+    if: github.ref == 'refs/heads/prd'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # audited
+        with:
+          name: landing-dist
+          path: apps/landing/dist
 
       - name: Install publish tool
         run: npm ci --prefix .github/deploy --ignore-scripts --no-audit --no-fund

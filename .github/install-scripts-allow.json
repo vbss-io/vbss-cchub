@@ -1,0 +1,7 @@
+[
+  {
+    "package": "esbuild",
+    "version": "0.28.1",
+    "reason": "postinstall only verifies the platform binary; never run in CI (install uses --ignore-scripts) and the landing build does not need it"
+  }
+]
