@@ -4,5 +4,8 @@
   "description": "Pinned publish tool for CI; installed with npm ci so every transitive package is locked by integrity hash",
   "devDependencies": {
     "wrangler": "4.151.0"
+  },
+  "overrides": {
+    "undici": "7.30.1"
   }
 }

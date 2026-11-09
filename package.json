@@ -17,7 +17,7 @@
     "test": "npm test -w @cch/server"
   },
   "devDependencies": {
-    "concurrently": "^10.0.3"
+    "concurrently": "^10.0.6"
   },
   "overrides": {
     "@asamuzakjp/css-color": "7.1.7",
@@ -31,6 +31,8 @@
     "@types/estree": "1.0.9",
     "magic-string": "1.4.3",
     "parse5": "8.0.1",
+    "qs": "6.16.1",
+    "rolldown": "1.1.5",
     "tinybench": "6.2.2",
     "tldts-core": "7.4.19"
   }
