@@ -105,7 +105,7 @@ export function BackupsPanel() {
             <dt>Vault snapshots</dt>
             <dd>
               <span className="path backups__path">{load.overview.snapshotsDir}</span>
-              <span className="muted small">{load.overview.snapshotDays} days of vault snapshots</span>
+              <span className="muted small">{load.overview.snapshotDays} {load.overview.snapshotDays === 1 ? "day" : "days"} of vault snapshots</span>
             </dd>
           </dl>
         </>

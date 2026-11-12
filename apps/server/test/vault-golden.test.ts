@@ -30,6 +30,7 @@ const BOM = String.fromCharCode(0xfeff);
 const FIXTURE_FILES = [
   "_templates/daily.md",
   "daily/2026-11-10.md",
+  "daily/2026-11-11.md",
   "daily/2026-11-12.md",
   "projects/_about.md",
   "projects/acme/acme.md",
@@ -38,7 +39,7 @@ const FIXTURE_FILES = [
   "projects/initech.md",
 ];
 const PROJECT_FILES = ["acme/acme", "alex-personal", "globex/globex", "initech"];
-const DAILY_DATES = ["2026-11-10", "2026-11-12"];
+const DAILY_DATES = ["2026-11-10", "2026-11-11", "2026-11-12"];
 const sandboxes: string[] = [];
 
 function listFiles(dir: string): string[] {
@@ -157,7 +158,10 @@ describe("golden vault fixture", () => {
 
   it("keeps the byte-level traits the round-trip depends on", () => {
     const bytes = (rel: string): Buffer => readFileSync(join(GOLDEN, rel));
-    assert.deepEqual([...bytes("projects/initech.md").subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+    for (const rel of ["projects/initech.md", "daily/2026-11-11.md"]) {
+      assert.deepEqual([...bytes(rel).subarray(0, 3)], [0xef, 0xbb, 0xbf], rel);
+      assert.equal(bytes(rel).toString("utf8").includes("\r"), false, rel);
+    }
     for (const rel of ["projects/alex-personal.md", "daily/2026-11-10.md"]) {
       const text = bytes(rel).toString("utf8");
       assert.ok(text.includes("\r\n"), rel);
@@ -462,6 +466,18 @@ describe("golden vault: daily round-trip", () => {
     assert.equal(after.replace(/\r\n/g, "").includes("\n"), false);
   });
 
+  it("keeps the BOM of a daily through a read and a write", () => {
+    const root = freshVault();
+    const settings = settingsFor(root);
+    const before = readFileSync(join(root, "daily", "2026-11-11.md"));
+    const content = daily.readDaily(settings, "2026-11-11").content;
+    assert.equal(content.startsWith(BOM), true);
+    daily.writeDaily(settings, "2026-11-11", content);
+    const after = readFileSync(join(root, "daily", "2026-11-11.md"));
+    assert.deepEqual([...after.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+    assert.equal(after.equals(before), true);
+  });
+
   it("reads the template and renders the date without touching the rest", () => {
     const root = freshVault();
     const settings = settingsFor(root);
@@ -505,10 +521,10 @@ describe("golden vault: daily round-trip", () => {
     );
   });
 
-  it("changes only the checked line when a focus item is ticked, in LF and in CRLF dailies", () => {
+  it("changes only the checked line when a focus item is ticked, in LF, CRLF and BOM dailies", () => {
     const root = freshVault();
     const settings = settingsFor(root);
-    for (const [date, title] of [["2026-11-12", "Renew vendor contract"], ["2026-11-10", "Banner copy review"]] as const) {
+    for (const [date, title] of [["2026-11-12", "Renew vendor contract"], ["2026-11-10", "Banner copy review"], ["2026-11-11", "Publish the status page"]] as const) {
       const before = daily.readDaily(settings, date).content;
       const task = daily.parseTaskLines(before).find((entry) => entry.text.includes(title));
       assert.ok(task, title);

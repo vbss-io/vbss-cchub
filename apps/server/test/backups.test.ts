@@ -175,6 +175,53 @@ describe("upgrade backup", () => {
     assert.deepEqual(backups.listBackups(), []);
   });
 
+  it("does not record the version after a failed upgrade backup, so the next boot retries it", () => {
+    writeFileSync(dbPath, "this is not a database");
+    assert.equal(backups.upgradeBackupIfNeeded("1.4.0", at(0)), null);
+    backups.recordAppVersion("1.4.0");
+    assert.equal(existsSync(join(backupsDir, "last-version")), false);
+    rmSync(dbPath, { force: true });
+    seedDb(dbPath, ["after the fix"]);
+    const retry = backups.upgradeBackupIfNeeded("1.4.0", at(1));
+    assert.ok(retry);
+    assert.deepEqual(bodies(join(backupsDir, retry.file)), ["after the fix"]);
+    backups.recordAppVersion("1.4.0");
+    assert.equal(readFileSync(join(backupsDir, "last-version"), "utf8").trim(), "1.4.0");
+  });
+
+  it("still records a version other than the one whose upgrade backup failed", () => {
+    writeFileSync(dbPath, "this is not a database");
+    backups.upgradeBackupIfNeeded("1.5.0", at(0));
+    backups.recordAppVersion("1.4.0");
+    assert.equal(readFileSync(join(backupsDir, "last-version"), "utf8").trim(), "1.4.0");
+  });
+
+  it("keeps a failed upgrade backup visible after a later successful daily backup and clears it once the upgrade backup succeeds", async () => {
+    writeFileSync(dbPath, "this is not a database");
+    assert.equal(backups.upgradeBackupIfNeeded("1.4.0", at(0)), null);
+    rmSync(dbPath, { force: true });
+    seedDb(dbPath, ["x"]);
+    await backups.backupDatabase("daily", at(1));
+    const afterDaily = backups.backupsSummary().lastError;
+    assert.equal(afterDaily?.at, at(0).getTime());
+    assert.match(afterDaily?.message ?? "", /^upgrade backup failed: /);
+    assert.ok(backups.upgradeBackupIfNeeded("1.4.0", at(2)));
+    assert.equal(backups.backupsSummary().lastError, null);
+  });
+
+  it("reports the most recent unresolved error across reasons", async () => {
+    writeFileSync(dbPath, "this is not a database");
+    backups.upgradeBackupIfNeeded("1.4.0", at(0));
+    await assert.rejects(backups.backupDatabase("manual", at(1)));
+    assert.equal(backups.lastBackupError()?.at, at(1).getTime());
+    assert.match(backups.lastBackupError()?.message ?? "", /^manual backup failed: /);
+    rmSync(dbPath, { force: true });
+    seedDb(dbPath, ["x"]);
+    await backups.backupDatabase("manual", at(2));
+    assert.equal(backups.lastBackupError()?.at, at(0).getTime());
+    assert.match(backups.lastBackupError()?.message ?? "", /^upgrade backup failed: /);
+  });
+
   it("summarizes backups, last error and folders for the UI", () => {
     seedDb(dbPath, ["x"]);
     backups.upgradeBackupIfNeeded("1.4.0", at(0));

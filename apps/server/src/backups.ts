@@ -38,27 +38,34 @@ const NAME_RE = /^hub-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(upgrade|daily
 const VERSION_FILE = "last-version";
 const PARTIAL_SUFFIX = ".partial";
 
-let lastError: BackupError | null = null;
+const errorsByReason = new Map<BackupReason, BackupError>();
+let failedUpgradeVersion: string | null = null;
 
 export function backupsDir(): string {
   return join(config.dataDir, "backups");
 }
 
 export function lastBackupError(): BackupError | null {
-  return lastError;
+  let latest: BackupError | null = null;
+  for (const error of errorsByReason.values()) {
+    if (latest === null || error.at >= latest.at) latest = error;
+  }
+  return latest;
 }
 
 export function resetBackupError(): void {
-  lastError = null;
+  errorsByReason.clear();
+  failedUpgradeVersion = null;
 }
 
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function recordError(err: unknown, now: Date): void {
-  lastError = { at: now.getTime(), message: messageOf(err) };
-  console.error(`database backup failed: ${lastError.message}`);
+function recordError(reason: BackupReason, err: unknown, now: Date): void {
+  const error = { at: now.getTime(), message: `${reason} backup failed: ${messageOf(err)}` };
+  errorsByReason.set(reason, error);
+  console.error(`database ${error.message}`);
 }
 
 function two(value: number): string {
@@ -141,7 +148,7 @@ function complete(reserved: Reserved, reason: BackupReason): BackupEntry {
   rotateBackups(reason, reserved.dir);
   const entry = parseEntry(reserved.dir, reserved.name);
   if (!entry) throw new Error("backup file missing after write");
-  lastError = null;
+  errorsByReason.delete(reason);
   return entry;
 }
 
@@ -166,7 +173,7 @@ export async function backupDatabase(reason: BackupReason, now = new Date()): Pr
     return complete(reserved, reason);
   } catch (err) {
     discard(reserved);
-    recordError(err, now);
+    recordError(reason, err, now);
     throw err;
   }
 }
@@ -184,7 +191,7 @@ function backupDatabaseSync(reason: BackupReason, now: Date): BackupEntry {
     return complete(reserved, reason);
   } catch (err) {
     discard(reserved);
-    recordError(err, now);
+    recordError(reason, err, now);
     throw err;
   }
 }
@@ -205,13 +212,17 @@ export function upgradeBackupIfNeeded(version: string, now = new Date()): Backup
   if (!existsSync(config.dbPath)) return null;
   if (readRecordedVersion() === version) return null;
   try {
-    return backupDatabaseSync("upgrade", now);
+    const entry = backupDatabaseSync("upgrade", now);
+    failedUpgradeVersion = null;
+    return entry;
   } catch {
+    failedUpgradeVersion = version;
     return null;
   }
 }
 
 export function recordAppVersion(version: string): void {
+  if (failedUpgradeVersion === version) return;
   try {
     if (readRecordedVersion() === version) return;
     mkdirSync(backupsDir(), { recursive: true });
@@ -235,7 +246,7 @@ export function backupsSummary(): BackupsSummary {
   const snapshotsDir = vaultSnapshotsDir() ?? join(config.dataDir, "vault-snapshots");
   return {
     backups: listBackups(),
-    lastError,
+    lastError: lastBackupError(),
     backupsDir: backupsDir(),
     snapshotsDir,
     snapshotDays: snapshotDayCount(snapshotsDir),

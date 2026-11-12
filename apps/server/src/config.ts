@@ -99,6 +99,7 @@ export const config = {
   mcpEntry: resourceDir ? join(resourceDir, "mcp.cjs") : join(serverDir, "dist", "mcp.js"),
   shellDir: resourceDir ? join(resourceDir, "shell") : join(serverDir, "shell"),
   delegationEnabled: process.env.HUB_DELEGATION === "1",
+  previewMode: process.env.HUB_PREVIEW === "1",
   claudeBin: process.env.HUB_CLAUDE_BIN ?? "claude",
   claudeArgsPrefix: parseJsonStringArray(process.env.HUB_CLAUDE_ARGS_PREFIX),
   codexBin: process.env.HUB_CODEX_BIN ?? newestCodexBinary() ?? "codex",

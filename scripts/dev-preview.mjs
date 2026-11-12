@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -46,6 +46,66 @@ const treeBytes = (path) => {
   if (!stats.isDirectory()) return stats.size;
   return readdirSync(path).reduce((total, entry) => total + treeBytes(join(path, entry)), 0);
 };
+const stringEnd = (text, start) => {
+  let index = start + 1;
+  while (index < text.length && text[index] !== '"') index += text[index] === "\\" ? 2 : 1;
+  return index;
+};
+
+const parseJsonString = (literal) => {
+  try {
+    return JSON.parse(literal);
+  } catch {
+    return null;
+  }
+};
+
+const absolutizeFolderPaths = (text, baseDir, contextName) => {
+  const frames = [];
+  let out = "";
+  let copied = 0;
+  let count = 0;
+  let index = 0;
+  while (index < text.length) {
+    const ch = text[index];
+    const next = text[index + 1];
+    const top = frames[frames.length - 1];
+    if (ch === "/" && next === "/") {
+      const end = text.indexOf("\n", index);
+      index = end < 0 ? text.length : end;
+    } else if (ch === "/" && next === "*") {
+      const end = text.indexOf("*/", index + 2);
+      index = end < 0 ? text.length : end + 2;
+    } else if (ch === "{" || ch === "[") {
+      frames.push({ array: ch === "[", parentKey: top ? top.key : null, key: null, expectKey: ch === "{" });
+      index += 1;
+    } else if (ch === "}" || ch === "]") {
+      frames.pop();
+      index += 1;
+    } else if (ch === "," && top) {
+      top.key = null;
+      top.expectKey = !top.array;
+      index += 1;
+    } else if (ch === ":" && top) {
+      top.expectKey = false;
+      index += 1;
+    } else if (ch === '"') {
+      const end = stringEnd(text, index);
+      const value = parseJsonString(text.slice(index, end + 1));
+      if (top && !top.array && top.expectKey) {
+        top.key = value;
+      } else if (frames.length === 3 && frames[1].array && frames[1].parentKey === "folders" && top.key === "path" && typeof value === "string" && value.length > 0 && !isAbsolute(value) && value !== contextName) {
+        out += text.slice(copied, index) + JSON.stringify(resolve(baseDir, value).replace(/\\/g, "/"));
+        copied = end + 1;
+        count += 1;
+      }
+      index = end + 1;
+    } else {
+      index += 1;
+    }
+  }
+  return { text: out + text.slice(copied), count };
+};
 const removeLink = (path) => {
   if (!lstatSync(path, { throwIfNoEntry: false })) return;
   try {
@@ -76,7 +136,7 @@ const prepareFromReal = async () => {
   const homeDir = join(dataDir, "home");
   const codexHomeCopy = join(homeDir, ".codex");
   const sessionsLink = join(codexHomeCopy, "sessions");
-  const summary = { reused: false, vaultBytes: 0, remapped: [], warnings: [], workspaceFiles: 0 };
+  const summary = { reused: false, vaultBytes: 0, remapped: [], warnings: [], workspaceFiles: 0, absolutizedFolders: 0 };
 
   mkdirSync(dataDir, { recursive: true });
   removeDbFiles(partialDb);
@@ -172,8 +232,12 @@ const prepareFromReal = async () => {
         for (const entry of readdirSync(realWorkspaces)) {
           const file = join(realWorkspaces, entry);
           if (!entry.endsWith(WORKSPACE_EXT) || !lstatSync(file).isFile()) continue;
-          cpSync(file, join(workspacesDir, entry));
+          const contextName = entry.slice(0, -WORKSPACE_EXT.length);
+          const rewritten = absolutizeFolderPaths(readFileSync(file, "utf8"), realWorkspaces, contextName);
+          writeFileSync(join(workspacesDir, entry), rewritten.text);
+          mkdirSync(join(workspacesDir, contextName), { recursive: true });
           summary.workspaceFiles += 1;
+          summary.absolutizedFolders += rewritten.count;
         }
       } else if (settings.workspacesRoot) {
         summary.warnings.push(`workspacesRoot ${settings.workspacesRoot} is not a directory; workspaces copy is empty`);
@@ -244,6 +308,7 @@ if (codexHome) serverEnv.CODEX_HOME = codexHome;
 if (realPrep) {
   for (const key of ["HUB_DEV_SEED", "HUB_SECOND_BRAIN", "HUB_WORKSPACES_ROOT", "HUB_EDITOR", "HUB_RESOURCE_DIR", "HUB_STATIC_DIR", "HUB_APP_EXE", "HUB_PARENT_PID", "HUB_URL"]) delete serverEnv[key];
   Object.assign(serverEnv, realPrep.env);
+  serverEnv.HUB_PREVIEW = "1";
 }
 
 const children = [];
@@ -322,7 +387,8 @@ if (realPrep) {
   for (const warning of summary.warnings) console.log(`[from-real] WARNING:    ${warning}`);
   console.log(`[from-real] isolation:  HUB_HOME ${realPrep.homeDir}; fake claude/codex/ngrok runners; no Claude credentials; Claude projects and Codex sessions are read-only`);
   console.log(`[from-real] open:       ${uiOrigin}`);
-  console.log("[from-real] real hub, vault and home are untouched");
+  console.log(`[from-real] workspaces: ${summary.workspaceFiles} ${WORKSPACE_EXT} file(s) copied, ${summary.absolutizedFolders} folder path(s) rewritten to absolute paths of your real repos`);
+  console.log("[from-real] real hub db, vault and home are untouched; git writes to your repos are disabled in this preview (merge, discard and worktree creation are refused)");
   console.log("[from-real] ----------------------------------------------");
 }
 if (seed) await seedData();

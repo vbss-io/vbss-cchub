@@ -6,7 +6,7 @@ import { appendHubSource } from "./second-brain.js";
 import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail, listTasks } from "./delegation-store.js";
 import { allocatePortBase, portRangeOf } from "./task-ports.js";
 import type { CodexSandbox, Isolation, IsolationReason, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
-import { createTaskWorktree, worktreeMainRepo, WorktreeError } from "./worktrees.js";
+import { createTaskWorktree, PreviewWriteError, worktreeMainRepo, WorktreeError } from "./worktrees.js";
 import { finishShareRequestByTask, getShare } from "./share-store.js";
 import { endSession, getSession, listClaims, releaseClaimsOfSession } from "./db.js";
 import { SHARE_CREATED_BY_PREFIX, implementGuardrail, implementProfile, type RunProfile, type TrustLevel } from "./share-types.js";
@@ -389,7 +389,7 @@ export function prepareWorktree(
   try {
     return createTaskWorktree({ repoPath: target.repoPath, repoName: target.repo, taskId: id, root: target.cwd });
   } catch (err) {
-    if (reason === "busy-repo" && err instanceof WorktreeError) return null;
+    if (reason === "busy-repo" && err instanceof WorktreeError && !(err instanceof PreviewWriteError)) return null;
     throw err;
   }
 }

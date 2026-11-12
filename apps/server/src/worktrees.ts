@@ -2,6 +2,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { existsSync, lstatSync, rmdirSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { config } from "./config.js";
 import type { TaskRecord, WorktreeInfo } from "./delegation-types.js";
 
 const execFileAsync = promisify(execFile);
@@ -18,11 +19,42 @@ export class WorktreeError extends Error {
   }
 }
 
+export class PreviewWriteError extends WorktreeError {
+  constructor() {
+    super("git writes are disabled in preview mode", 403);
+    this.name = "PreviewWriteError";
+  }
+}
+
+const READ_ONLY_GIT_COMMANDS = new Set(["status", "rev-parse", "log", "diff", "show", "ls-files", "merge-base", "for-each-ref"]);
+const READ_ONLY_BRANCH_FLAGS = new Set(["--list", "--show-current"]);
+const READ_ONLY_CONFIG_FLAGS = new Set(["--get", "--get-all", "--get-regexp"]);
+
+export function isReadOnlyGit(args: string[]): boolean {
+  const [command, first] = args;
+  if (command === undefined) return false;
+  if (READ_ONLY_GIT_COMMANDS.has(command)) return true;
+  if (command === "worktree") return first === "list";
+  if (command === "branch") return first !== undefined && READ_ONLY_BRANCH_FLAGS.has(first);
+  if (command === "config") return first !== undefined && READ_ONLY_CONFIG_FLAGS.has(first);
+  return false;
+}
+
+function assertGitAllowed(args: string[]): void {
+  if (config.previewMode && !isReadOnlyGit(args)) throw new PreviewWriteError();
+}
+
+export function assertGitWritable(): void {
+  if (config.previewMode) throw new PreviewWriteError();
+}
+
 function git(cwd: string, args: string[]): string {
+  assertGitAllowed(args);
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true }).trim();
 }
 
 async function gitAsync(cwd: string, args: string[]): Promise<string> {
+  assertGitAllowed(args);
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { windowsHide: true });
   return stdout.trim();
 }
@@ -92,6 +124,7 @@ export function createTaskWorktree(input: {
   taskId: string;
   root: string;
 }): { path: string; branch: string; baseBranch: string } {
+  assertGitWritable();
   const task8 = task8Of(input.taskId);
   const branch = `hub/${task8}`;
   let baseBranch: string;
@@ -200,6 +233,7 @@ async function runMerge(cwd: string, branch: string): Promise<void> {
 
 export async function mergeTaskWorktree(task: TaskRecord): Promise<void> {
   if (task.isolation !== "worktree" || !task.worktreePath) throw new WorktreeError("task has no worktree", 404);
+  assertGitWritable();
   if (!task.branch || !task.baseBranch) throw new WorktreeError("task has no worktree branch", 409);
   if (!existsSync(task.worktreePath)) throw new WorktreeError("the worktree folder is gone; discard it first", 409);
   const main = worktreeMainRepo(task.worktreePath);
@@ -271,6 +305,7 @@ export async function discardTaskWorktree(task: TaskRecord, mainRepo: string | n
   if (task.isolation !== "worktree") throw new WorktreeError("task has no worktree", 404);
   const path = task.worktreePath;
   if (!path) return;
+  assertGitWritable();
   const main = (existsSync(path) ? worktreeMainRepo(path) : null) ?? mainRepo;
   if (!main) return;
   const linkGone = existsSync(path) ? unlinkNodeModules(path) : true;
