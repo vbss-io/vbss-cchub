@@ -245,4 +245,15 @@ describe("preview mode through the routes", () => {
     assert.equal(created.status, 403);
     assert.equal(git(box.repoA, "branch", "--list"), branchesBefore);
   });
+
+  it("refuses to install or uninstall the Claude Code hooks", async () => {
+    const hub = await startServer(box, { HUB_DELEGATION: "1", HUB_PREVIEW: "1", HUB_SHARE_PORT: String(await freePort()), USERPROFILE: box.home, HOME: box.home });
+    children.push(hub.child);
+    for (const action of ["install", "uninstall"]) {
+      const res = await call(hub, "POST", `/api/hooks/${action}`);
+      assert.equal(res.status, 403);
+      assert.equal((res.json as { error: string }).error, "hook changes are disabled in preview mode");
+    }
+    assert.equal(existsSync(join(box.home, ".claude", "settings.json")), false);
+  });
 });

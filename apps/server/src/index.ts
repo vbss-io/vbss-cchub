@@ -503,12 +503,20 @@ app.get("/api/hooks", async (_req, res) => {
 });
 
 app.post("/api/hooks/install", async (_req, res) => {
+  if (config.previewMode) {
+    res.status(403).json({ error: "hook changes are disabled in preview mode" });
+    return;
+  }
   const windows = await windowsHooks("install");
   res.json({ ...windows, wsl: null });
   void wslHooks("install").then((wsl) => broadcast("hooks", mergeHooks(windows, wsl)));
 });
 
 app.post("/api/hooks/uninstall", async (_req, res) => {
+  if (config.previewMode) {
+    res.status(403).json({ error: "hook changes are disabled in preview mode" });
+    return;
+  }
   const windows = await windowsHooks("uninstall");
   res.json({ ...windows, wsl: null });
   void wslHooks("uninstall").then((wsl) => broadcast("hooks", mergeHooks(windows, wsl)));

@@ -5,6 +5,7 @@ import { abortShareAsks, abortShareTasks, artifactPath, listArtifacts, renderSha
 import { createShare, deleteShare, getShare, listShareRequests, listShares, rotateShareKey, updateShare, limitOf } from "./share-store.js";
 import { SHARE_DEFAULT_MAX_PER_HOUR, TRUST_LEVELS, normalizeTrust } from "./share-types.js";
 import { allowFirewall, firewallStatus, startTunnel, stopTunnel, installNgrok, tunnelStatus, updateTunnelSettings } from "./tunnel.js";
+import { PreviewWriteError } from "./worktrees.js";
 
 const asString = (value: unknown): string | null => (typeof value === "string" && value.trim().length > 0 ? value.trim() : null);
 
@@ -26,7 +27,7 @@ function perHour(value: unknown): number | null {
 function sendError(res: Response, err: unknown): void {
   const message = err instanceof Error ? err.message : "request failed";
   const status =
-    err instanceof ShareError ? err.status : err instanceof BadRequestError ? 400 : err instanceof NotFoundError ? 404 : 500;
+    err instanceof ShareError ? err.status : err instanceof PreviewWriteError ? err.status : err instanceof BadRequestError ? 400 : err instanceof NotFoundError ? 404 : 500;
   res.status(status).json({ error: message });
 }
 

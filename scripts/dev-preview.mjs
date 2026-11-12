@@ -94,7 +94,7 @@ const absolutizeFolderPaths = (text, baseDir, contextName) => {
       const value = parseJsonString(text.slice(index, end + 1));
       if (top && !top.array && top.expectKey) {
         top.key = value;
-      } else if (frames.length === 3 && frames[1].array && frames[1].parentKey === "folders" && top.key === "path" && typeof value === "string" && value.length > 0 && !isAbsolute(value) && value !== contextName) {
+      } else if (frames.length === 3 && frames[1].array && frames[1].parentKey === "folders" && top.key === "path" && typeof value === "string" && value.length > 0 && !isAbsolute(value) && value.replace(/^\.[\\/]/, "").replace(/[\\/]+$/, "") !== contextName) {
         out += text.slice(copied, index) + JSON.stringify(resolve(baseDir, value).replace(/\\/g, "/"));
         copied = end + 1;
         count += 1;
