@@ -1,10 +1,12 @@
-import { copyFileSync, cpSync, mkdirSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { execPath } from "node:process";
 import { build } from "esbuild";
 
 const root = process.cwd();
 const sidecar = join(root, "apps", "desktop", "src-tauri", "sidecar");
+
+const appVersion = JSON.parse(readFileSync(join(root, "apps", "server", "package.json"), "utf8")).version;
 
 rmSync(sidecar, { recursive: true, force: true });
 mkdirSync(join(sidecar, "node_modules"), { recursive: true });
@@ -18,7 +20,7 @@ await build({
   format: "cjs",
   target: "node22",
   external: ["better-sqlite3"],
-  define: { "import.meta.url": "__cch_import_meta_url" },
+  define: { "import.meta.url": "__cch_import_meta_url", __CCH_APP_VERSION__: JSON.stringify(appVersion) },
   banner: { js: "const __cch_import_meta_url = require('url').pathToFileURL(__filename).href;" },
   outfile: join(sidecar, "server.cjs"),
 });
@@ -29,7 +31,7 @@ await build({
   platform: "node",
   format: "cjs",
   target: "node22",
-  define: { "import.meta.url": "__cch_import_meta_url" },
+  define: { "import.meta.url": "__cch_import_meta_url", __CCH_APP_VERSION__: JSON.stringify(appVersion) },
   banner: { js: "const __cch_import_meta_url = require('url').pathToFileURL(__filename).href;" },
   outfile: join(sidecar, "mcp.cjs"),
 });

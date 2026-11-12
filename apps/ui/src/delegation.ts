@@ -249,6 +249,8 @@ export interface ConnectStatus {
 
 export class DelegationDisabledError extends Error {}
 
+export class BackupsUnavailableError extends Error {}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${base}${path}`, {
     method,
@@ -261,6 +263,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   if (!res.ok) {
     const message = (json as { error?: string } | null)?.error ?? `request failed (${res.status})`;
     if (res.status === 404 && path === "/settings") throw new DelegationDisabledError(message);
+    if (res.status === 404 && path === "/backups") throw new BackupsUnavailableError(message);
     throw new Error(message);
   }
   return json as T;
@@ -465,6 +468,27 @@ export const rescanUsage = (): Promise<{ files: number }> => call("POST", "/usag
 export const getSettings = (): Promise<DelegationSettings> => call("GET", "/settings");
 
 export const updateSettings = (patch: SettingsPatch): Promise<DelegationSettings> => call("PUT", "/settings", patch);
+
+export type BackupReason = "upgrade" | "daily" | "manual" | "pre-restore";
+
+export interface BackupEntry {
+  file: string;
+  reason: BackupReason;
+  createdAt: number;
+  size: number;
+}
+
+export interface BackupsOverview {
+  backups: BackupEntry[];
+  lastError: { at: number; message: string } | null;
+  backupsDir: string;
+  snapshotsDir: string;
+  snapshotDays: number;
+}
+
+export const getBackups = (): Promise<BackupsOverview> => call("GET", "/backups");
+
+export const createBackup = (): Promise<{ backup: BackupEntry }> => call("POST", "/backups");
 
 export const listWorkspaces = (): Promise<WorkspaceRecord[]> => call("GET", "/workspaces");
 

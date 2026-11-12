@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { mkdir, open, stat, unlink, type FileHandle } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { snapshotVaultFile } from "./vault-snapshot.js";
 
 const MAX_CHARS = 6_000;
 const LOCK_RETRIES = 60;
@@ -207,7 +208,7 @@ export function hubSection(content: string): string | null {
 
 const touchUpdated = (content: string, date: string): string => content.replace(/^updated:.*$/m, `updated: ${date}`);
 
-export function upsertSessionBlock(file: string, sessionId: string, date: string, block: string): void {
+export function upsertSessionBlock(file: string, sessionId: string, date: string, block: string, root: string | null = null): void {
   let content = existsSync(file) ? readFileSync(file, "utf8") : trailHeader(date);
   const { start, end } = blockMarkers(sessionId);
   const startIdx = content.indexOf(start);
@@ -223,20 +224,22 @@ export function upsertSessionBlock(file: string, sessionId: string, date: string
       content += `\n${block}\n`;
     }
   }
+  snapshotVaultFile(root, file);
   writeFileSync(file, touchUpdated(content, date));
 }
 
-export function queueSessionBlock(file: string, sessionId: string, date: string, block: string): Promise<void> {
+export function queueSessionBlock(file: string, sessionId: string, date: string, block: string, root: string | null = null): Promise<void> {
   return enqueueFileWrite(file, () => {
     mkdirSync(dirname(file), { recursive: true });
-    upsertSessionBlock(file, sessionId, date, block);
+    upsertSessionBlock(file, sessionId, date, block, root);
   });
 }
 
-function appendHubLine(file: string, date: string, line: string): void {
+function appendHubLine(file: string, date: string, line: string, root: string): void {
   let content = existsSync(file) ? readFileSync(file, "utf8") : trailHeader(date);
   if (!content.endsWith("\n")) content += "\n";
   if (!HUB_HEADING_RE.test(content)) content += "\n## Hub\n\n";
+  snapshotVaultFile(root, file);
   writeFileSync(file, touchUpdated(`${content}${line}\n`, date));
 }
 
@@ -249,12 +252,13 @@ export function appendHubSource(root: string, text: string, now = new Date(), li
     const line = `- ${localTime(now)} · ${clean}`;
     enqueueFileWrite(file, () => {
       mkdirSync(dirname(file), { recursive: true });
-      appendHubLine(file, date, line);
+      appendHubLine(file, date, line, root);
     }).catch((err: unknown) => console.error(`second brain hub line dropped: ${String(err)}`));
     return file;
   }
   const path = hubSourcePath(root, date);
   mkdirSync(join(root, "fontes", "hub"), { recursive: true });
+  snapshotVaultFile(root, path, now);
   if (!existsSync(path)) {
     writeFileSync(
       path,

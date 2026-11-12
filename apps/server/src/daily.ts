@@ -9,6 +9,7 @@ import { localDate, readAllBlockBullets, trailFilePath } from "./second-brain.js
 import { broadcast } from "./sse.js";
 import type { SessionStatus } from "./types.js";
 import { trailDir } from "./trail.js";
+import { snapshotVaultFile } from "./vault-snapshot.js";
 import { isDirectory } from "./workspaces.js";
 
 const DATE_FILE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
@@ -857,6 +858,7 @@ export function writeDaily(
     }
   }
   mkdirSync(dirname(path), { recursive: true });
+  snapshotVaultFile(root, path);
   writeFileAtomic(path, content);
   const stat = statSync(path);
   lastHubHash.set(path, hashOf(content));

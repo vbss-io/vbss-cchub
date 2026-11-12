@@ -213,3 +213,25 @@
     padding: 12px;
   }
 }
+
+@media (max-width: 520px) {
+  .backups__row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .backups__when {
+    grid-column: 1 / -1;
+  }
+
+  .backups__row .tag {
+    justify-self: start;
+  }
+
+  .backups__size {
+    text-align: left;
+  }
+
+  .backups__paths {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

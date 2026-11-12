@@ -17,6 +17,7 @@ import { BadRequestError, delegateTask, NotFoundError } from "./delegation-launc
 import { TASKS_DATE_TOKEN, type DelegationSettings, type Runner, type TasksFeatureSettings } from "./delegation-types.js";
 import { localDate } from "./second-brain.js";
 import { broadcast } from "./sse.js";
+import { snapshotVaultFile } from "./vault-snapshot.js";
 import { isDirectory } from "./workspaces.js";
 
 export const BOARD_STATUSES = ["blocked", "hold", "todo", "doing", "done", "archived"] as const;
@@ -1054,9 +1055,10 @@ interface WalkedFile {
   id: string;
   rel: string;
   abs: string;
+  vault: string;
 }
 
-function walkProjects(root: string, exclude: string[]): WalkedFile[] {
+function walkProjects(root: string, exclude: string[], vault: string = root): WalkedFile[] {
   const found: WalkedFile[] = [];
   const visit = (dirAbs: string, dirRel: string): void => {
     let entries;
@@ -1070,7 +1072,7 @@ function walkProjects(root: string, exclude: string[]): WalkedFile[] {
       if (isExcludedName(entry.name, exclude)) continue;
       const rel = dirRel ? `${dirRel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) visit(join(dirAbs, entry.name), rel);
-      else if (entry.isFile() && MARKDOWN_RE.test(entry.name)) found.push({ id: rel.replace(MARKDOWN_RE, ""), rel, abs: join(dirAbs, entry.name) });
+      else if (entry.isFile() && MARKDOWN_RE.test(entry.name)) found.push({ id: rel.replace(MARKDOWN_RE, ""), rel, abs: join(dirAbs, entry.name), vault });
     }
   };
   visit(root, "");
@@ -1270,7 +1272,7 @@ function requireBoardRoot(settings: DelegationSettings): string {
 
 function locateProject(settings: DelegationSettings, projectId: string): WalkedFile {
   const root = requireBoardRoot(settings);
-  const file = walkProjects(root, settings.tasks.exclude).find((candidate) => candidate.id === projectId);
+  const file = walkProjects(root, settings.tasks.exclude, settings.secondBrainRoot ?? root).find((candidate) => candidate.id === projectId);
   if (!file) throw new NotFoundError("project not found");
   return file;
 }
@@ -1558,6 +1560,7 @@ function topLevelOf(tasks: BoardTask[], line: number): BoardTask | null {
 }
 
 function commitFile(file: WalkedFile, next: string): number {
+  snapshotVaultFile(file.vault, file.abs);
   writeFileAtomic(file.abs, next);
   knownHash.set(file.abs, hashOf(next));
   broadcast("tasks", { source: "hub", projectId: file.id });
@@ -2241,7 +2244,7 @@ export function sweepDoneTasks(settings: DelegationSettings, projectId: string |
   const root = requireBoardRoot(settings);
   const config = settings.tasks;
   if (doneSectionName(config) === null) throw new BadRequestError("the done section is not configured");
-  const files = projectId ? [locateProject(settings, projectId)] : walkProjects(root, config.exclude);
+  const files = projectId ? [locateProject(settings, projectId)] : walkProjects(root, config.exclude, settings.secondBrainRoot ?? root);
   const date = localDate();
   const projects: string[] = [];
   let moved = 0;

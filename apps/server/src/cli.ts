@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+import { restoreDatabase } from "./backups.js";
 import { config } from "./config.js";
 
 interface Command {
@@ -165,7 +167,33 @@ async function main(): Promise<void> {
   if (!res.ok) process.exitCode = 1;
 }
 
-main().catch((err: unknown) => {
+async function hubIsRunning(): Promise<boolean> {
+  try {
+    const res = await fetch(`${hubBase()}/api/health`, { signal: AbortSignal.timeout(3000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function restoreDb(file: string | undefined): Promise<void> {
+  if (!file) throw new Error("usage: restore-db <backup-file>");
+  if (await hubIsRunning()) {
+    throw new Error(`the hub is running at ${hubBase()}: quit it before restoring (restore-db works on the files while the hub is stopped)`);
+  }
+  const result = restoreDatabase(resolve(file));
+  const lines = [
+    `restored ${result.source}`,
+    `  into ${result.target}`,
+    result.preRestore ? `  previous database saved as ${result.preRestore.file}` : "  no previous database to save",
+    ...result.removedSidecars.map((path) => `  removed stale ${path}`),
+  ];
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+const entry = process.argv[2] === "restore-db" ? restoreDb(process.argv[3]) : main();
+
+entry.catch((err: unknown) => {
   process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
   process.exitCode = 1;
 });

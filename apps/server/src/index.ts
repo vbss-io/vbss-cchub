@@ -3,7 +3,8 @@ import cors from "cors";
 import express, { type ErrorRequestHandler } from "express";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
-import { config } from "./config.js";
+import "./upgrade-backup.js";
+import { appVersion, config } from "./config.js";
 import {
   applyHook,
   archiveSession,
@@ -44,6 +45,9 @@ import { ensureExtension } from "./ensure-extension.js";
 import { abortActiveRuns, delegationRouter } from "./delegation-routes.js";
 import { usageRouter, warmUsage } from "./usage-routes.js";
 import { limitsRouter } from "./limits-routes.js";
+import { backupsRouter } from "./backups-routes.js";
+import { recordAppVersion, runDailyMaintenance } from "./backups.js";
+import { enableVaultSnapshots } from "./vault-snapshot.js";
 import { startLimitsPolling, stopLimitsPolling } from "./limits.js";
 import { resolveWorkspaceTarget } from "./delegation-launch.js";
 import { getSettings, markRunningAsInterrupted } from "./delegation-store.js";
@@ -96,6 +100,9 @@ function trailAfterHook(session: SessionRecord, kind: HookKind): void {
     console.error(`session trail schedule failed: ${String(err)}`);
   }
 }
+
+recordAppVersion(appVersion);
+enableVaultSnapshots(join(config.dataDir, "vault-snapshots"));
 
 const app = express();
 app.use(cors());
@@ -510,6 +517,7 @@ app.post("/api/hooks/uninstall", async (_req, res) => {
 app.use("/delegation", delegationRouter());
 app.use("/delegation/usage", usageRouter());
 app.use("/delegation/limits", limitsRouter());
+app.use("/delegation/backups", backupsRouter());
 
 app.get("/api/events", (_req, res) => {
   res.writeHead(200, {
@@ -576,6 +584,8 @@ process.on("SIGINT", () => shutdown("hub stopped"));
 process.on("SIGTERM", () => shutdown("hub stopped"));
 
 const PURGE_INTERVAL_MS = 3_600_000;
+const MAINTENANCE_INTERVAL_MS = 600_000;
+const MAINTENANCE_FIRST_DELAY_MS = 15_000;
 const USAGE_WARMUP_DELAY_MS = 3000;
 
 function purgeEmpty(): void {
@@ -599,6 +609,23 @@ function sweepDead(): void {
 
 sweepDead();
 setInterval(sweepDead, 30_000).unref();
+
+let maintenanceRunning = false;
+
+async function runMaintenance(): Promise<void> {
+  if (maintenanceRunning) return;
+  maintenanceRunning = true;
+  try {
+    await runDailyMaintenance();
+  } catch (err) {
+    console.error(`daily maintenance failed: ${String(err)}`);
+  } finally {
+    maintenanceRunning = false;
+  }
+}
+
+setTimeout(() => void runMaintenance(), MAINTENANCE_FIRST_DELAY_MS).unref();
+setInterval(() => void runMaintenance(), MAINTENANCE_INTERVAL_MS).unref();
 
 ensureExtension();
 

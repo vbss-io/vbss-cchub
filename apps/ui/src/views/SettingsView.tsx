@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getDesktopNotifyStatus, sendToast, subscribe, type DesktopNotifyStatus, type HooksStatus } from "../api";
 import { formatList, parseList, validateTaskSettings } from "../board-model";
+import { BackupsPanel } from "../components/BackupsPanel";
 import { GroupManager } from "../components/GroupManager";
 import { DailyProjectOrder } from "../components/DailyProjectOrder";
 import { flushTrail, getTasksBoard, getTrail, type BoardProject } from "../delegation";
@@ -1404,6 +1405,7 @@ export function SettingsView(props: Props) {
             <code>{hubUrl}</code>
           </dd>
         </dl>
+        <BackupsPanel />
       </section>
     </div>
   );

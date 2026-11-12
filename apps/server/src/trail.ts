@@ -566,7 +566,7 @@ async function summarizeSession(job: TrailJob): Promise<void> {
       redacted: anyRedacted,
       partialThrough: incomplete ? processedThrough : 0,
     });
-    await queueSessionBlock(file, job.sessionId, today, block);
+    await queueSessionBlock(file, job.sessionId, today, block, enabled.root);
   }
   checkpoint(processedThrough, working.length);
   broadcast("trail", { date: today, sessionId: job.sessionId, bullets: working.length });

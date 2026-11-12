@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { execPath } from "node:process";
@@ -8,6 +8,20 @@ const homeDir = process.env.HUB_HOME ?? homedir();
 const dataDir = process.env.HUB_DATA_DIR ?? join(homeDir, ".vbss-cchub");
 const resourceDir = process.env.HUB_RESOURCE_DIR ?? null;
 const serverDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+declare const __CCH_APP_VERSION__: string | undefined;
+
+function readAppVersion(dir: string): string {
+  if (typeof __CCH_APP_VERSION__ === "string") return __CCH_APP_VERSION__;
+  try {
+    const manifest: unknown = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    const version = typeof manifest === "object" && manifest !== null ? (manifest as { version?: unknown }).version : undefined;
+    return typeof version === "string" ? version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+export const appVersion = readAppVersion(serverDir);
 const emptyTtlHours = Number(process.env.HUB_EMPTY_TTL_HOURS ?? 12);
 
 function parseJsonStringArray(raw: string | undefined): string[] {

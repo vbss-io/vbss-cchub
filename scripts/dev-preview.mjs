@@ -1,7 +1,8 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { createRequire } from "node:module";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -18,12 +19,214 @@ const SHARE_PORT = Number(process.env.PREVIEW_SHARE_PORT) || (taskPortBase ? tas
 const UI_PORT = Number(process.env.PREVIEW_UI_PORT) || (taskPortBase ? taskPortBase + 2 : 15173);
 const uiOrigin = `http://localhost:${UI_PORT}`;
 const base = `http://127.0.0.1:${HUB_PORT}`;
-const dataDir = argValue("--data") ?? join(repoRoot, ".tmp", "dev-preview");
-const seed = has("--seed");
+const fromReal = has("--from-real");
+const dataDir = fromReal ? resolve(argValue("--data") ?? join(repoRoot, ".tmp", "dev-preview-real")) : (argValue("--data") ?? join(repoRoot, ".tmp", "dev-preview"));
+const seed = has("--seed") && !fromReal;
 const realCodex = has("--real-codex");
+const realData = resolve(argValue("--real-data") ?? join(homedir(), ".vbss-cchub"));
+const MAX_VAULT_BYTES = 500 * 1024 * 1024;
+const WORKSPACE_EXT = ".code-workspace";
+const SETTING_KEYS = ["secondBrainRoot", "daily.dir", "daily.template", "tasks.root", "trail.dir", "workspacesRoot"];
+const VAULT_PATH_KEYS = ["daily.dir", "daily.template", "tasks.root", "trail.dir"];
+
+const isInside = (parent, child) => {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+};
+const isDirectory = (path) => lstatSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false;
+const formatBytes = (bytes) => `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+const keepEntry = (path) => {
+  const stats = lstatSync(path);
+  if (stats.isSymbolicLink()) return false;
+  return !(stats.isDirectory() && basename(path).startsWith("."));
+};
+const treeBytes = (path) => {
+  if (!keepEntry(path)) return 0;
+  const stats = lstatSync(path);
+  if (!stats.isDirectory()) return stats.size;
+  return readdirSync(path).reduce((total, entry) => total + treeBytes(join(path, entry)), 0);
+};
+const removeLink = (path) => {
+  if (!lstatSync(path, { throwIfNoEntry: false })) return;
+  try {
+    unlinkSync(path);
+  } catch {
+    rmSync(path, { recursive: false, force: true });
+  }
+};
+const removeDbFiles = (path) => {
+  for (const file of [path, `${path}-wal`, `${path}-shm`]) rmSync(file, { force: true });
+};
+
+const prepareFromReal = async () => {
+  if (isInside(realData, dataDir) || isInside(dataDir, realData)) {
+    console.error(`[from-real] refusing to run: --data (${dataDir}) overlaps --real-data (${realData})`);
+    process.exit(1);
+  }
+  const realDb = join(realData, "hub.db");
+  if (!existsSync(realDb)) {
+    console.error(`[from-real] no hub.db in ${realData}`);
+    process.exit(1);
+  }
+  const Database = createRequire(join(repoRoot, "apps", "server", "package.json"))("better-sqlite3");
+  const copyDb = join(dataDir, "hub.db");
+  const partialDb = join(dataDir, "hub.db.partial");
+  const vaultDir = join(dataDir, "vault");
+  const workspacesDir = join(dataDir, "workspaces");
+  const homeDir = join(dataDir, "home");
+  const codexHomeCopy = join(homeDir, ".codex");
+  const sessionsLink = join(codexHomeCopy, "sessions");
+  const summary = { reused: false, vaultBytes: 0, remapped: [], warnings: [], workspaceFiles: 0 };
+
+  mkdirSync(dataDir, { recursive: true });
+  removeDbFiles(partialDb);
+  if (has("--refresh")) {
+    removeLink(sessionsLink);
+    removeDbFiles(copyDb);
+    for (const target of [vaultDir, workspacesDir]) rmSync(target, { recursive: true, force: true });
+  }
+
+  if (existsSync(copyDb)) {
+    summary.reused = true;
+  } else {
+    const source = new Database(realDb, { readonly: true, fileMustExist: true });
+    try {
+      await source.backup(partialDb);
+    } finally {
+      source.close();
+    }
+    const db = new Database(partialDb);
+    try {
+      db.exec("CREATE TABLE IF NOT EXISTS hub_settings (key TEXT PRIMARY KEY, value TEXT)");
+      const read = (key) => {
+        const value = db.prepare("SELECT value FROM hub_settings WHERE key = ?").get(key)?.value;
+        return typeof value === "string" && value.trim().length > 0 ? value : null;
+      };
+      const write = (key, value) => {
+        if (value === null) db.prepare("DELETE FROM hub_settings WHERE key = ?").run(key);
+        else db.prepare("INSERT INTO hub_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value);
+      };
+      const settings = Object.fromEntries(SETTING_KEYS.map((key) => [key, read(key)]));
+      const realRoot = settings.secondBrainRoot ? resolve(settings.secondBrainRoot) : null;
+
+      if (realRoot && isDirectory(realRoot)) {
+        const against = (value) => (isAbsolute(value) ? resolve(value) : resolve(realRoot, value));
+        const templatePath = against(settings["daily.template"] ?? join("_templates", "daily.md"));
+        const templateDir = dirname(templatePath);
+        const candidates = [
+          against(settings["daily.dir"] ?? "daily"),
+          against(settings["tasks.root"] ?? "projects"),
+          against(settings["trail.dir"] ?? "trail"),
+          join(realRoot, "fontes", "hub"),
+          templatePath,
+          ...(templateDir === realRoot ? [] : [templateDir]),
+        ];
+        const picked = [];
+        for (const candidate of candidates) {
+          if (!isInside(realRoot, candidate) || candidate === realRoot) {
+            summary.warnings.push(`not copied (outside the vault root, or the root itself): ${candidate}`);
+            continue;
+          }
+          if (!lstatSync(candidate, { throwIfNoEntry: false }) || !keepEntry(candidate)) continue;
+          if (picked.some((other) => isInside(other, candidate))) continue;
+          for (let index = picked.length - 1; index >= 0; index -= 1) if (isInside(candidate, picked[index])) picked.splice(index, 1);
+          picked.push(candidate);
+        }
+        summary.vaultBytes = picked.reduce((total, path) => total + treeBytes(path), 0);
+        console.log(`[from-real] vault selection: ${picked.length} path(s), ${formatBytes(summary.vaultBytes)} (limit ${formatBytes(MAX_VAULT_BYTES)})`);
+        if (summary.vaultBytes > MAX_VAULT_BYTES) {
+          db.close();
+          removeDbFiles(partialDb);
+          console.error(`[from-real] vault selection is ${formatBytes(summary.vaultBytes)}, above the limit; aborted before copying`);
+          process.exit(1);
+        }
+        mkdirSync(vaultDir, { recursive: true });
+        for (const path of picked) {
+          const target = join(vaultDir, relative(realRoot, path));
+          mkdirSync(dirname(target), { recursive: true });
+          cpSync(path, target, { recursive: true, filter: (entry) => entry === path || keepEntry(entry) });
+        }
+        write("secondBrainRoot", vaultDir);
+        summary.remapped.push(`secondBrainRoot -> ${vaultDir}`);
+        for (const key of VAULT_PATH_KEYS) {
+          const value = settings[key];
+          if (value === null) continue;
+          const abs = against(value);
+          if (!isInside(realRoot, abs)) {
+            write(key, null);
+            summary.warnings.push(`${key} (${value}) is outside the vault root; cleared in the copy`);
+          } else if (isAbsolute(value)) {
+            const mapped = join(vaultDir, relative(realRoot, abs));
+            write(key, mapped);
+            summary.remapped.push(`${key} -> ${mapped}`);
+          }
+        }
+      } else {
+        for (const key of ["secondBrainRoot", ...VAULT_PATH_KEYS]) write(key, null);
+        summary.warnings.push(settings.secondBrainRoot ? `secondBrainRoot ${settings.secondBrainRoot} is not a directory; vault not copied, vault paths cleared` : "no secondBrainRoot in the hub settings; vault not copied");
+      }
+
+      mkdirSync(workspacesDir, { recursive: true });
+      const realWorkspaces = settings.workspacesRoot ? resolve(settings.workspacesRoot) : null;
+      if (realWorkspaces && isDirectory(realWorkspaces)) {
+        for (const entry of readdirSync(realWorkspaces)) {
+          const file = join(realWorkspaces, entry);
+          if (!entry.endsWith(WORKSPACE_EXT) || !lstatSync(file).isFile()) continue;
+          cpSync(file, join(workspacesDir, entry));
+          summary.workspaceFiles += 1;
+        }
+      } else if (settings.workspacesRoot) {
+        summary.warnings.push(`workspacesRoot ${settings.workspacesRoot} is not a directory; workspaces copy is empty`);
+      }
+      write("workspacesRoot", workspacesDir);
+      summary.remapped.push(`workspacesRoot -> ${workspacesDir} (${summary.workspaceFiles} ${WORKSPACE_EXT} file(s))`);
+    } finally {
+      db.close();
+    }
+    for (const sidecar of [`${partialDb}-wal`, `${partialDb}-shm`]) rmSync(sidecar, { force: true });
+    renameSync(partialDb, copyDb);
+  }
+
+  mkdirSync(codexHomeCopy, { recursive: true });
+  mkdirSync(join(homeDir, "AppData", "Roaming"), { recursive: true });
+  const realCodexSessions = join(homedir(), ".codex", "sessions");
+  if (!lstatSync(sessionsLink, { throwIfNoEntry: false })) {
+    if (isDirectory(realCodexSessions)) {
+      try {
+        symlinkSync(realCodexSessions, sessionsLink, "junction");
+      } catch (err) {
+        mkdirSync(sessionsLink, { recursive: true });
+        summary.warnings.push(`could not link ${realCodexSessions} (${err instanceof Error ? err.message : "error"}); Codex sessions will be empty`);
+      }
+    } else {
+      mkdirSync(sessionsLink, { recursive: true });
+    }
+  }
+
+  const fixtures = join(repoRoot, "apps", "server", "test", "fixtures");
+  const env = {
+    HUB_HOME: homeDir,
+    APPDATA: join(homeDir, "AppData", "Roaming"),
+    CODEX_HOME: codexHomeCopy,
+    HUB_CLAUDE_PROJECTS_DIR: join(homedir(), ".claude", "projects"),
+    HUB_CLAUDE_CREDENTIALS: join(homeDir, ".claude", ".credentials.json"),
+    HUB_CLAUDE_STATE: join(homeDir, ".claude.json"),
+    HUB_CLAUDE_BIN: process.execPath,
+    HUB_CLAUDE_ARGS_PREFIX: JSON.stringify([join(fixtures, "fake-claude.mjs")]),
+    HUB_CODEX_BIN: process.execPath,
+    HUB_CODEX_ARGS_PREFIX: JSON.stringify([join(fixtures, "fake-codex.mjs")]),
+    HUB_NGROK_BIN: process.execPath,
+    HUB_NGROK_ARGS_PREFIX: JSON.stringify([join(fixtures, "fake-ngrok.mjs")]),
+    HUB_AUTOSTART_KEY: "HKCU:\\Software\\vbss-cchub-preview\\Run",
+    FAKE_CLAUDE_DELAY_MS: "400",
+    HUB_SHARE_ENV_PASSTHROUGH: "FAKE_CLAUDE_DELAY_MS",
+  };
+  return { env, summary, vaultDir, homeDir };
+};
 
 mkdirSync(dataDir, { recursive: true });
-const codexHome = realCodex ? null : mkdtempSync(join(tmpdir(), "cchub-preview-codex-"));
+const realPrep = fromReal ? await prepareFromReal() : null;
+const codexHome = realCodex || fromReal ? null : mkdtempSync(join(tmpdir(), "cchub-preview-codex-"));
 
 const serverEnv = {
   ...process.env,
@@ -38,6 +241,10 @@ const serverEnv = {
   HUB_TRUSTED_ORIGINS: `${uiOrigin},http://127.0.0.1:${UI_PORT}`,
 };
 if (codexHome) serverEnv.CODEX_HOME = codexHome;
+if (realPrep) {
+  for (const key of ["HUB_DEV_SEED", "HUB_SECOND_BRAIN", "HUB_WORKSPACES_ROOT", "HUB_EDITOR", "HUB_RESOURCE_DIR", "HUB_STATIC_DIR", "HUB_APP_EXE", "HUB_PARENT_PID", "HUB_URL"]) delete serverEnv[key];
+  Object.assign(serverEnv, realPrep.env);
+}
 
 const children = [];
 const spawnChild = (name, bin, argv, cwd, env) => {
@@ -104,7 +311,20 @@ const nodeBin = process.execPath;
 const systemCaArgs = spawnSync(nodeBin, ["--use-system-ca", "-e", "0"], { stdio: "ignore" }).status === 0 ? ["--use-system-ca"] : [];
 spawnChild("server", nodeBin, [...systemCaArgs, "--import", "tsx", join(repoRoot, "apps", "server", "src", "index.ts")], join(repoRoot, "apps", "server"), serverEnv);
 await waitForHub();
-console.log(`[server] up on ${base} (share ${SHARE_PORT}); data ${dataDir}; codexHome ${codexHome ?? "(real ~/.codex)"}`);
+console.log(`[server] up on ${base} (share ${SHARE_PORT}); data ${dataDir}; codexHome ${realPrep ? realPrep.env.CODEX_HOME : (codexHome ?? "(real ~/.codex)")}`);
+if (realPrep) {
+  const { summary } = realPrep;
+  console.log("[from-real] ----------------------------------------------");
+  console.log(`[from-real] source:     ${realData} (opened read-only, online backup)`);
+  console.log(`[from-real] copy dir:   ${dataDir}${summary.reused ? " (existing copy kept; pass --refresh to rebuild)" : ""}`);
+  console.log(`[from-real] vault copy: ${realPrep.vaultDir} (${formatBytes(summary.vaultBytes)})`);
+  for (const item of summary.remapped) console.log(`[from-real] remapped:   ${item}`);
+  for (const warning of summary.warnings) console.log(`[from-real] WARNING:    ${warning}`);
+  console.log(`[from-real] isolation:  HUB_HOME ${realPrep.homeDir}; fake claude/codex/ngrok runners; no Claude credentials; Claude projects and Codex sessions are read-only`);
+  console.log(`[from-real] open:       ${uiOrigin}`);
+  console.log("[from-real] real hub, vault and home are untouched");
+  console.log("[from-real] ----------------------------------------------");
+}
 if (seed) await seedData();
 
 const viteBin = [join(repoRoot, "node_modules", "vite", "bin", "vite.js"), join(repoRoot, "apps", "ui", "node_modules", "vite", "bin", "vite.js")].find(existsSync);
