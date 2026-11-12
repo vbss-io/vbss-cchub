@@ -809,8 +809,9 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
     setRefreshBusy(true);
     loadOverview();
     refreshSessions(date);
+    const textAtStart = textRef.current;
     try {
-      const editsPending = () => textRef.current !== savedTextRef.current || saveStatusRef.current === "saving";
+      const editsPending = () => textRef.current !== savedTextRef.current || saveStatusRef.current === "saving" || textRef.current !== textAtStart;
       const applied = editsPending() ? false : await loadEntry(date, () => !editsPending());
       if (!applied) showNotice("ok", "Unsaved edits kept; sessions refreshed");
     } catch (err) {
@@ -849,6 +850,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
     if (!enabled || !pending || !date) return;
     if (Date.now() - pending.at > PENDING_ACTION_TTL_MS) {
       pendingActionRef.current = null;
+      showNotice("error", pending.action === "plan" ? "The daily was not ready; open Plan today again" : "The daily was not ready; refresh again");
       return;
     }
     if (pending.action === "plan") {

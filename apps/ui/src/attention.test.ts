@@ -43,4 +43,11 @@ describe("attentionCount", () => {
   it("returns zero for no sessions", () => {
     assert.equal(attentionCount([]), 0);
   });
+
+  it("ignores Claude Desktop helper sessions folded into their parent", () => {
+    const helper = { status: "idle" as const, unread: true, helperOf: "parent-1" };
+    const waitingHelper = { status: "waiting" as const, helperOf: "parent-1" };
+    assert.equal(needsYou(helper), false);
+    assert.equal(attentionCount([helper, waitingHelper, session("idle", true)]), 1);
+  });
 });
