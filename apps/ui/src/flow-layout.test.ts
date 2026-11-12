@@ -271,6 +271,43 @@ test("relatives keeps ancestors and descendants only", () => {
   assert.ok(!keep.has("s:b"));
 });
 
+test("idle sessions: unread is violet finished, seen is neutral, waiting and active keep their tones, red is never used", () => {
+  const graph = buildFlow(
+    input({
+      sessions: [
+        session("a", "/repo/alpha", "idle", { unread: true }),
+        session("b", "/repo/alpha", "idle", { unread: false }),
+        session("c", "/repo/alpha", "idle"),
+        session("d", "/repo/alpha", "waiting"),
+        session("e", "/repo/alpha", "active"),
+        session("f", "/repo/alpha", "ended"),
+      ],
+      workspaces: [workspace("alpha", "/repo/alpha")],
+    }),
+  );
+  const of = (id: string) => graph.nodes.find((n) => n.sessionId === id && n.kind === "session")!;
+  assert.equal(of("a").tone, "unread");
+  assert.equal(of("a").subtitle, "finished");
+  assert.equal(of("b").tone, "seen");
+  assert.equal(of("b").subtitle, "idle");
+  assert.equal(of("c").tone, "seen");
+  assert.equal(of("d").tone, "pend");
+  assert.equal(of("e").tone, "go");
+  assert.equal(of("f").tone, "muted");
+  assert.ok(!graph.nodes.some((n) => n.kind === "session" && n.tone === "hold"));
+});
+
+test("failed delegated task keeps the red tone", () => {
+  const graph = buildFlow(
+    input({
+      sessions: [session("a", "/repo/alpha", "active")],
+      workspaces: [workspace("alpha", "/repo/alpha")],
+      tasks: [task("t1", "alpha", "a", "failed")],
+    }),
+  );
+  assert.equal(graph.nodes.find((n) => n.taskId === "t1")?.tone, "hold");
+});
+
 test("null-safe edges: parents always exist for edges", () => {
   const graph = buildFlow(
     input({ sessions: [session("a", "/repo/alpha", "active")], workspaces: [workspace("alpha", "/repo/alpha")] }),

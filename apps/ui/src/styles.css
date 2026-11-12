@@ -1712,8 +1712,17 @@ h3 {
   background: var(--hold);
 }
 
+.legend__dot--unread {
+  background: var(--unread);
+}
+
+.legend__dot--seen {
+  background: var(--muted);
+}
+
 .legend__dot--muted {
   background: var(--muted);
+  opacity: 0.45;
 }
 
 .legend__badge {
@@ -1857,6 +1866,22 @@ h3 {
 
 .flow__node--hold .flow__stripe {
   fill: var(--hold);
+}
+
+.flow__node--unread .flow__stripe {
+  fill: var(--unread);
+}
+
+.flow__node--unread .flow__sub {
+  fill: var(--unread);
+}
+
+.flow__node--seen .flow__stripe {
+  fill: var(--muted);
+}
+
+.flow__node--muted .flow__stripe {
+  opacity: 0.45;
 }
 
 .flow__node--brand .flow__stripe {
@@ -2264,6 +2289,11 @@ h3 {
 
 .table__rowgroup + .table__rowgroup {
   border-top: 1px solid var(--border);
+}
+
+.table__rowgroup--focus {
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--brand);
 }
 
 .table__row:hover {
@@ -3775,6 +3805,12 @@ h6.md__h {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.daily__date {
+  flex: 0 0 auto;
+  width: 160px;
+  min-width: 160px;
 }
 
 .daily__main {

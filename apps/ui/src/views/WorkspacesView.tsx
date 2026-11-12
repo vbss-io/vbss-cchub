@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { createWorkspace, deleteWorkspace, openWorkspace, updateWorkspace, type DelegationSettings, type WorkspaceRecord } from "../delegation";
 
@@ -6,6 +6,7 @@ interface Props {
   workspaces: WorkspaceRecord[];
   settings: DelegationSettings | null;
   enabled: boolean;
+  focusName?: string | null;
   onChanged: () => Promise<void>;
   onOpenSettings: () => void;
   onNotice: (text: string) => void;
@@ -18,7 +19,16 @@ const splitLines = (value: string): string[] =>
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
 
-export function WorkspacesView({ workspaces, settings, enabled, onChanged, onOpenSettings, onNotice, onError }: Props) {
+const decodeParam = (value: string | null | undefined): string | null => {
+  if (!value) return null;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+};
+
+export function WorkspacesView({ workspaces, settings, enabled, focusName, onChanged, onOpenSettings, onNotice, onError }: Props) {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [editRepos, setEditRepos] = useState("");
@@ -26,6 +36,22 @@ export function WorkspacesView({ workspaces, settings, enabled, onChanged, onOpe
   const [newName, setNewName] = useState("");
   const [newRepos, setNewRepos] = useState("");
   const [pendingDelete, setPendingDelete] = useState<WorkspaceRecord | null>(null);
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const focused = decodeParam(focusName);
+
+  const scrolledRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!focused) {
+      scrolledRef.current = null;
+      return;
+    }
+    if (scrolledRef.current === focused) return;
+    const node = rowRefs.current.get(focused);
+    if (!node) return;
+    scrolledRef.current = focused;
+    node.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [focused, workspaces]);
 
   const run = async (action: () => Promise<string | void>) => {
     setBusy(true);
@@ -111,7 +137,15 @@ export function WorkspacesView({ workspaces, settings, enabled, onChanged, onOpe
             <span className="table__actions">Actions</span>
           </div>
           {workspaces.map((workspace) => (
-            <div key={workspace.name} className="table__rowgroup">
+            <div
+              key={workspace.name}
+              ref={(node) => {
+                if (node) rowRefs.current.set(workspace.name, node);
+                else rowRefs.current.delete(workspace.name);
+              }}
+              className={`table__rowgroup ${focused === workspace.name ? "table__rowgroup--focus" : ""}`}
+              aria-current={focused === workspace.name ? "true" : undefined}
+            >
               <div className="table__row">
                 <span className="table__name">
                   {workspace.name}

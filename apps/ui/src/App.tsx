@@ -29,6 +29,7 @@ import { ShareView } from "./views/ShareView";
 import { TasksView } from "./views/TasksView";
 import { UsageView, type UsageEvent } from "./views/UsageView";
 import { WorkspacesView } from "./views/WorkspacesView";
+import { canToggleWidget, toggleWidgetWindow } from "./widget-toggle";
 import { workspaceOf } from "./wsmatch";
 
 type View = "sessions" | "daily" | "board" | "usage" | "flow" | "tasks" | "workspaces" | "reports" | "share" | "settings";
@@ -749,6 +750,11 @@ export function App() {
   const pendingEvent = useRef<{ view: View; name: string } | null>(null);
 
   useEffect(() => {
+    setDrawer(null);
+    setCodexDrawer(null);
+  }, [effectiveView]);
+
+  useEffect(() => {
     viewRef.current = effectiveView;
     const pending = pendingEvent.current;
     pendingEvent.current = null;
@@ -846,6 +852,9 @@ export function App() {
         toggleTheme: () => setTheme((previous) => (previous === "midnight" ? "dracula" : "midnight")),
         themeHint: theme === "midnight" ? "Switch to Dracula" : "Switch to Midnight",
         installHooks: () => navigate("settings", "hooks"),
+        ...(canToggleWidget()
+          ? { toggleWidget: () => void toggleWidgetWindow().catch((err: unknown) => fail(err instanceof Error ? err.message : "could not toggle the widget")) }
+          : {}),
       }),
       ...buildViewItems(views, (view, param) => navigate(view as View, param)),
       ...buildSessionItems(Object.values(sessions), codexSessions, workspaces, {
@@ -860,12 +869,12 @@ export function App() {
       }),
       ...buildWorkspaceItems(workspaces, {
         open: (name) => void openWorkspaceInEditor(name),
-        show: () => navigate("workspaces"),
+        show: (name) => navigate("workspaces", encodeURIComponent(name)),
       }),
       ...(boardEnabled && paletteBoard ? buildTaskItems(paletteBoard.tasks, paletteBoard.projects, (id) => navigate("board", encodeURIComponent(id))) : []),
     ];
     return items;
-  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, dailyEnabled, usageEnabled, theme, tick, navigate, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, openSession, openCodex]);
+  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, dailyEnabled, usageEnabled, theme, tick, navigate, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, openSession, openCodex, fail]);
 
   return (
     <div className={`shell ${drawerSession || codexDrawerThread || sharePanel ? "shell--panel" : ""}`}>
@@ -1026,6 +1035,7 @@ export function App() {
               workspaces={workspaces}
               settings={settings}
               enabled={hubEnabled}
+              focusName={route.param}
               onChanged={loadHub}
               onOpenSettings={() => navigate("settings", "paths")}
               onNotice={ok}

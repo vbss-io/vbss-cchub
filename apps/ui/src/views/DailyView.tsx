@@ -108,6 +108,7 @@ function extractSection(content: string, heading: string): string {
 }
 
 const TASK_FILTER_KEY = "hub.daily.taskFilter";
+const PENDING_ACTION_TTL_MS = 15_000;
 
 function readStoredTaskFilter(): TaskFilter {
   try {
@@ -465,6 +466,9 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
   const ownWriteOrderRef = useRef<string[]>([]);
   const pendingEventRef = useRef<DailyStreamEvent | null>(null);
   const textRef = useRef(text);
+  const savedTextRef = useRef(savedText);
+  const saveStatusRef = useRef<SaveStatus>("idle");
+  const pendingActionRef = useRef<{ action: "plan" | "refresh"; at: number } | null>(null);
 
   const enabled = settings?.features.daily === true;
   const dirty = text !== savedText;
@@ -472,6 +476,14 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
   useEffect(() => {
     textRef.current = text;
   }, [text]);
+
+  useEffect(() => {
+    savedTextRef.current = savedText;
+  }, [savedText]);
+
+  useEffect(() => {
+    saveStatusRef.current = saveStatus;
+  }, [saveStatus]);
 
   useEffect(() => {
     try {
@@ -507,11 +519,13 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
     setConflict(null);
   };
 
-  const loadEntry = (target: string) => {
+  const loadEntry = (target: string, canApply: () => boolean = () => true) => {
     setEntryLoading(true);
     return getDailyEntry(target)
       .then((next) => {
+        if (!canApply()) return false;
         applyLoaded(next);
+        return true;
       })
       .finally(() => setEntryLoading(false));
   };
@@ -796,8 +810,9 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
     loadOverview();
     refreshSessions(date);
     try {
-      if (dirty || saveStatus === "saving") showNotice("ok", "Unsaved edits kept; sessions refreshed");
-      else await loadEntry(date);
+      const editsPending = () => textRef.current !== savedTextRef.current || saveStatusRef.current === "saving";
+      const applied = editsPending() ? false : await loadEntry(date, () => !editsPending());
+      if (!applied) showNotice("ok", "Unsaved edits kept; sessions refreshed");
     } catch (err) {
       showNotice("error", err instanceof Error ? err.message : "could not refresh the daily");
     } finally {
@@ -807,14 +822,43 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
 
   useEffect(() => {
     if (!enabled) return;
-    const onRefresh = () => void refresh();
-    const onPlanToday = () => openWizard();
+    const onRefresh = () => {
+      if (!date || entry == null || entryLoading) {
+        pendingActionRef.current = { action: "refresh", at: Date.now() };
+        return;
+      }
+      void refresh();
+    };
+    const onPlanToday = () => {
+      if (!date) {
+        pendingActionRef.current = { action: "plan", at: Date.now() };
+        return;
+      }
+      openWizard();
+    };
     window.addEventListener("cchub:daily-refresh", onRefresh);
     window.addEventListener("cchub:daily-plan-today", onPlanToday);
     return () => {
       window.removeEventListener("cchub:daily-refresh", onRefresh);
       window.removeEventListener("cchub:daily-plan-today", onPlanToday);
     };
+  });
+
+  useEffect(() => {
+    const pending = pendingActionRef.current;
+    if (!enabled || !pending || !date) return;
+    if (Date.now() - pending.at > PENDING_ACTION_TTL_MS) {
+      pendingActionRef.current = null;
+      return;
+    }
+    if (pending.action === "plan") {
+      pendingActionRef.current = null;
+      openWizard();
+      return;
+    }
+    if (entry == null || entryLoading) return;
+    pendingActionRef.current = null;
+    void refresh();
   });
 
   const computeCarriedItems = (): DailyFocusDraftItem[] => {
@@ -929,7 +973,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
         <button className="act" onClick={() => setDate(shiftDate(date, 1))}>
           Next ›
         </button>
-        <input className="in" style={{ maxWidth: 170 }} type="date" value={date} onChange={(event) => event.target.value && setDate(event.target.value)} />
+        <input className="in daily__date" type="date" value={date} onChange={(event) => event.target.value && setDate(event.target.value)} />
         <button className="act" disabled={refreshBusy} aria-busy={refreshBusy} title="Reload this day from the server" onClick={() => void refresh()}>
           {refreshBusy ? "Refreshing…" : "Refresh"}
         </button>

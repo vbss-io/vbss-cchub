@@ -4,7 +4,7 @@ import { workspaceOf } from "./wsmatch";
 
 export type Orientation = "horizontal" | "vertical";
 
-export type FlowTone = "go" | "pend" | "hold" | "muted" | "brand";
+export type FlowTone = "go" | "pend" | "hold" | "unread" | "seen" | "muted" | "brand";
 
 export type FlowNodeKind = "hub" | "workspace" | "session" | "codex" | "subagents" | "agent" | "task" | "taskgroup" | "more";
 
@@ -91,8 +91,14 @@ const sessionTone = (session: SessionRecord): FlowTone => {
   if (staleSession(session)) return "muted";
   if (session.status === "active") return "go";
   if (session.status === "waiting") return "pend";
-  if (session.status === "idle") return "hold";
+  if (session.status === "idle") return session.unread === true ? "unread" : "seen";
   return "muted";
+};
+
+const sessionSubtitle = (session: SessionRecord): string => {
+  if (staleSession(session)) return "inactive";
+  if (session.status === "idle" && session.unread === true) return "finished";
+  return session.status;
 };
 
 const taskRunning = (task: TaskRecord): boolean => task.status === "running" || task.status === "pending";
@@ -231,7 +237,7 @@ export function buildFlow(input: FlowInput): FlowGraph {
       add({
         ...base("session", sid, wsId, lane.key),
         title: clip(session.customTitle ?? session.title ?? session.sessionId.slice(0, 8), 26),
-        subtitle: staleSession(session) ? "inactive" : session.status,
+        subtitle: sessionSubtitle(session),
         tone: sessionTone(session),
         running: session.status === "active" || running > 0,
         dim: laneDim,

@@ -1,11 +1,12 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type ReactNode, type WheelEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { fetchAgents, reportUiError } from "../api";
+import { attentionCount, needsYou } from "../attention";
 import { claudeClient, codexClient, isHubRun, sessionClient } from "../clients";
 import type { TaskRecord, WorkspaceRecord } from "../delegation";
 import { FlowInspector } from "../components/FlowInspector";
 import { buildFlow, relatives, type FlowNode, type Orientation } from "../flow-layout";
 import { IconCode, IconCodex, IconDesktop, IconFlow, IconHub, IconSearch, IconTasks, IconTerminal, IconWorkspaces } from "../icons";
-import { isStale } from "../stale";
+import { isEmpty, isStale } from "../stale";
 import type { AgentRecord, CodexSessionRecord, GroupRecord, SessionRecord } from "../types";
 
 interface Props {
@@ -65,7 +66,8 @@ const shortClient = (label: string): string => SHORT_CLIENT[label] ?? label;
 const LEGEND_TONES: { tone: string; label: string }[] = [
   { tone: "go", label: "active" },
   { tone: "pend", label: "waiting" },
-  { tone: "hold", label: "idle" },
+  { tone: "unread", label: "finished, unread" },
+  { tone: "seen", label: "idle" },
   { tone: "muted", label: "ended" },
 ];
 
@@ -226,7 +228,7 @@ function FlowCanvasView({ sessions, codexSessions, tasks, workspaces, groups, on
       if (!matchesClient(session, clientFilter)) return false;
       if (pill === "subagents" && (session.agentsTotal ?? 0) === 0) return false;
       if (pill === "tasks" && !tasks.some((task) => task.sessionId === session.sessionId)) return false;
-      if (pill === "needsyou" && !(session.status === "waiting" || session.status === "idle")) return false;
+      if (pill === "needsyou" && !needsYou(session)) return false;
       if (needle && !`${nameOf(session)} ${session.cwd ?? ""}`.toLowerCase().includes(needle)) return false;
       return true;
     });
@@ -379,7 +381,7 @@ function FlowCanvasView({ sessions, codexSessions, tasks, workspaces, groups, on
     const live = baseLive.length;
     const subagents = baseLive.reduce((sum, s) => sum + (s.agentsRunning ?? 0), 0);
     const running = tasks.filter((t) => t.status === "running" || t.status === "pending").length;
-    const need = baseLive.filter((s) => s.status === "waiting" || s.status === "idle").length;
+    const need = attentionCount(baseLive.filter((s) => !isEmpty(s)));
     return { live, subagents, running, need };
   }, [baseLive, tasks]);
 
