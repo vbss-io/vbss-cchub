@@ -1,5 +1,6 @@
 import type { LimitsSnapshot } from "../delegation";
 import type { RuntimeSnapshot } from "../types";
+import "../statusbar.css";
 import { RuntimeBar, RuntimeChip } from "./RuntimeBar";
 
 interface LimitWindows {

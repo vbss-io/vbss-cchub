@@ -160,6 +160,7 @@ export interface CommandActions {
   newTask?: () => void;
   planToday?: () => void;
   refreshDaily?: () => void;
+  startCapture?: () => void;
   backupNow: () => void;
   toggleTheme: () => void;
   themeHint: string;
@@ -170,11 +171,28 @@ export interface CommandActions {
 export const buildCommandItems = (actions: CommandActions): PaletteItem[] => {
   const items: PaletteItem[] = [];
   if (actions.newTask) items.push({ id: "command:new-task", kind: "command", title: "New task", subtitle: "Tasks", keywords: ["add", "create", "todo"], run: actions.newTask });
-  if (actions.planToday) items.push({ id: "command:plan-today", kind: "command", title: "Plan today", subtitle: "Daily", keywords: ["daily", "focus", "organize"], run: actions.planToday });
-  if (actions.refreshDaily) items.push({ id: "command:refresh-daily", kind: "command", title: "Refresh daily", subtitle: "Daily", keywords: ["reload", "daily", "sync"], run: actions.refreshDaily });
+  if (actions.planToday) items.push({ id: "command:plan-today", kind: "command", title: "Plan today", subtitle: "Today", keywords: ["daily", "today", "focus", "organize"], run: actions.planToday });
+  if (actions.refreshDaily) items.push({ id: "command:refresh-daily", kind: "command", title: "Refresh Today", subtitle: "Today", keywords: ["reload", "daily", "today", "sync"], run: actions.refreshDaily });
+  if (actions.startCapture) items.push({ id: "command:capture", kind: "command", title: "Capture…", subtitle: "Today", keywords: ["capture", "note", "inbox", "quick", "idea"], run: actions.startCapture });
   items.push({ id: "command:backup-now", kind: "command", title: "Back up now", subtitle: "Hub data", keywords: ["backup", "snapshot", "save"], run: actions.backupNow });
   items.push({ id: "command:toggle-theme", kind: "command", title: "Toggle theme", subtitle: actions.themeHint, keywords: ["dark", "midnight", "dracula", "appearance", "color"], run: actions.toggleTheme });
   if (actions.toggleWidget) items.push({ id: "command:toggle-widget", kind: "command", title: "Show/hide widget", subtitle: "Desktop", keywords: ["tray", "overlay"], run: actions.toggleWidget });
   items.push({ id: "command:install-hooks", kind: "command", title: "Install hooks…", subtitle: "Opens Settings › Hooks", keywords: ["hooks", "claude", "setup", "settings"], run: actions.installHooks });
   return items;
+};
+
+export const CAPTURE_PREFILL = "capture ";
+
+const CAPTURE_PATTERN = /^\s*(?:capture\s+|c:\s*)(\S[\s\S]*)$/i;
+
+export const parseCaptureQuery = (query: string): string | null => {
+  const match = CAPTURE_PATTERN.exec(query);
+  const text = match?.[1]?.trim();
+  return text ? text : null;
+};
+
+export const buildCaptureItems = (query: string, capture: (text: string) => void): PaletteItem[] => {
+  const text = parseCaptureQuery(query);
+  if (!text) return [];
+  return [{ id: "capture:new", kind: "command", title: `Capture: ${text}`, subtitle: "Adds to today's captures", run: () => capture(text) }];
 };

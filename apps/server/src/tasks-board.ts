@@ -938,7 +938,7 @@ export function parseBoardTasks(markdown: string, projectId: string, config: Tas
   return tasks;
 }
 
-function flattenTasks(tasks: BoardTask[]): BoardTask[] {
+export function flattenTasks(tasks: BoardTask[]): BoardTask[] {
   return tasks.flatMap((task) => [task, ...flattenTasks(task.subtasks)]);
 }
 
@@ -1107,7 +1107,7 @@ function resolveRef(ref: string, files: WalkedFile[]): string | null {
   return loose.length === 1 ? (loose[0] as WalkedFile).id : null;
 }
 
-interface LoadedBoard {
+export interface LoadedBoard {
   projects: BoardProject[];
   contents: Map<string, string>;
   errors: { path: string; error: string }[];
@@ -1223,7 +1223,7 @@ function effectivePrompt(settings: DelegationSettings): string {
   return settings.tasks.delegatePrompt ?? DEFAULT_TASK_DELEGATE_PROMPT;
 }
 
-function collectBoard(root: string, config: TasksFeatureSettings): { loaded: LoadedBoard; tasks: BoardTask[] } {
+export function collectBoard(root: string, config: TasksFeatureSettings): { loaded: LoadedBoard; tasks: BoardTask[] } {
   const loaded = loadBoard(root, config);
   const tasks = loaded.projects.flatMap((project) => parseBoardTasks(loaded.contents.get(project.id) as string, project.id, config));
   return { loaded, tasks };
@@ -1263,7 +1263,7 @@ function hashOf(content: string): string {
   return createHash("sha1").update(content).digest("hex");
 }
 
-function requireBoardRoot(settings: DelegationSettings): string {
+export function requireBoardRoot(settings: DelegationSettings): string {
   if (!settings.features.tasks) throw new BadRequestError("the tasks feature is disabled");
   const root = tasksRoot(settings);
   if (!root || !isDirectory(root)) throw new BadRequestError("tasks root not set");
@@ -1294,19 +1294,19 @@ function checkFresh(content: string, file: WalkedFile, config: TasksFeatureSetti
   return current;
 }
 
-interface DocLine {
+export interface DocLine {
   text: string;
   eol: string;
 }
 
-interface ParsedDoc {
+export interface ParsedDoc {
   bom: string;
   lines: DocLine[];
   eol: string;
   endsWithEol: boolean;
 }
 
-function openDoc(content: string): ParsedDoc {
+export function openDoc(content: string): ParsedDoc {
   const bom = content.startsWith(BOM) ? BOM : "";
   const parts = stripBom(content).split(/(\r\n|\n)/);
   const endsWithEol = parts.length > 1 && parts[parts.length - 1] === "";
@@ -1317,7 +1317,7 @@ function openDoc(content: string): ParsedDoc {
   return { bom, lines, eol: firstEol, endsWithEol };
 }
 
-function renderDoc(doc: ParsedDoc): string {
+export function renderDoc(doc: ParsedDoc): string {
   const last = doc.lines.length - 1;
   let out = doc.bom;
   doc.lines.forEach((line, index) => {
@@ -1327,7 +1327,7 @@ function renderDoc(doc: ParsedDoc): string {
   return out;
 }
 
-const docLine = (text: string): DocLine => ({ text, eol: "" });
+export const docLine = (text: string): DocLine => ({ text, eol: "" });
 
 const isBlank = (line: DocLine | undefined): boolean => line !== undefined && line.text.trim() === "";
 
@@ -1559,11 +1559,39 @@ function topLevelOf(tasks: BoardTask[], line: number): BoardTask | null {
   return tasks.find((task) => findTaskAt([task], line) !== null) ?? null;
 }
 
+export interface BoardHooks {
+  committed?: (previous: string, next: string) => void;
+  diskChanged?: (content: string) => void;
+  taskWritten?: (settings: DelegationSettings) => boolean;
+}
+
+let boardHooks: BoardHooks = {};
+
+export function setBoardHooks(hooks: BoardHooks): void {
+  boardHooks = hooks;
+}
+
+function runBoardHook<T>(action: () => T, fallback: T): T {
+  try {
+    return action();
+  } catch (err) {
+    console.error(`board hook failed: ${err instanceof Error ? err.message : String(err)}`);
+    return fallback;
+  }
+}
+
 function commitFile(file: WalkedFile, next: string): number {
+  let previous = "";
+  try {
+    previous = readFileSync(file.abs, "utf8");
+  } catch {
+    previous = "";
+  }
   snapshotVaultFile(file.vault, file.abs);
   writeFileAtomic(file.abs, next);
   knownHash.set(file.abs, hashOf(next));
   broadcast("tasks", { source: "hub", projectId: file.id });
+  runBoardHook(() => boardHooks.committed?.(previous, next), undefined);
   return statSync(file.abs).mtimeMs;
 }
 
@@ -2351,7 +2379,7 @@ const WIKILINK_LEAD_RE = /^\[\[([^\]|#]*)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/;
 const LABEL_TAIL_RE = /^\s*(?:[-–—]\s+|:\s*)?/;
 const LABEL_SPLIT = " - ";
 
-function normalizeText(text: string): string {
+export function normalizeText(text: string): string {
   return text
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -2401,7 +2429,7 @@ function prefixMatches(a: string, b: string): boolean {
   return shorter.length >= MIN_PREFIX_MATCH && (a.startsWith(b) || b.startsWith(a));
 }
 
-interface TaskMatch {
+export interface TaskMatch {
   task: BoardTask | null;
   candidates: string[];
 }
@@ -2458,6 +2486,15 @@ export function effectiveProjectOrder(projects: BoardProject[], order: string[])
   return [...head, ...projects.map((project) => project.id).filter((id) => !listed.has(id))];
 }
 
+export function composeBoardFrom(settings: DelegationSettings, projects: BoardProject[]): ComposeBoard {
+  return {
+    projects: projects.map((project) => ({ id: project.id, name: project.name, title: project.title })),
+    order: effectiveProjectOrder(projects, settings.daily.projectOrder),
+    projectOfLabel: (label) => resolveProjectLabel(label, projects),
+    projectOfLine: (text) => splitLabel(text, projects).projectId,
+  };
+}
+
 export function composeBoardFor(settings: DelegationSettings): ComposeBoard | null {
   if (!settings.features.daily || !settings.features.tasks) return null;
   const root = tasksRoot(settings);
@@ -2465,23 +2502,18 @@ export function composeBoardFor(settings: DelegationSettings): ComposeBoard | nu
   try {
     const { projects } = loadBoard(root, settings.tasks);
     if (projects.length === 0) return null;
-    return {
-      projects: projects.map((project) => ({ id: project.id, name: project.name, title: project.title })),
-      order: effectiveProjectOrder(projects, settings.daily.projectOrder),
-      projectOfLabel: (label) => resolveProjectLabel(label, projects),
-      projectOfLine: (text) => splitLabel(text, projects).projectId,
-    };
+    return composeBoardFrom(settings, projects);
   } catch {
     return null;
   }
 }
 
-interface FocusRange {
+export interface FocusRange {
   heading: number;
   end: number;
 }
 
-function focusRange(lines: string[], settings: DelegationSettings): FocusRange | null {
+export function focusRange(lines: string[], settings: DelegationSettings): FocusRange | null {
   const heading = findHeadingIndex(lines, settings.daily.headings.focus);
   if (heading === -1) return null;
   for (let index = heading + 1; index < lines.length; index += 1) {
@@ -2531,7 +2563,7 @@ function recurredOn(index: RecurrenceIndex, original: BoardTask | null, needle: 
   return index.occurrences.some((copy) => copy.projectId === original.projectId && copy.doneAt === date && occurrenceOf(index, original, needle, copy));
 }
 
-interface FocusChild {
+export interface FocusChild {
   line: number;
   depth: number;
   raw: string;
@@ -2540,7 +2572,7 @@ interface FocusChild {
   task: BoardTask | null;
 }
 
-interface FocusEntry {
+export interface FocusEntry {
   line: number;
   raw: string;
   checkbox: BoardCheckbox;
@@ -2554,7 +2586,7 @@ interface FocusEntry {
   children: FocusChild[];
 }
 
-interface DailyLineLink {
+export interface DailyLineLink {
   line: number;
   depth: number;
   raw: string;
@@ -2563,7 +2595,7 @@ interface DailyLineLink {
   held: boolean;
 }
 
-interface FocusScan {
+export interface FocusScan {
   entries: FocusEntry[];
   links: DailyLineLink[];
 }
@@ -2604,7 +2636,7 @@ function focusEntries(settings: DelegationSettings, date: string, content: strin
   return entries;
 }
 
-function scanDaily(settings: DelegationSettings, date: string, content: string, projects: BoardProject[], tasks: BoardTask[]): FocusScan {
+export function scanDaily(settings: DelegationSettings, date: string, content: string, projects: BoardProject[], tasks: BoardTask[]): FocusScan {
   const index = recurrenceIndex(tasks);
   const entries = focusEntries(settings, date, content, projects, index);
   const links: DailyLineLink[] = [];
@@ -2852,8 +2884,9 @@ function syncTodayAfterTaskWrite(settings: DelegationSettings, task: BoardTask, 
 
 export function writeBoardTaskSynced(settings: DelegationSettings, input: BoardWriteInput): BoardSyncedWriteResult {
   const result = writeBoardTask(settings, input);
-  const dailySynced = input.status !== undefined && syncTodayAfterTaskWrite(settings, result.task, result.recurred);
-  return { ...result, dailySynced };
+  const marksSynced = input.status !== undefined && syncTodayAfterTaskWrite(settings, result.task, result.recurred);
+  const mirrored = runBoardHook(() => boardHooks.taskWritten?.(settings) ?? false, false);
+  return { ...result, dailySynced: marksSynced || mirrored };
 }
 
 export function syncTaskToDaily(settings: DelegationSettings, input: SyncDailyInput): SyncDailyResult {
@@ -3039,6 +3072,7 @@ function handleBoardFsEvent(root: string, rel: string): void {
   if (knownHash.get(abs) === hash) return;
   knownHash.set(abs, hash);
   broadcast("tasks", { source: "disk", projectId });
+  runBoardHook(() => boardHooks.diskChanged?.(content), undefined);
 }
 
 export function watchTasksBoard(settings: DelegationSettings): void {

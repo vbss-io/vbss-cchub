@@ -7,6 +7,7 @@ import type {
   CodexSandbox,
   DailyHeadings,
   DelegationSettings,
+  FocusSource,
   Isolation,
   IsolationReason,
   OriginClient,
@@ -29,6 +30,7 @@ import type {
   UsageSettings,
 } from "./delegation-types.js";
 import {
+  FOCUS_SOURCES,
   LIMITS_REFRESH_DEFAULT,
   LIMITS_REFRESH_MAX,
   LIMITS_REFRESH_MIN,
@@ -347,6 +349,15 @@ function storedStringArray(stored: Map<string, string | null>, key: string, fall
   return [...fallback];
 }
 
+function storedText(stored: Map<string, string | null>, key: string): string | null {
+  const value = stored.get(key);
+  return value === undefined || value === null || value.trim() === "" ? null : value;
+}
+
+function storedFocusSource(stored: Map<string, string | null>): FocusSource | null {
+  return FOCUS_SOURCES.find((source) => source === stored.get("daily.focusSource")) ?? null;
+}
+
 function trailDetailOf(value: string | null | undefined): TrailDetail {
   return TRAIL_DETAILS.find((detail) => detail === value) ?? "light";
 }
@@ -378,10 +389,12 @@ export function getSettings(): DelegationSettings {
         focus: stored.get("daily.headings.focus") ?? "Focus",
         meetings: stored.get("daily.headings.meetings") ?? "Meetings",
         sessions: stored.get("daily.headings.sessions") ?? "Sessions",
+        ...(storedText(stored, "daily.headings.captures") === null ? {} : { captures: storedText(stored, "daily.headings.captures") as string }),
       },
       closedKey: stored.get("daily.closedKey") ?? "closed",
       wikilinks: stored.get("daily.wikilinks") === "1",
       projectOrder: storedStringArray(stored, "daily.projectOrder", []),
+      ...(storedFocusSource(stored) === null ? {} : { focusSource: storedFocusSource(stored) as FocusSource }),
     },
     tasks: {
       root: stored.get("tasks.root") ?? null,
@@ -478,6 +491,8 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     if (patch.daily?.headings?.focus !== undefined) upsertSettingStmt.run("daily.headings.focus", patch.daily.headings.focus);
     if (patch.daily?.headings?.meetings !== undefined) upsertSettingStmt.run("daily.headings.meetings", patch.daily.headings.meetings);
     if (patch.daily?.headings?.sessions !== undefined) upsertSettingStmt.run("daily.headings.sessions", patch.daily.headings.sessions);
+    if (patch.daily?.headings?.captures !== undefined) upsertSettingStmt.run("daily.headings.captures", patch.daily.headings.captures.trim() === "" ? null : patch.daily.headings.captures);
+    if (patch.daily?.focusSource !== undefined) upsertSettingStmt.run("daily.focusSource", patch.daily.focusSource);
     if (patch.daily?.closedKey !== undefined) upsertSettingStmt.run("daily.closedKey", patch.daily.closedKey);
     if (patch.daily?.wikilinks !== undefined) upsertSettingStmt.run("daily.wikilinks", patch.daily.wikilinks ? "1" : "0");
     if (patch.daily?.projectOrder !== undefined) upsertSettingStmt.run("daily.projectOrder", JSON.stringify(patch.daily.projectOrder));

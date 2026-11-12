@@ -1,3 +1,4 @@
+import { NO_AGENTS_LABEL, showNoAgents, visibleRuntimeChips } from "../runtime-visibility";
 import type { RuntimeSnapshot } from "../types";
 
 interface Props {
@@ -38,19 +39,14 @@ export function RuntimeChip({ label, on, detail, onClick, tone }: ChipProps) {
 }
 
 export function RuntimeBar({ runtimes, claudeSessions, codexSessions, hubRunning, hubAttention, onOpenHub }: Props) {
-  const claudeCode = runtimes?.claudeCode;
-  const claudeDetail = claudeCode
-    ? `${claudeSessions} live · ${claudeCode.count} process${claudeCode.count === 1 ? "" : "es"}`
-    : "scanning…";
-  const hubDetail =
-    hubRunning + hubAttention === 0 ? "idle" : `${hubRunning} running${hubAttention > 0 ? ` · ${hubAttention} need you` : ""}`;
+  const input = { runtimes, claudeSessions, codexSessions, hubRunning, hubAttention };
+  const chips = visibleRuntimeChips(input);
   return (
     <div className="runtimes" aria-label="Runtimes on this machine">
-      <RuntimeChip label="Claude Code" on={(claudeCode?.running ?? false) || claudeSessions > 0} detail={claudeDetail} />
-      <RuntimeChip label="Claude Desktop" on={runtimes?.claudeDesktop.running ?? false} detail={runtimes?.claudeDesktop.running ? "open" : "closed"} />
-      <RuntimeChip label="Codex app" on={runtimes?.codexApp.running ?? false} detail={runtimes?.codexApp.running ? `open · ${codexSessions} threads` : "closed"} />
-      <RuntimeChip label="Codex CLI" on={(runtimes?.codexCli.count ?? 0) > 0} detail={`${runtimes?.codexCli.count ?? 0} running`} />
-      <RuntimeChip label="Delegated" on={hubRunning + hubAttention > 0} detail={hubDetail} onClick={onOpenHub} />
+      {chips.map((chip) => (
+        <RuntimeChip key={chip.key} label={chip.label} on={chip.on} detail={chip.detail} onClick={chip.key === "delegated" ? onOpenHub : undefined} />
+      ))}
+      {showNoAgents(input) && <span className="runtimes__idle">{NO_AGENTS_LABEL}</span>}
       {runtimes?.error && <span className="runtime__error">{runtimes.error}</span>}
     </div>
   );

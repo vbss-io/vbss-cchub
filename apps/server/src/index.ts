@@ -47,6 +47,7 @@ import { abortActiveRuns, delegationRouter } from "./delegation-routes.js";
 import { usageRouter, warmUsage } from "./usage-routes.js";
 import { limitsRouter } from "./limits-routes.js";
 import { backupsRouter } from "./backups-routes.js";
+import { todayRouter } from "./today-routes.js";
 import { recordAppVersion, runDailyMaintenance } from "./backups.js";
 import { enableVaultSnapshots } from "./vault-snapshot.js";
 import { startLimitsPolling, stopLimitsPolling } from "./limits.js";
@@ -539,6 +540,7 @@ app.use("/delegation", delegationRouter());
 app.use("/delegation/usage", usageRouter());
 app.use("/delegation/limits", limitsRouter());
 app.use("/delegation/backups", backupsRouter());
+app.use("/delegation/today", todayRouter());
 
 app.get("/api/events", (_req, res) => {
   res.writeHead(200, {

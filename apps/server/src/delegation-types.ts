@@ -129,10 +129,15 @@ export interface TrailFeatureSettings {
   hubEvents: boolean;
 }
 
+export const FOCUS_SOURCES = ["scheduled", "list"] as const;
+
+export type FocusSource = (typeof FOCUS_SOURCES)[number];
+
 export interface DailyHeadings {
   focus: string;
   meetings: string;
   sessions: string;
+  captures?: string;
 }
 
 export interface DailyFeatureSettings {
@@ -144,6 +149,7 @@ export interface DailyFeatureSettings {
   closedKey: string;
   wikilinks: boolean;
   projectOrder: string[];
+  focusSource?: FocusSource;
 }
 
 export interface TasksPrefixes {

@@ -251,6 +251,8 @@ export class DelegationDisabledError extends Error {}
 
 export class BackupsUnavailableError extends Error {}
 
+export class TodayUnavailableError extends Error {}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${base}${path}`, {
     method,
@@ -264,6 +266,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     const message = (json as { error?: string } | null)?.error ?? `request failed (${res.status})`;
     if (res.status === 404 && path === "/settings") throw new DelegationDisabledError(message);
     if (res.status === 404 && path === "/backups") throw new BackupsUnavailableError(message);
+    if (res.status === 404 && path.startsWith("/today/")) throw new TodayUnavailableError("Today is not available on this hub. Update the hub to use it.");
     throw new Error(message);
   }
   return json as T;
@@ -489,6 +492,62 @@ export interface BackupsOverview {
 export const getBackups = (): Promise<BackupsOverview> => call("GET", "/backups");
 
 export const createBackup = (): Promise<{ backup: BackupEntry }> => call("POST", "/backups");
+
+export interface TodayEntry {
+  task: BoardTask;
+  project: { id: string; title: string; name: string };
+  parentTitle: string | null;
+}
+
+export interface TodayCapture {
+  line: number;
+  raw: string;
+  text: string;
+  promotedTo: string | null;
+}
+
+export interface TodayData {
+  date: string;
+  focusSource: "scheduled" | "list";
+  focus: TodayEntry[];
+  carriedOver: TodayEntry[];
+  meetings: string[];
+  captures: TodayCapture[];
+  unlinked: string[];
+  summary: string | null;
+  dailyExists: boolean;
+  dailyUpdatedAt: number | null;
+}
+
+export interface TodayScheduleTarget {
+  projectId: string;
+  line: number;
+  raw: string;
+  date: string | null;
+}
+
+export interface TodayPromoteTarget {
+  line: number;
+  raw: string;
+  projectId: string;
+  schedule?: boolean;
+}
+
+const todayPath = (date: string, action?: string): string => `/today/${encodeURIComponent(date)}${action ? `/${action}` : ""}`;
+
+export const getToday = (date: string): Promise<TodayData> => call("GET", todayPath(date));
+
+export const scheduleTask = (date: string, target: TodayScheduleTarget): Promise<{ task: BoardTask }> => call("POST", todayPath(date, "schedule"), target);
+
+export const addCapture = (date: string, text: string): Promise<{ captures: TodayCapture[] }> => call("POST", todayPath(date, "capture"), { text });
+
+export const promoteCapture = (date: string, target: TodayPromoteTarget): Promise<{ task: BoardTask }> => call("POST", todayPath(date, "promote"), target);
+
+export const addMeeting = (date: string, text: string): Promise<{ meetings: string[] }> => call("POST", todayPath(date, "meeting"), { text });
+
+export const createTodayNote = (date: string): Promise<{ dailyExists: true }> => call("POST", todayPath(date, "create"));
+
+export const migrateToday = (date: string): Promise<{ scheduled: number }> => call("POST", todayPath(date, "migrate"));
 
 export const listWorkspaces = (): Promise<WorkspaceRecord[]> => call("GET", "/workspaces");
 

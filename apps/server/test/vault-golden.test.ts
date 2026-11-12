@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -16,13 +16,16 @@ delete process.env.HUB_SECOND_BRAIN;
 
 type Board = typeof import("../src/tasks-board.js");
 type Daily = typeof import("../src/daily.js");
+type Today = typeof import("../src/today.js");
 type BoardTask = import("../src/tasks-board.js").BoardTask;
 let board: Board;
 let daily: Daily;
+let today: Today;
 
 before(async () => {
   board = await import("../src/tasks-board.js");
   daily = await import("../src/daily.js");
+  today = await import("../src/today.js");
 });
 
 const GOLDEN = join(fixtures, "vault-golden");
@@ -536,5 +539,199 @@ describe("golden vault: daily round-trip", () => {
       daily.writeDaily(settings, date, daily.setTaskChecked(after, task.line, false));
       assert.equal(readFileSync(join(root, "daily", `${date}.md`), "utf8"), before);
     }
+  });
+});
+
+function copyDaily(root: string, from: string, to: string): void {
+  writeFileSync(join(root, "daily", `${to}.md`), readFileSync(join(GOLDEN, "daily", `${from}.md`)));
+}
+
+function lineBytes(buffer: Buffer): string[] {
+  return buffer.toString("utf8").replace(BOM, "").split(/\r\n|\n/);
+}
+
+describe("golden vault: today scheduling", () => {
+  const FUTURE = "2099-01-01";
+  const SCHEDULED = "\u23F3";
+  const DUE = "\u{1F4C5}";
+
+  it("sets and clears the scheduled token changing only that token of that line, in LF, CRLF and BOM projects", () => {
+    const root = freshVault();
+    const settings = settingsFor(root);
+    const cases: [string, string, string, string][] = [
+      ["acme/acme", "Plain task without priority", `- [ ] Plain task without priority ${SCHEDULED} ${FUTURE}`, "- [ ] Plain task without priority"],
+      ["acme/acme", "Renew vendor contract", `- [ ] Renew vendor contract #p1 ${SCHEDULED} ${FUTURE} ${DUE} 2026-11-30`, `- [ ] Renew vendor contract #p1 ${DUE} 2026-11-30`],
+      ["acme/acme", "Cut over the webhook", `  - [ ] Cut over the webhook ${SCHEDULED} ${FUTURE}`, "  - [ ] Cut over the webhook"],
+      ["alex-personal", "Plan the quarter", `- [ ] Plan the quarter #p2 ${SCHEDULED} ${FUTURE} ${DUE} 2026-12-01`, `- [ ] Plan the quarter #p2 ${DUE} 2026-12-01`],
+      ["initech", "Confirm sandbox credentials", `- [ ] Confirm sandbox credentials #p2 ${SCHEDULED} ${FUTURE}`, "- [ ] Confirm sandbox credentials #p2"],
+    ];
+    for (const [projectId, title, scheduledLine, clearedLine] of cases) {
+      const file = pathOf(root, projectId);
+      const before = readFileSync(file);
+      const task = taskNamed(root, projectId, title);
+      const scheduled = today.todayApi.schedule(settings, { projectId, line: task.line, raw: task.raw, date: FUTURE });
+      assert.equal(scheduled.task.raw, scheduledLine);
+      const after = readFileSync(file);
+      assert.deepEqual(changedLines(before.toString("utf8"), after.toString("utf8")), [task.line], `${projectId} ${title}`);
+      assert.equal(lineBytes(after)[task.line], scheduledLine);
+      assert.equal(after.subarray(0, 3).equals(before.subarray(0, 3)), true);
+      assert.equal(before.includes("\r\n"), after.includes("\r\n"));
+      const cleared = today.todayApi.schedule(settings, { projectId, line: task.line, raw: scheduled.task.raw, date: null });
+      assert.equal(cleared.task.raw, clearedLine);
+      assert.deepEqual(changedLines(before.toString("utf8"), readFileSync(file).toString("utf8")), lineBytes(before)[task.line] === clearedLine ? [] : [task.line]);
+    }
+    assert.deepEqual(digestOf(root), goldenDigest);
+  });
+
+  it("replaces an existing scheduled date in place and never touches the notes, the dates or the stamps around it", () => {
+    const root = freshVault();
+    const settings = settingsFor(root);
+    const file = pathOf(root, "acme/acme");
+    const before = readFileSync(file, "utf8");
+    const task = taskNamed(root, "acme/acme", "Follow up on the audit");
+    const moved = today.todayApi.schedule(settings, { projectId: "acme/acme", line: task.line, raw: task.raw, date: FUTURE });
+    assert.equal(moved.task.raw, `- [ ] Follow up on the audit ${SCHEDULED} ${FUTURE} ${DUE} 2026-11-16`);
+    assert.deepEqual(changedLines(before, readFileSync(file, "utf8")), [task.line]);
+    assert.deepEqual(
+      today.todayApi.focusOf(settings, FUTURE).map((entry) => entry.task.title),
+      ["Follow up on the audit"],
+    );
+  });
+});
+
+describe("golden vault: today mirror", () => {
+  const SCHEDULED = "\u23F3";
+  const DUE = "\u{1F4C5}";
+  const START = "\u{1F6EB}";
+  const DONE = "\u2705";
+
+  it("migrates the real-shaped daily, schedules the linked tasks and regenerates the focus in the format of the daily", () => {
+    const root = freshVault();
+    const settings = settingsFor(root);
+    const date = localToday();
+    copyDaily(root, "2026-11-12", date);
+    const follow = taskNamed(root, "acme/acme", "Follow up on the audit");
+    today.todayApi.schedule(settings, { projectId: "acme/acme", line: follow.line, raw: follow.raw, date: null });
+    const dailyFile = join(root, "daily", `${date}.md`);
+    const before = readFileSync(dailyFile, "utf8");
+    const projectsBefore = new Map(PROJECT_FILES.map((projectId) => [projectId, readFileSync(pathOf(root, projectId))]));
+    const result = today.todayApi.migrateFocus(settings, date);
+    assert.deepEqual([result.scheduled, result.synced, result.skipped, result.failed], [5, 2, [], []]);
+    const after = readFileSync(dailyFile, "utf8");
+    assert.deepEqual(sectionFrom(after, "Focus").split("## Meetings")[0]?.split("\n"), [
+      "## Focus",
+      "",
+      "- [ ] [[acme|Acme Platform]] - Renew vendor contract #p1",
+      "- [-] [[acme|Acme Platform]] - Migrate billing service #p0",
+      "  - [x] Export legacy invoices",
+      "  - [-] Map the new tax codes",
+      "    - note about the rounding rules",
+      "    - [ ] Validate rounding rules",
+      "  - [ ] Cut over the webhook",
+      "",
+      "- [-] [[globex|Globex Rollout]] - Rollout checklist for region two",
+      "  - [-] Provision the staging cluster",
+      "  - [ ] Load test",
+      "",
+      "- [ ] [[alex-personal|Alex Personal]] - Plan the quarter",
+      "  - [ ] Review last quarter",
+      "",
+      "- [x] [[initech|Initech Sandbox]] - Confirm sandbox credentials",
+      "",
+      "- [ ] Plain note without a project",
+      "",
+      "",
+    ]);
+    assert.equal(after.slice(0, after.indexOf("## Focus")), before.slice(0, before.indexOf("## Focus")));
+    assert.equal(after.slice(after.indexOf("## Meetings")), before.slice(before.indexOf("## Meetings")));
+    const acmeNow = lineBytes(readFileSync(pathOf(root, "acme/acme")));
+    const acmeBefore = lineBytes(projectsBefore.get("acme/acme") as Buffer);
+    const changed = acmeBefore.flatMap((line, index) => (line === acmeNow[index] ? [] : [index]));
+    assert.deepEqual(
+      changed.map((index) => acmeNow[index]),
+      [`- [ ] Renew vendor contract #p1 ${SCHEDULED} ${date} ${DUE} 2026-11-30`, `- [-] Migrate billing service #p0 ${START} 2026-11-02 ${SCHEDULED} ${date} ${DUE} 2026-11-20`],
+    );
+    const initech = readFileSync(pathOf(root, "initech"));
+    assert.deepEqual([...initech.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+    assert.equal(initech.toString("utf8").includes("\r"), false);
+    assert.ok(initech.toString("utf8").includes(`- [x] Confirm sandbox credentials #p2 ${SCHEDULED} ${date} ${DONE} ${date}`));
+    const alex = readFileSync(pathOf(root, "alex-personal")).toString("utf8");
+    assert.equal(alex.replace(/\r\n/g, "").includes("\n"), false);
+    assert.ok(alex.includes(`- [ ] Plan the quarter #p2 ${SCHEDULED} ${date} ${DUE} 2026-12-01\r\n`));
+    const again = today.todayApi.migrateFocus(settings, date);
+    assert.deepEqual([again.scheduled, again.synced], [0, 0]);
+    assert.equal(readFileSync(dailyFile, "utf8"), after);
+    assert.equal(today.todayApi.regenerateFocusMirror(settings, date).changed, false);
+    const payload = today.readToday(settings, date);
+    assert.deepEqual(payload.unlinked, ["- [ ] Plain note without a project"]);
+    assert.deepEqual(payload.meetings, ["09:30 Acme billing sync with Alex", "14:00 Globex rollout review"]);
+    assert.deepEqual(payload.captures.map((capture) => capture.text), ["idea: publish the rollout checklist as a template"]);
+    assert.ok(payload.summary?.startsWith("**Briefing (from the 11/11 trail):**"));
+    assert.equal(payload.focus.length, 5);
+  });
+
+  it("keeps the BOM of a daily and every line it cannot link, placing them after the generated block", () => {
+    const root = freshVault();
+    const settings = settingsFor(root);
+    const date = "2099-01-02";
+    copyDaily(root, "2026-11-11", date);
+    const dailyFile = join(root, "daily", `${date}.md`);
+    const before = readFileSync(dailyFile);
+    const result = today.todayApi.migrateFocus(settings, date);
+    assert.deepEqual([result.scheduled, result.synced, result.failed], [2, 0, []]);
+    const after = readFileSync(dailyFile);
+    assert.deepEqual([...after.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
+    assert.equal(after.toString("utf8").includes("\r"), false);
+    assert.deepEqual(lineBytes(after).slice(lineBytes(after).indexOf("## Focus"), lineBytes(after).indexOf("## Meetings")), [
+      "## Focus",
+      "",
+      "- [ ] [[acme|Acme Platform]] - Publish the status page",
+      "",
+      "- [-] [[initech|Initech Sandbox]] - Write the integration guide",
+      "  - note about the outline",
+      "  - [x] Outline",
+      "  - [ ] First draft",
+      "",
+      "- [x] [[globex|Globex Rollout]] - Staging cluster provisioned",
+      "",
+    ]);
+    const tail = (buffer: Buffer): string => buffer.toString("utf8").slice(buffer.toString("utf8").indexOf("## Meetings"));
+    assert.equal(tail(after), tail(before));
+    const acme = lineBytes(readFileSync(pathOf(root, "acme/acme")));
+    assert.ok(acme.includes(`- [ ] BLOCK - Publish the status page - waiting for the DNS change #p1 ${SCHEDULED} ${date}`));
+  });
+
+  it("keeps the CRLF endings of a daily, leaves a task finished earlier where it is and does not move a regression", () => {
+    const root = freshVault();
+    const settings = settingsFor(root);
+    const date = "2099-01-03";
+    copyDaily(root, "2026-11-10", date);
+    const dailyFile = join(root, "daily", `${date}.md`);
+    const result = today.todayApi.migrateFocus(settings, date);
+    assert.deepEqual([result.scheduled, result.synced, result.failed], [1, 0, []]);
+    assert.deepEqual(result.skipped.map((entry) => [entry.title, entry.reason]), [["Docs: refresh the onboarding guide", "finished-earlier"]]);
+    const after = readFileSync(dailyFile, "utf8");
+    assert.equal(after.replace(/\r\n/g, "").includes("\n"), false);
+    const lines = after.split("\r\n");
+    assert.deepEqual(lines.slice(lines.indexOf("## Focus"), lines.indexOf("## Meetings")), [
+      "## Focus",
+      "",
+      "- [-] [[globex|Globex Rollout]] - Banner copy review",
+      "",
+      "- [x] [[acme|Acme Platform]] - Docs: refresh the onboarding guide",
+      "",
+    ]);
+    assert.equal(taskNamed(root, "globex/globex", "Banner copy review").status, "doing");
+    assert.equal(taskNamed(root, "acme/acme", "Docs: refresh the onboarding guide").section, "done");
+  });
+
+  it("never rewrites the committed fixture and never touches a past daily", () => {
+    const root = freshVault();
+    const settings = settingsFor(root);
+    const before = readFileSync(join(root, "daily", "2026-11-10.md"));
+    assert.deepEqual(today.todayApi.regenerateFocusMirror(settings, "2026-11-10"), { changed: false, skipped: "past", applied: 0 });
+    assert.throws(() => today.todayApi.migrateFocus(settings, "2026-11-10"), /past dailies/);
+    assert.equal(readFileSync(join(root, "daily", "2026-11-10.md")).equals(before), true);
+    assert.deepEqual(digestOf(GOLDEN), goldenDigest);
   });
 });

@@ -8,11 +8,12 @@ import { CommandPalette } from "./components/CommandPalette";
 import { SessionDrawer } from "./components/SessionDrawer";
 import { StatusBar } from "./components/StatusBar";
 import { WhatsNew } from "./components/WhatsNew";
-import { configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
+import { addCapture, configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
 import { IconBoard, IconChevron, IconClose, IconFlow, IconMore, IconReports, IconSearch, IconSessions, IconSettings, IconShare, IconTasks, IconUsage, IconWorkspaces } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { unlockAudio } from "./notify";
-import { buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems } from "./palette-items";
+import { buildCaptureItems, buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, CAPTURE_PREFILL } from "./palette-items";
+import { localDayKey } from "./timeline-model";
 import { useHotkeys } from "./use-hotkeys";
 import { HubOfflineBanner } from "./components/HubOfflineBanner";
 import { useHubConnection } from "./use-hub-connection";
@@ -56,7 +57,7 @@ interface Route {
 
 const VIEWS: { key: View; label: string; icon: ReactElement; subtitle: string }[] = [
   { key: "sessions", label: "Sessions", icon: <IconSessions />, subtitle: "Every Claude Code session on this machine, plus Codex threads" },
-  { key: "daily", label: "Daily", icon: <IconDaily />, subtitle: "Your day in the second brain: briefing, focus, meetings, sessions" },
+  { key: "daily", label: "Today", icon: <IconDaily />, subtitle: "Your day: focus, backlog, meetings and captures" },
   { key: "board", label: "Tasks", icon: <IconBoard />, subtitle: "Tasks from your second brain as a board: filter by project, move them, hand one to an agent" },
   { key: "usage", label: "Usage", icon: <IconUsage />, subtitle: "What burns your tokens on this machine, and how much of your plan is left" },
   { key: "flow", label: "Flow", icon: <IconFlow />, subtitle: "Workspaces, sessions, subagents and delegated tasks as a live map" },
@@ -266,6 +267,7 @@ export function App() {
   const [limits, setLimits] = useState<LimitsSnapshot | null>(null);
   const [theme, setTheme] = useState<ThemeName>(() => (localStorage.getItem("hub.theme") === "midnight" ? "midnight" : "dracula"));
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteSeed, setPaletteSeed] = useState({ key: 0, query: "" });
   const [paletteBoard, setPaletteBoard] = useState<BoardPayload | null>(null);
 
   useEffect(() => {
@@ -780,6 +782,10 @@ export function App() {
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
 
+  useEffect(() => {
+    if (!paletteOpen) setPaletteSeed((previous) => (previous.query ? { ...previous, query: "" } : previous));
+  }, [paletteOpen]);
+
   useHotkeys([
     { combo: "ctrl+k", allowInInputs: true, handler: () => setPaletteOpen((open) => !open) },
     { combo: "ctrl+1", handler: () => featureOn("sessions") && navigate("sessions") },
@@ -824,6 +830,28 @@ export function App() {
     [ok, fail],
   );
 
+  const captureFromPalette = useCallback(
+    async (text: string) => {
+      try {
+        await addCapture(localDayKey(new Date()), text);
+        pushToast("ok", "Captured", { label: "Open Today", run: () => navigate("daily") });
+      } catch (err) {
+        fail(err instanceof Error ? err.message : "could not capture");
+      }
+    },
+    [pushToast, navigate, fail],
+  );
+
+  const startCapture = useCallback(() => {
+    setPaletteSeed((previous) => ({ key: previous.key + 1, query: CAPTURE_PREFILL }));
+    setPaletteOpen(true);
+  }, []);
+
+  const captureQueryItems = useCallback(
+    (query: string) => (dailyEnabled ? buildCaptureItems(query, (text) => void captureFromPalette(text)) : []),
+    [dailyEnabled, captureFromPalette],
+  );
+
   const focusFromPalette = useCallback(
     async (focus: () => Promise<{ ok: boolean; reason?: string }>) => {
       try {
@@ -846,6 +874,7 @@ export function App() {
           ? {
               planToday: () => goThenDispatch("daily", "cchub:daily-plan-today"),
               refreshDaily: () => goThenDispatch("daily", "cchub:daily-refresh"),
+              startCapture,
             }
           : {}),
         backupNow: () => void backupNow(),
@@ -874,7 +903,7 @@ export function App() {
       ...(boardEnabled && paletteBoard ? buildTaskItems(paletteBoard.tasks, paletteBoard.projects, (id) => navigate("board", encodeURIComponent(id))) : []),
     ];
     return items;
-  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, dailyEnabled, usageEnabled, theme, tick, navigate, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, openSession, openCodex, fail]);
+  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, dailyEnabled, usageEnabled, theme, tick, navigate, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, startCapture, openSession, openCodex, fail]);
 
   return (
     <div className={`shell ${drawerSession || codexDrawerThread || sharePanel ? "shell--panel" : ""}`}>
@@ -1154,7 +1183,7 @@ export function App() {
         />
       )}
       {showWhatsNew && <WhatsNew onClose={() => setShowWhatsNew(false)} />}
-      <CommandPalette open={paletteOpen} items={paletteItems} onClose={closePalette} />
+      <CommandPalette key={paletteSeed.key} open={paletteOpen} items={paletteItems} onClose={closePalette} initialQuery={paletteSeed.query} queryItems={captureQueryItems} />
 
       {toasts.length > 0 && (
         <div className="toasts" aria-live="polite">

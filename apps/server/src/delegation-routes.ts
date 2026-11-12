@@ -89,6 +89,7 @@ export { abortActiveRuns } from "./delegation-launch.js";
 import {
   AUTONOMY_LEVELS,
   CODEX_SANDBOXES,
+  FOCUS_SOURCES,
   ISOLATION_MODES,
   LIMITS_REFRESH_MAX,
   LIMITS_REFRESH_MIN,
@@ -111,6 +112,7 @@ import {
   WIDGET_PANELS,
   type Autonomy,
   type CodexSandbox,
+  type FocusSource,
   type Isolation,
   type OriginClient,
   type PermissionMode,
@@ -294,6 +296,13 @@ export function delegationRouter(): Router {
         }
         dailyPatch.wikilinks = dailyBody.wikilinks;
       }
+      if ("focusSource" in dailyBody) {
+        if (typeof dailyBody.focusSource !== "string" || !(FOCUS_SOURCES as readonly string[]).includes(dailyBody.focusSource)) {
+          res.status(400).json({ error: `daily.focusSource must be one of: ${FOCUS_SOURCES.join(", ")}` });
+          return;
+        }
+        dailyPatch.focusSource = dailyBody.focusSource as FocusSource;
+      }
       if ("projectOrder" in dailyBody) {
         const order = dailyBody.projectOrder;
         if (!Array.isArray(order) || !order.every((item) => typeof item === "string" && item.trim() !== "" && !/[\r\n]/.test(item))) {
@@ -328,6 +337,13 @@ export function delegationRouter(): Router {
             return;
           }
           headingsPatch.sessions = sessions;
+        }
+        if ("captures" in headingsBody) {
+          if (typeof headingsBody.captures !== "string" || /[\r\n]/.test(headingsBody.captures)) {
+            res.status(400).json({ error: "daily.headings.captures must be a single line of text" });
+            return;
+          }
+          headingsPatch.captures = headingsBody.captures.trim();
         }
         dailyPatch.headings = headingsPatch;
       }

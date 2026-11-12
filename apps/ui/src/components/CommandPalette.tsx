@@ -8,23 +8,27 @@ interface Props {
   items: PaletteItem[];
   onClose: () => void;
   placeholder?: string;
+  initialQuery?: string;
+  queryItems?: (query: string) => PaletteItem[];
 }
 
 const PAGE_STEP = 8;
 
-export function CommandPalette({ open, items, onClose, placeholder }: Props) {
+export function CommandPalette({ open, items, onClose, placeholder, initialQuery, queryItems }: Props) {
   if (!open) return null;
-  return <PaletteDialog items={items} onClose={onClose} placeholder={placeholder ?? "Search sessions, workspaces, tasks and commands"} />;
+  return <PaletteDialog items={items} onClose={onClose} placeholder={placeholder ?? "Search sessions, workspaces, tasks and commands"} initialQuery={initialQuery ?? ""} queryItems={queryItems} />;
 }
 
 interface DialogProps {
   items: PaletteItem[];
   onClose: () => void;
   placeholder: string;
+  initialQuery: string;
+  queryItems?: (query: string) => PaletteItem[];
 }
 
-function PaletteDialog({ items, onClose, placeholder }: DialogProps) {
-  const [query, setQuery] = useState("");
+function PaletteDialog({ items, onClose, placeholder, initialQuery, queryItems }: DialogProps) {
+  const [query, setQuery] = useState(initialQuery);
   const [active, setActive] = useState(0);
   const [recents, setRecents] = useState<string[]>(() => loadRecents());
   const [previousFocus] = useState<Element | null>(() => document.activeElement);
@@ -32,7 +36,7 @@ function PaletteDialog({ items, onClose, placeholder }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const listId = useId();
 
-  const results = useMemo(() => rankItems(items, query, recents), [items, query, recents]);
+  const results = useMemo(() => [...(queryItems?.(query) ?? []), ...rankItems(items, query, recents)], [items, query, recents, queryItems]);
   const activeIndex = results.length === 0 ? -1 : Math.min(active, results.length - 1);
   const optionId = (index: number) => `${listId}-opt-${index}`;
 

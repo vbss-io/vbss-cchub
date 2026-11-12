@@ -1,0 +1,7 @@
+.statusbar .runtimes__idle {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  opacity: 0.8;
+  white-space: nowrap;
+}

@@ -208,6 +208,7 @@ export interface ComposeFocusItem {
   project: string | null;
   text: string;
   block?: string;
+  keepMark?: boolean;
 }
 
 export interface ComposeInput {
@@ -307,7 +308,7 @@ function renderFocusItem(item: ComposeFocusItem, wikilinks: boolean, board: Comp
   if (item.block) {
     const blockLines = item.block.split(LINE_SPLIT_RE);
     blockLines[0] = (blockLines[0] ?? "").replace(TASK_MARKER_RE, (whole, lead: string, marker: string) =>
-      marker === "-" ? whole : `${lead}[ ]`,
+      item.keepMark === true || marker === "-" ? whole : `${lead}[ ]`,
     );
     if (board && wikilinks) {
       blockLines[0] = (blockLines[0] ?? "").replace(BARE_WIKILINK_LABEL_RE, (whole, lead: string, target: string) => {
@@ -345,7 +346,7 @@ function rankFocusItems(items: ComposeFocusItem[], board: ComposeBoard): RankedF
     .map(({ entry }) => entry);
 }
 
-function renderFocusLines(items: ComposeFocusItem[], wikilinks: boolean, board: ComposeBoard | null): string[] {
+export function renderFocusLines(items: ComposeFocusItem[], wikilinks: boolean, board: ComposeBoard | null): string[] {
   const out: string[] = [];
   const keyed = board ? rankFocusItems(items, board) : items.map((item) => ({ item, key: `raw:${item.project ?? ""}`, rank: 0 }));
   let prevKey: string | undefined;
@@ -765,6 +766,25 @@ const lastServerWriteAt = new Map<string, number>();
 
 export type DailyWriteOrigin = "client" | "server";
 
+export interface DailyHooks {
+  written?: (settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin) => void;
+  diskChanged?: (date: string) => void;
+}
+
+let dailyHooks: DailyHooks = {};
+
+export function setDailyHooks(hooks: DailyHooks): void {
+  dailyHooks = hooks;
+}
+
+function runHook(action: () => void): void {
+  try {
+    action();
+  } catch (err) {
+    console.error(`daily hook failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export function hashDailyContent(content: string): string {
   return createHash("sha1").update(content).digest("hex");
 }
@@ -864,6 +884,7 @@ export function writeDaily(
   lastHubHash.set(path, hashOf(content));
   if (origin === "server") lastServerWriteAt.set(path, stat.mtimeMs);
   broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "hub", writeId: writeId ?? null });
+  runHook(() => dailyHooks.written?.(settings, date, content, origin));
   return { date, path, updatedAt: stat.mtimeMs };
 }
 
@@ -964,6 +985,7 @@ function handleDailyFsEvent(dir: string, date: string): void {
   }
   if (lastHubHash.get(path) === hashOf(content)) return;
   broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "disk", writeId: null });
+  runHook(() => dailyHooks.diskChanged?.(date));
 }
 
 export function watchDaily(settings: DelegationSettings): void {

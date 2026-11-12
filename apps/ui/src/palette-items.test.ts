@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { BoardProject, BoardTask, WorkspaceRecord } from "./delegation";
-import { buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, PALETTE_SESSION_CAP, type SessionActions } from "./palette-items";
+import { buildCaptureItems, buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, CAPTURE_PREFILL, PALETTE_SESSION_CAP, parseCaptureQuery, type SessionActions } from "./palette-items";
 import { SETTINGS_SECTIONS } from "./settings-sections";
 import type { CodexSessionRecord, SessionRecord } from "./types";
 
@@ -80,7 +80,7 @@ const task = (id: string, title: string, extra: Partial<BoardTask> = {}): BoardT
 describe("buildViewItems", () => {
   const views = [
     { key: "sessions", label: "Sessions", subtitle: "all", enabled: true },
-    { key: "daily", label: "Daily", subtitle: "day", enabled: false },
+    { key: "daily", label: "Today", subtitle: "day", enabled: false },
     { key: "settings", label: "Settings", subtitle: "cfg", enabled: true },
   ];
 
@@ -189,5 +189,48 @@ describe("buildCommandItems", () => {
       "command:toggle-widget",
       "command:install-hooks",
     ]);
+  });
+});
+
+describe("capture", () => {
+  const base = { backupNow: () => undefined, toggleTheme: () => undefined, themeHint: "Switch to Midnight", installHooks: () => undefined };
+
+  it("adds a Capture command only when provided", () => {
+    const run = () => undefined;
+    assert.equal(ids(buildCommandItems(base)).includes("command:capture"), false);
+    const items = buildCommandItems({ ...base, startCapture: run });
+    const command = items.find((entry) => entry.id === "command:capture");
+    assert.equal(command?.title, "Capture…");
+    assert.equal(command?.run, run);
+  });
+
+  it("keeps the plan and refresh commands labeled for Today", () => {
+    const run = () => undefined;
+    const items = buildCommandItems({ ...base, planToday: run, refreshDaily: run });
+    assert.deepEqual(items.slice(0, 2).map((entry) => entry.subtitle), ["Today", "Today"]);
+    assert.equal(items[1]?.title, "Refresh Today");
+  });
+
+  it("parses the capture and c: prefixes", () => {
+    assert.equal(parseCaptureQuery("capture call Maria"), "call Maria");
+    assert.equal(parseCaptureQuery("Capture   call Maria  "), "call Maria");
+    assert.equal(parseCaptureQuery("c: buy milk"), "buy milk");
+    assert.equal(parseCaptureQuery("C:buy milk"), "buy milk");
+    assert.equal(parseCaptureQuery("capture"), null);
+    assert.equal(parseCaptureQuery("capture   "), null);
+    assert.equal(parseCaptureQuery("c:"), null);
+    assert.equal(parseCaptureQuery("capturing things"), null);
+    assert.equal(parseCaptureQuery("cache clear"), null);
+    assert.equal(parseCaptureQuery(CAPTURE_PREFILL), null);
+  });
+
+  it("builds one Capture item that sends the text", () => {
+    const sent: string[] = [];
+    assert.deepEqual(buildCaptureItems("capture", (text) => sent.push(text)), []);
+    const items = buildCaptureItems("c: ring the bank", (text) => sent.push(text));
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.title, "Capture: ring the bank");
+    items[0]?.run();
+    assert.deepEqual(sent, ["ring the bank"]);
   });
 });
