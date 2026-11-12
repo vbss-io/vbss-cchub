@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { DailyStreamEvent, TasksBoardStreamEvent } from "../api";
 import { BoardTaskPicker } from "../components/BoardTaskPicker";
 import { DailyTasksCheck } from "../components/DailyTasksCheck";
@@ -47,7 +47,18 @@ interface Props {
   onOpenTask: (taskId: string) => void;
   subscribeDaily: (listener: (event: DailyStreamEvent) => void) => () => void;
   subscribeBoard: (listener: (event: TasksBoardStreamEvent) => void) => () => void;
+  embedded?: boolean;
+  date?: string;
+  onEntryChange?: (info: DailyEntryInfo) => void;
 }
+
+export interface DailyEntryInfo {
+  exists: boolean;
+  path: string | null;
+}
+
+export const DAILY_ORGANIZE_EVENT = "cchub:daily-organize";
+export const DAILY_REFINE_EVENT = "cchub:daily-refine";
 
 type Mode = "preview" | "edit";
 type SaveStatus = "idle" | "saving" | "saved" | "unsaved";
@@ -142,6 +153,61 @@ function clearDraft(date: string): void {
   try {
     window.localStorage.removeItem(draftKey(date));
   } catch {}
+}
+
+const SESSIONS_POLL_MS = 30_000;
+
+export function useDailySessions(enabled: boolean, date: string | null): { sessions: DailySession[]; refresh: (target: string) => void } {
+  const [sessions, setSessions] = useState<DailySession[]>([]);
+  const dateRef = useRef(date);
+
+  useEffect(() => {
+    dateRef.current = date;
+  }, [date]);
+
+  const refresh = useCallback((target: string) => {
+    void listDailySessions(target)
+      .then((next) => {
+        if (dateRef.current === target) setSessions(next);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!enabled || !date) return;
+    let alive = true;
+    void listDailySessions(date)
+      .then((next) => {
+        if (alive) setSessions(next);
+      })
+      .catch(() => {
+        if (alive) setSessions([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [enabled, date]);
+
+  useEffect(() => {
+    if (!enabled || !date) return;
+    const id = window.setInterval(() => refresh(date), SESSIONS_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [enabled, date, refresh]);
+
+  useEffect(() => {
+    if (!enabled || !date) return;
+    const onFocusChange = () => {
+      if (document.visibilityState === "visible") refresh(date);
+    };
+    window.addEventListener("focus", onFocusChange);
+    document.addEventListener("visibilitychange", onFocusChange);
+    return () => {
+      window.removeEventListener("focus", onFocusChange);
+      document.removeEventListener("visibilitychange", onFocusChange);
+    };
+  }, [enabled, date, refresh]);
+
+  return { sessions, refresh };
 }
 
 interface DailyWizardProps {
@@ -419,7 +485,7 @@ function DailyWizard(props: DailyWizardProps) {
   );
 }
 
-export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily, subscribeBoard }: Props) {
+export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily, subscribeBoard, embedded = false, date: externalDate, onEntryChange }: Props) {
   const [overview, setOverview] = useState<DailyOverview | null>(null);
   const [overviewFailed, setOverviewFailed] = useState<"stale-hub" | "error" | null>(null);
   const [date, setDate] = useState<string | null>(null);
@@ -432,7 +498,6 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [conflict, setConflict] = useState<Conflict | null>(null);
-  const [sessions, setSessions] = useState<DailySession[]>([]);
   const [showRefine, setShowRefine] = useState(false);
   const [focusText, setFocusText] = useState("");
   const [generateError, setGenerateError] = useState<string | null>(null);
@@ -472,6 +537,15 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
 
   const enabled = settings?.features.daily === true;
   const dirty = text !== savedText;
+  const { sessions, refresh: refreshSessions } = useDailySessions(enabled, date);
+
+  useEffect(() => {
+    if (externalDate) setDate(externalDate);
+  }, [externalDate]);
+
+  useEffect(() => {
+    onEntryChange?.({ exists: entry?.exists === true, path: entry?.exists === true && entry.path ? entry.path : null });
+  }, [entry, onEntryChange]);
 
   useEffect(() => {
     textRef.current = text;
@@ -530,42 +604,12 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
       .finally(() => setEntryLoading(false));
   };
 
-  const refreshSessions = (target: string) => {
-    void listDailySessions(target)
-      .then(setSessions)
-      .catch(() => undefined);
-  };
-
   useEffect(() => {
     if (!enabled || !date) return;
     void loadEntry(date);
-    void listDailySessions(date)
-      .then(setSessions)
-      .catch(() => setSessions([]));
     setWizardOpen(false);
     setWizardDate(null);
     setWizardHydrated(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, date]);
-
-  useEffect(() => {
-    if (!enabled || !date) return;
-    const id = window.setInterval(() => refreshSessions(date), 30_000);
-    return () => window.clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, date]);
-
-  useEffect(() => {
-    if (!enabled || !date) return;
-    const onFocusChange = () => {
-      if (document.visibilityState === "visible") refreshSessions(date);
-    };
-    window.addEventListener("focus", onFocusChange);
-    document.addEventListener("visibilitychange", onFocusChange);
-    return () => {
-      window.removeEventListener("focus", onFocusChange);
-      document.removeEventListener("visibilitychange", onFocusChange);
-    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, date]);
 
@@ -821,6 +865,15 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
     }
   };
 
+  const canOrganizeNow = canOrganizeFocus({
+    enabled,
+    exists: entry?.exists === true,
+    dirty,
+    saving: saveStatus === "saving",
+    busy: organizeBusy || wizardOpen,
+    conflict: conflict !== null,
+  });
+
   useEffect(() => {
     if (!enabled) return;
     const onRefresh = () => {
@@ -837,11 +890,24 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
       }
       openWizard();
     };
+    const onOrganize = () => {
+      if (canOrganizeNow) void organizeFocus();
+      else showNotice("error", "Organize focus needs a saved daily without pending changes");
+    };
+    const onRefine = () => {
+      setWizardOpen(false);
+      setWizardDate(null);
+      setShowRefine(true);
+    };
     window.addEventListener("cchub:daily-refresh", onRefresh);
     window.addEventListener("cchub:daily-plan-today", onPlanToday);
+    window.addEventListener(DAILY_ORGANIZE_EVENT, onOrganize);
+    window.addEventListener(DAILY_REFINE_EVENT, onRefine);
     return () => {
       window.removeEventListener("cchub:daily-refresh", onRefresh);
       window.removeEventListener("cchub:daily-plan-today", onPlanToday);
+      window.removeEventListener(DAILY_ORGANIZE_EVENT, onOrganize);
+      window.removeEventListener(DAILY_REFINE_EVENT, onRefine);
     };
   });
 
@@ -963,67 +1029,82 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
   const statusLabel = saveStatus === "saving" ? "Saving…" : saveStatus === "saved" && savedAt ? `Saved ${formatClock(savedAt)}` : dirty ? "Unsaved" : "";
   const obsidianHref = entry?.exists && entry.path ? `obsidian://open?path=${encodeURIComponent(entry.path)}` : null;
 
+  const modePills = (
+    <div className="row" role="tablist" aria-label="Daily view mode">
+      <button className={`pill ${mode === "preview" ? "pill--on" : ""}`} onClick={() => setMode("preview")}>
+        Preview
+      </button>
+      <button className={`pill ${mode === "edit" ? "pill--on" : ""}`} onClick={() => setMode("edit")}>
+        Edit
+      </button>
+    </div>
+  );
+
+  const runningChip = running && (
+    <button className="chip chip--agents-on" onClick={() => onOpenTask(running.taskId)}>
+      generating… (open task)
+    </button>
+  );
+
   return (
-    <div className="view">
-      <div className="daily__toolbar">
-        <button className="act" onClick={() => setDate(shiftDate(date, -1))}>
-          ‹ Previous
-        </button>
-        <button className="act" onClick={() => setDate(overview.today)}>
-          Today
-        </button>
-        <button className="act" onClick={() => setDate(shiftDate(date, 1))}>
-          Next ›
-        </button>
-        <input className="in daily__date" type="date" value={date} onChange={(event) => event.target.value && setDate(event.target.value)} />
-        <button className="act" disabled={refreshBusy} aria-busy={refreshBusy} title="Reload this day from the server" onClick={() => void refresh()}>
-          {refreshBusy ? "Refreshing…" : "Refresh"}
-        </button>
-        <span className="spacer" />
-        {running && (
-          <button className="chip chip--agents-on" onClick={() => onOpenTask(running.taskId)}>
-            generating… (open task)
-          </button>
-        )}
-        <button className="act act--focus" onClick={openWizard}>
-          Plan today
-        </button>
-        {entry?.exists && (
-          <button className="act" onClick={() => setShowRefine((v) => !v)}>
-            Refine with assistant
-          </button>
-        )}
-        <button
-          className="act"
-          disabled={
-            !canOrganizeFocus({
-              enabled,
-              exists: entry?.exists === true,
-              dirty,
-              saving: saveStatus === "saving",
-              busy: organizeBusy || wizardOpen,
-              conflict: conflict !== null,
-            })
-          }
-          title="Group the focus items by project, in the project order"
-          onClick={() => void organizeFocus()}
-        >
-          {organizeBusy ? "Organizing…" : "Organize focus"}
-        </button>
-        {obsidianHref && (
-          <a className="act" href={obsidianHref}>
-            Open in Obsidian
-          </a>
-        )}
-        <div className="row" role="tablist" aria-label="Daily view mode">
-          <button className={`pill ${mode === "preview" ? "pill--on" : ""}`} onClick={() => setMode("preview")}>
-            Preview
-          </button>
-          <button className={`pill ${mode === "edit" ? "pill--on" : ""}`} onClick={() => setMode("edit")}>
-            Edit
-          </button>
+    <div className={embedded ? "view view--embedded" : "view"}>
+      {embedded && (
+        <div className="daily__toolbar">
+          {modePills}
+          <span className="spacer" />
+          {runningChip}
         </div>
-      </div>
+      )}
+      {!embedded && (
+        <div className="daily__toolbar">
+          <button className="act" onClick={() => setDate(shiftDate(date, -1))}>
+            ‹ Previous
+          </button>
+          <button className="act" onClick={() => setDate(overview.today)}>
+            Today
+          </button>
+          <button className="act" onClick={() => setDate(shiftDate(date, 1))}>
+            Next ›
+          </button>
+          <input className="in daily__date" type="date" value={date} onChange={(event) => event.target.value && setDate(event.target.value)} />
+          <button className="act" disabled={refreshBusy} aria-busy={refreshBusy} title="Reload this day from the server" onClick={() => void refresh()}>
+            {refreshBusy ? "Refreshing…" : "Refresh"}
+          </button>
+          <span className="spacer" />
+          {runningChip}
+          <button className="act act--focus" onClick={openWizard}>
+            Plan today
+          </button>
+          {entry?.exists && (
+            <button className="act" onClick={() => setShowRefine((v) => !v)}>
+              Refine with assistant
+            </button>
+          )}
+          <button
+            className="act"
+            disabled={
+              !canOrganizeFocus({
+                enabled,
+                exists: entry?.exists === true,
+                dirty,
+                saving: saveStatus === "saving",
+                busy: organizeBusy || wizardOpen,
+                conflict: conflict !== null,
+              })
+            }
+            title="Group the focus items by project, in the project order"
+            onClick={() => void organizeFocus()}
+          >
+            {organizeBusy ? "Organizing…" : "Organize focus"}
+          </button>
+          {obsidianHref && (
+            <a className="act" href={obsidianHref}>
+              Open in Obsidian
+            </a>
+          )}
+          {modePills}
+        </div>
+      )}
 
       {showRefine && (
         <div className="panel">

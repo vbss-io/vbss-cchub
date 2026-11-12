@@ -266,7 +266,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     const message = (json as { error?: string } | null)?.error ?? `request failed (${res.status})`;
     if (res.status === 404 && path === "/settings") throw new DelegationDisabledError(message);
     if (res.status === 404 && path === "/backups") throw new BackupsUnavailableError(message);
-    if (res.status === 404 && path.startsWith("/today/")) throw new TodayUnavailableError("Today is not available on this hub. Update the hub to use it.");
+    if (res.status === 404 && !isJson && path.startsWith("/today/")) throw new TodayUnavailableError("Today is not available on this hub. Update the hub to use it.");
     throw new Error(message);
   }
   return json as T;

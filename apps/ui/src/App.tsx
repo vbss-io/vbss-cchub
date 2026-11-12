@@ -21,7 +21,7 @@ import { DEFAULT_NOTIF_EVENTS, firedEvents, notifyEvent, resetFired, setNotifCon
 import { isEmpty, isStale } from "./stale";
 import type { CodexSessionRecord, GroupRecord, RunEventMessage, RuntimeSnapshot, SessionRecord, SessionClient } from "./types";
 import { BoardView } from "./views/BoardView";
-import { DailyView } from "./views/DailyView";
+import { TodayView } from "./views/TodayView";
 import { FlowView } from "./views/FlowView";
 import { ReportsView } from "./views/ReportsView";
 import { SessionsView } from "./views/SessionsView";
@@ -1005,12 +1005,16 @@ export function App() {
             />
           )}
           {effectiveView === "daily" && dailyEnabled && (
-            <DailyView
+            <TodayView
               settings={settings}
+              workspaces={workspaces}
               onOpenSession={openSession}
               onOpenTask={(id) => navigate("tasks", id)}
               subscribeDaily={subscribeDaily}
               subscribeBoard={subscribeBoard}
+              onDelegated={(taskId, title) => pushToast("ok", `Delegated "${title}".`, { label: "Open task", run: () => navigate("tasks", taskId) })}
+              onNotice={ok}
+              onError={fail}
             />
           )}
           {effectiveView === "board" && boardEnabled && (
