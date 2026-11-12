@@ -25,6 +25,7 @@ import {
   renameSession,
   reorderGroups,
   sessionByPid,
+  markSessionSeen,
   setSessionFavorite,
   updateGroup,
   applyMeta,
@@ -366,9 +367,21 @@ app.post("/api/sessions/:id/focus", async (req, res) => {
     res.status(404).json({ error: "session not found" });
     return;
   }
+  const seen = markSessionSeen(req.params.id);
+  if (seen) broadcast("session", seen);
   const result = await focusWindow(session.hostPid, session.cwd);
   if (session.shellPid) broadcast("focus-terminal", { shellPid: session.shellPid });
   res.json(result);
+});
+
+app.post("/api/sessions/:id/seen", (req, res) => {
+  const session = markSessionSeen(req.params.id);
+  if (!session) {
+    res.status(404).json({ error: "session not found" });
+    return;
+  }
+  broadcast("session", session);
+  res.json({ ok: true, session });
 });
 
 app.post("/api/sessions/:id/archive", (req, res) => {

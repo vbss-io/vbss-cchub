@@ -103,6 +103,12 @@ export interface FocusResult {
 export const focusSession = (sessionId: string): Promise<FocusResult> =>
   send("POST", `/api/sessions/${encodeURIComponent(sessionId)}/focus`);
 
+export const markSessionSeen = (sessionId: string): Promise<void> =>
+  send<unknown>("POST", `/api/sessions/${encodeURIComponent(sessionId)}/seen`).then(
+    () => undefined,
+    () => undefined,
+  );
+
 export const focusCodexApp = (): Promise<FocusResult> => send("POST", "/api/codex/focus");
 
 export interface DesktopNotifyStatus {

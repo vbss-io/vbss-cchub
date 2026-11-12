@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SETTINGS_SECTIONS } from "../settings-sections";
 import { getDesktopNotifyStatus, sendToast, subscribe, type DesktopNotifyStatus, type HooksStatus } from "../api";
 import { formatList, parseList, validateTaskSettings } from "../board-model";
 import { BackupsPanel } from "../components/BackupsPanel";
@@ -55,20 +56,6 @@ export type SettingsSection =
 
 export type ThemeName = "dracula" | "midnight";
 
-const SECTIONS: { key: SettingsSection; label: string }[] = [
-  { key: "support", label: "Support" },
-  { key: "general", label: "General" },
-  { key: "appearance", label: "Appearance" },
-  { key: "paths", label: "Paths" },
-  { key: "hooks", label: "Hooks" },
-  { key: "connect", label: "Connections" },
-  { key: "sharing", label: "Sharing" },
-  { key: "features", label: "Features" },
-  { key: "widget", label: "Widget" },
-  { key: "notifications", label: "Notifications" },
-  { key: "groups", label: "Groups" },
-  { key: "about", label: "About" },
-];
 
 const WIDGET_EDGE_OPTIONS: { key: WidgetEdge; label: string }[] = [
   { key: "left", label: "Left" },
@@ -486,7 +473,7 @@ export function SettingsView(props: Props) {
   return (
     <div className="view view--settings">
       <nav className="subnav">
-        {SECTIONS.map((item) => (
+        {SETTINGS_SECTIONS.map((item) => (
           <a key={item.key} className={`pill ${section === item.key ? "pill--on" : ""}`} href={`#/settings/${item.key}`}>
             {item.label}
           </a>

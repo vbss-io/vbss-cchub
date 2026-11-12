@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchHealth, type ClaimRecord } from "../api";
+import { needsYou } from "../attention";
 import { claudeClient, isHubRun } from "../clients";
 import { CodexCard } from "../components/CodexCard";
 import { SessionCard } from "../components/SessionCard";
@@ -7,19 +8,17 @@ import type { WorkspaceRecord } from "../delegation";
 import { IconSearch } from "../icons";
 import { isEmpty, isStale } from "../stale";
 import { folderPeers } from "../peers";
+import { countsOf, isExtraFilter, LIVE_BUCKETS, matchesFilter, type Bucket, type FilterKey } from "../sessions-filter";
 import type { CodexSessionRecord, GroupRecord, SessionRecord, SessionStatus } from "../types";
 import { workspaceOf } from "../wsmatch";
 
 type SortKey = "status" | "recent" | "name";
-type FilterKey = SessionStatus | "all" | "archived" | "stale" | "empty" | "favorites";
 type ClientFilter = "all" | "terminal" | "vscode" | "claude-desktop" | "wsl" | "hub" | "share" | "codex";
 
 const UNGROUPED = "Ungrouped";
 const HOME_PREFIX = /^(?:[a-z]:[\\/]users[\\/][^\\/]+|\/home\/[^/]+|\/users\/[^/]+)/i;
 
 const sortRank: Record<SessionStatus, number> = { waiting: 0, idle: 1, active: 2, ended: 3 };
-const STATUS_ORDER: SessionStatus[] = ["waiting", "idle", "active", "ended"];
-const STATUS_LABELS: Record<SessionStatus, string> = { waiting: "Waiting", idle: "Idle", active: "Active", ended: "Ended" };
 const CLIENT_FILTERS: { key: ClientFilter; label: string }[] = [
   { key: "all", label: "All clients" },
   { key: "terminal", label: "Claude Code · terminal" },
@@ -39,8 +38,6 @@ const projectOf = (session: SessionRecord): string => {
 
 const nameOf = (session: SessionRecord): string => session.customTitle ?? session.title ?? projectOf(session);
 
-type Bucket = "archived" | "empty" | "ended" | "stale" | "waiting" | "idle" | "active" | "hidden";
-const LIVE_BUCKETS: Bucket[] = ["waiting", "idle", "active"];
 
 const matchesClient = (session: SessionRecord, clientFilter: ClientFilter): boolean => {
   if (clientFilter === "all") return true;
@@ -141,7 +138,7 @@ export function SessionsView({
     });
   };
 
-  const { counts, favorites, list, hubLive, shareLive, codexLive } = useMemo(() => {
+  const { counts, needs, favorites, list, hubLive, shareLive, codexLive } = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const tally: Record<Exclude<Bucket, "hidden">, number> = {
       waiting: 0,
@@ -153,6 +150,7 @@ export function SessionsView({
       empty: 0,
     };
     const matched: Item[] = [];
+    let needing = 0;
     let hub = 0;
     let share = 0;
     let codex = 0;
@@ -174,8 +172,9 @@ export function SessionsView({
       const bucket = bucketOf(session, clientFilter);
       if (bucket === "hidden") continue;
       tally[bucket] += 1;
-      if (filter === "favorites") continue;
-      if (filter === "all" ? LIVE_BUCKETS.includes(bucket) : bucket === filter) {
+      const attention = needsYou(session);
+      if (matchesFilter("needs-you", bucket, attention)) needing += 1;
+      if (matchesFilter(filter, bucket, attention)) {
         matched.push({ kind: "claude", id: session.sessionId, session, status: session.status, updatedAt: session.updatedAt, name: nameOf(session), cwd: session.cwd });
       }
     }
@@ -186,7 +185,7 @@ export function SessionsView({
       const visibleClient = clientFilter === "all" || clientFilter === "codex";
       if (!visibleClient || !matchesQuery(codexNameOf(thread), thread.cwd, thread.lastMessage)) continue;
       tally[bucket] += 1;
-      if (filter === "all" ? LIVE_BUCKETS.includes(bucket) : bucket === filter) {
+      if (matchesFilter(filter, bucket, false)) {
         matched.push({ kind: "codex", id: thread.id, thread, status: thread.status, updatedAt: thread.updatedAt, name: codexNameOf(thread), cwd: thread.cwd });
       }
     }
@@ -195,7 +194,7 @@ export function SessionsView({
       if (sort === "name") return a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || b.updatedAt - a.updatedAt;
       return sortRank[a.status] - sortRank[b.status] || b.updatedAt - a.updatedAt;
     });
-    return { counts: tally, favorites: favorited, list: sorted, hubLive: hub, shareLive: share, codexLive: codex };
+    return { counts: tally, needs: needing, favorites: favorited, list: sorted, hubLive: hub, shareLive: share, codexLive: codex };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, codexSessions, filter, clientFilter, sort, query, tick]);
 
@@ -288,7 +287,7 @@ export function SessionsView({
 
   const renderGroup = (name: string, items: Item[]) => {
     const collapsed = collapsedGroups.includes(name);
-    const needAttention = items.filter((item) => item.status === "waiting" || item.status === "idle").length;
+    const needAttention = items.filter((item) => item.kind === "claude" && needsYou(item.session)).length;
     return (
       <section key={name} className={`group ${collapsed ? "group--collapsed" : ""}`}>
         <h2>
@@ -311,27 +310,35 @@ export function SessionsView({
           <button className={`pill ${filter === "all" ? "pill--on" : ""}`} onClick={() => setFilter("all")}>
             All <span className="pill__count">{total}</span>
           </button>
-          {STATUS_ORDER.map((status) => (
-            <button key={status} className={`pill pill--${status} ${filter === status ? "pill--on" : ""}`} onClick={() => setFilter(status)}>
-              {STATUS_LABELS[status]} <span className="pill__count">{counts[status]}</span>
-            </button>
-          ))}
-          {counts.stale > 0 && (
-            <button className={`pill pill--stale ${filter === "stale" ? "pill--on" : ""}`} onClick={() => setFilter("stale")} title="No activity for hours and no end signal">
-              Inactive <span className="pill__count">{counts.stale}</span>
-            </button>
-          )}
-          {counts.empty > 0 && (
-            <button className={`pill pill--empty ${filter === "empty" ? "pill--on" : ""}`} onClick={() => setFilter("empty")} title="Sessions that never produced a turn">
-              Empty <span className="pill__count">{counts.empty}</span>
-            </button>
-          )}
-          <button className={`pill pill--archived ${filter === "archived" ? "pill--on" : ""}`} onClick={() => setFilter("archived")}>
-            Archived <span className="pill__count">{counts.archived}</span>
+          <button
+            className={`pill pill--needs ${filter === "needs-you" ? "pill--on" : ""}`}
+            onClick={() => setFilter("needs-you")}
+            title="Sessions waiting on a decision, and sessions that finished a turn you have not looked at"
+          >
+            Needs you <span className="pill__count">{needs}</span>
+          </button>
+          <button className={`pill pill--active ${filter === "active" ? "pill--on" : ""}`} onClick={() => setFilter("active")}>
+            Active <span className="pill__count">{counts.active}</span>
+          </button>
+          <button className={`pill pill--idle ${filter === "idle" ? "pill--on" : ""}`} onClick={() => setFilter("idle")}>
+            Idle <span className="pill__count">{counts.idle}</span>
           </button>
           <button className={`pill pill--favorites ${filter === "favorites" ? "pill--on" : ""}`} onClick={() => setFilter("favorites")} title="Sessions you starred, regardless of status or archive state">
             Favorites <span className="pill__count">{favorites}</span>
           </button>
+          <select
+            className={`select select--also ${isExtraFilter(filter) ? "select--also-on" : ""}`}
+            aria-label="Show also"
+            value={isExtraFilter(filter) ? filter : ""}
+            onChange={(event) => setFilter(event.target.value === "" ? "all" : (event.target.value as FilterKey))}
+          >
+            <option value="">Show also</option>
+            {countsOf(counts).map((item) => (
+              <option key={item.key} value={item.key} title={item.hint}>
+                {item.label} ({item.count})
+              </option>
+            ))}
+          </select>
         </div>
         <div className="toolbar__right">
           <label className="search">
@@ -386,7 +393,7 @@ export function SessionsView({
         <p className="empty">
           No live {CLIENT_FILTERS.find((item) => item.key === clientFilter)?.label ?? "sessions"}. {counts.ended} ended —{" "}
           <button className="linklike" onClick={() => setFilter("ended")}>
-            open the Ended pill
+            open the Ended list
           </button>
           .
         </p>

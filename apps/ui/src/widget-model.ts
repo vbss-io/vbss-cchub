@@ -1,3 +1,4 @@
+import { needsYou } from "./attention";
 import type { SessionRecord } from "./types";
 
 export interface SplitSessions {
@@ -13,8 +14,8 @@ const favoritesFirst = (a: SessionRecord, b: SessionRecord): number =>
 
 export function splitSessions(sessions: readonly SessionRecord[]): SplitSessions {
   return {
-    needsYou: sessions.filter((session) => session.status === "waiting").sort(byRecent),
+    needsYou: sessions.filter(needsYou).sort(byRecent),
     running: sessions.filter((session) => session.status === "active").sort(favoritesFirst),
-    idle: sessions.filter((session) => session.status === "idle").sort(favoritesFirst),
+    idle: sessions.filter((session) => session.status === "idle" && !needsYou(session)).sort(favoritesFirst),
   };
 }

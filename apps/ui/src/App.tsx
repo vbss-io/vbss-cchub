@@ -1,15 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusSession, getHooks, hubBase, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type DailyStreamEvent, type HooksStatus, type ShareStreamEvent, type TasksBoardStreamEvent } from "./api";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from "react";
+import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusCodexApp, focusSession, getHooks, hubBase, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type DailyStreamEvent, type HooksStatus, type ShareStreamEvent, type TasksBoardStreamEvent } from "./api";
+import { attentionCount } from "./attention";
 import { isHubRun } from "./clients";
 import { BrandMark, Wordmark } from "./components/BrandMark";
 import { CodexDrawer } from "./components/CodexDrawer";
-import { RuntimeBar } from "./components/RuntimeBar";
+import { CommandPalette } from "./components/CommandPalette";
 import { SessionDrawer } from "./components/SessionDrawer";
+import { StatusBar } from "./components/StatusBar";
 import { WhatsNew } from "./components/WhatsNew";
-import { configureMcp, configureShell, DelegationDisabledError, getConnect, getSettings, getTask, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus } from "./delegation";
-import { IconBoard, IconClose, IconFlow, IconReports, IconSessions, IconSettings, IconShare, IconTasks, IconUsage, IconWorkspaces } from "./icons";
+import { configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
+import { IconBoard, IconChevron, IconClose, IconFlow, IconMore, IconReports, IconSearch, IconSessions, IconSettings, IconShare, IconTasks, IconUsage, IconWorkspaces } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { unlockAudio } from "./notify";
+import { buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems } from "./palette-items";
+import { useHotkeys } from "./use-hotkeys";
 import { HubOfflineBanner } from "./components/HubOfflineBanner";
 import { useHubConnection } from "./use-hub-connection";
 import { DEFAULT_NOTIF_EVENTS, firedEvents, notifyEvent, resetFired, setNotifConfig } from "./notifications";
@@ -62,6 +66,10 @@ const VIEWS: { key: View; label: string; icon: ReactElement; subtitle: string }[
   { key: "settings", label: "Settings", icon: <IconSettings />, subtitle: "Paths, hooks, connections, notifications, groups" },
 ];
 
+const NAV_FIXED: View[] = ["sessions", "daily", "board", "flow"];
+const NAV_MORE: View[] = ["tasks", "usage", "workspaces", "reports", "share"];
+const LIMITS_REFRESH_MS = 300_000;
+
 const NOTIF_VERSION = 3;
 
 const DEFAULT_NOTIF: NotifSettings = {
@@ -103,6 +111,132 @@ const projectOf = (session: SessionRecord): string => {
   return parts[parts.length - 1] ?? session.cwd;
 };
 
+interface NavMoreItem {
+  key: View;
+  label: string;
+  icon: ReactElement;
+  badge: number;
+}
+
+function NavMore({ items, activeKey }: { items: NavMoreItem[]; activeKey: View }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLLIElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const pendingFocus = useRef<"first" | "last" | null>(null);
+  const menuId = useId();
+  const activeItem = items.find((item) => item.key === activeKey) ?? null;
+  const collapsedBadge = items.reduce((total, item) => total + item.badge, 0);
+
+  const menuItems = () => Array.from(rootRef.current?.querySelectorAll<HTMLAnchorElement>('[role="menuitem"]') ?? []);
+
+  useEffect(() => {
+    if (!open) return;
+    const target = pendingFocus.current;
+    pendingFocus.current = null;
+    const list = menuItems();
+    if (target === "first") list[0]?.focus();
+    if (target === "last") list[list.length - 1]?.focus();
+    const onDown = (event: MouseEvent) => {
+      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLLIElement>) => {
+    const onButton = event.target === buttonRef.current;
+    if (event.key === "Escape" && open) {
+      event.preventDefault();
+      setOpen(false);
+      buttonRef.current?.focus();
+      return;
+    }
+    if (onButton && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      const target = event.key === "ArrowDown" ? "first" : "last";
+      if (open) {
+        const list = menuItems();
+        (target === "first" ? list[0] : list[list.length - 1])?.focus();
+      } else {
+        pendingFocus.current = target;
+        setOpen(true);
+      }
+      return;
+    }
+    if (onButton || !open) return;
+    const list = menuItems();
+    const index = list.findIndex((node) => node === document.activeElement);
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      list[(index + 1) % list.length]?.focus();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      list[(index - 1 + list.length) % list.length]?.focus();
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      list[0]?.focus();
+    } else if (event.key === "End") {
+      event.preventDefault();
+      list[list.length - 1]?.focus();
+    } else if (event.key === " ") {
+      event.preventDefault();
+      list[index]?.click();
+    } else if (event.key === "Tab") {
+      setOpen(false);
+    }
+  };
+
+  return (
+    <li className="nav__more" ref={rootRef} onKeyDown={onKeyDown}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={`nav__item nav__item--button ${activeItem && !open ? "nav__item--on" : ""} ${open ? "nav__item--open" : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
+        title={activeItem ? `More: ${activeItem.label}` : "More"}
+        onClick={(event) => {
+          pendingFocus.current = !open && event.detail === 0 ? "first" : null;
+          setOpen((value) => !value);
+        }}
+      >
+        <span className="nav__icon">
+          <IconMore size={20} />
+        </span>
+        <span className="nav__label nav__label--stack">
+          <span>More</span>
+          {activeItem && !open && <span className="nav__sub">{activeItem.label}</span>}
+        </span>
+        {!open && collapsedBadge > 0 && <span className="nav__badge">{collapsedBadge}</span>}
+        <span className={`nav__chev ${open ? "nav__chev--open" : ""}`} aria-hidden="true">
+          <IconChevron />
+        </span>
+      </button>
+      {open && (
+        <ul className="nav__menu" id={menuId} role="menu" aria-label="More views">
+          {items.map((item) => (
+            <li key={item.key} role="none">
+              <a
+                role="menuitem"
+                tabIndex={-1}
+                className={`nav__item nav__item--sub ${activeKey === item.key ? "nav__item--on" : ""}`}
+                href={`#/${item.key}`}
+                aria-current={activeKey === item.key ? "page" : undefined}
+                onClick={() => setOpen(false)}
+              >
+                <span className="nav__icon">{item.icon}</span>
+                <span className="nav__label">{item.label}</span>
+                {item.badge > 0 && <span className="nav__badge">{item.badge}</span>}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash));
   const [sessions, setSessions] = useState<Record<string, SessionRecord>>({});
@@ -128,7 +262,10 @@ export function App() {
   const [shareTick, setShareTick] = useState(0);
   const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
   const [autostart, setAutostartState] = useState<AutostartStatus | null>(null);
+  const [limits, setLimits] = useState<LimitsSnapshot | null>(null);
   const [theme, setTheme] = useState<ThemeName>(() => (localStorage.getItem("hub.theme") === "midnight" ? "midnight" : "dracula"));
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteBoard, setPaletteBoard] = useState<BoardPayload | null>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -478,7 +615,7 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessions, tick],
   );
-  const attention = liveSessions.filter((s) => s.status === "waiting" || s.status === "idle").length;
+  const attention = attentionCount(liveSessions);
   const hubRunning = tasks.filter((t) => t.status === "running" || t.status === "pending").length;
   const hubAttention = tasks.filter((t) => t.status === "attention" || t.status === "failed" || t.status === "interrupted").length;
 
@@ -555,6 +692,7 @@ export function App() {
 
   const dailyEnabled = settings?.features.daily === true;
   const usageEnabled = settings?.features.usage === true;
+  const limitsEnabled = settings?.features.limits === true;
   const boardEnabled = settings?.features.tasks === true;
   const effectiveView: View =
     (route.view === "daily" && !dailyEnabled) || (route.view === "board" && !boardEnabled) || (route.view === "usage" && !usageEnabled) ? "sessions" : route.view;
@@ -572,7 +710,162 @@ export function App() {
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    if (isMock || !limitsEnabled) {
+      setLimits(null);
+      return;
+    }
+    let alive = true;
+    const load = () => {
+      void fetchLimits()
+        .then((snapshot) => {
+          if (alive) setLimits(snapshot);
+        })
+        .catch(() => undefined);
+    };
+    load();
+    const id = setInterval(load, LIMITS_REFRESH_MS);
+    const unsubscribe = subscribeUsage((event) => {
+      if (event === "limits") load();
+    });
+    return () => {
+      alive = false;
+      clearInterval(id);
+      unsubscribe();
+    };
+  }, [limitsEnabled, subscribeUsage]);
+
   const sharePanel = route.view === "share" && route.param != null;
+  const featureOn = (key: View): boolean => (key !== "daily" || dailyEnabled) && (key !== "board" || boardEnabled) && (key !== "usage" || usageEnabled);
+  const navViews = (keys: View[]) => keys.filter(featureOn).flatMap((key) => VIEWS.filter((item) => item.key === key));
+  const moreItems = navViews(NAV_MORE).map((item) => ({
+    key: item.key,
+    label: item.label,
+    icon: item.icon,
+    badge: item.key === "tasks" ? hubRunning + hubAttention : 0,
+  }));
+
+  const viewRef = useRef<View>(effectiveView);
+  const pendingEvent = useRef<{ view: View; name: string } | null>(null);
+
+  useEffect(() => {
+    viewRef.current = effectiveView;
+    const pending = pendingEvent.current;
+    pendingEvent.current = null;
+    if (pending && pending.view === effectiveView) window.dispatchEvent(new CustomEvent(pending.name));
+  }, [effectiveView]);
+
+  const goThenDispatch = useCallback(
+    (view: View, name: string) => {
+      if (viewRef.current === view) {
+        window.dispatchEvent(new CustomEvent(name));
+        return;
+      }
+      pendingEvent.current = { view, name };
+      navigate(view);
+    },
+    [navigate],
+  );
+
+  const consumeBoardParam = useCallback(() => {
+    history.replaceState(null, "", "#/board");
+    setRoute({ view: "board", param: null });
+  }, []);
+
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  useHotkeys([
+    { combo: "ctrl+k", allowInInputs: true, handler: () => setPaletteOpen((open) => !open) },
+    { combo: "ctrl+1", handler: () => featureOn("sessions") && navigate("sessions") },
+    { combo: "ctrl+2", handler: () => featureOn("daily") && navigate("daily") },
+    { combo: "ctrl+3", handler: () => featureOn("board") && navigate("board") },
+    { combo: "ctrl+4", handler: () => featureOn("flow") && navigate("flow") },
+    { combo: "ctrl+,", handler: () => navigate("settings") },
+  ]);
+
+  useEffect(() => {
+    if (!paletteOpen || !boardEnabled || isMock) return;
+    let alive = true;
+    void getTasksBoard()
+      .then((payload) => {
+        if (alive) setPaletteBoard(payload);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [paletteOpen, boardEnabled]);
+
+  const backupNow = useCallback(async () => {
+    try {
+      const { backup } = await createBackup();
+      ok(`Backup created: ${backup.file.split(/[\\/]/).pop() ?? backup.file}`);
+    } catch (err) {
+      fail(err instanceof Error ? err.message : "could not back up");
+    }
+  }, [ok, fail]);
+
+  const openWorkspaceInEditor = useCallback(
+    async (name: string) => {
+      try {
+        const outcome = await openWorkspace(name);
+        if (!outcome.ok) throw new Error(outcome.error ?? "could not open");
+        ok(`Opening ${name} with ${outcome.command}.`);
+      } catch (err) {
+        fail(err instanceof Error ? err.message : "could not open the workspace");
+      }
+    },
+    [ok, fail],
+  );
+
+  const focusFromPalette = useCallback(
+    async (focus: () => Promise<{ ok: boolean; reason?: string }>) => {
+      try {
+        const result = await focus();
+        if (!result.ok) fail(result.reason ?? "could not focus the window");
+      } catch (err) {
+        fail(err instanceof Error ? err.message : "could not focus the window");
+      }
+    },
+    [fail],
+  );
+
+  const paletteItems = useMemo(() => {
+    if (!paletteOpen) return [];
+    const views = VIEWS.map((item) => ({ key: item.key, label: item.label, subtitle: item.subtitle, enabled: featureOn(item.key) }));
+    const items = [
+      ...buildCommandItems({
+        ...(boardEnabled ? { newTask: () => goThenDispatch("board", "cchub:board-new-task") } : {}),
+        ...(dailyEnabled
+          ? {
+              planToday: () => goThenDispatch("daily", "cchub:daily-plan-today"),
+              refreshDaily: () => goThenDispatch("daily", "cchub:daily-refresh"),
+            }
+          : {}),
+        backupNow: () => void backupNow(),
+        toggleTheme: () => setTheme((previous) => (previous === "midnight" ? "dracula" : "midnight")),
+        themeHint: theme === "midnight" ? "Switch to Dracula" : "Switch to Midnight",
+        installHooks: () => navigate("settings", "hooks"),
+      }),
+      ...buildViewItems(views, (view, param) => navigate(view as View, param)),
+      ...buildSessionItems(Object.values(sessions), codexSessions, workspaces, {
+        classify: (session) => {
+          if (session.archivedAt != null || session.helperOf || isHubRun(session.client) || isEmpty(session)) return null;
+          return session.status !== "ended" && !isStale(session) ? "live" : "recent";
+        },
+        focus: (id) => void focusFromPalette(() => focusSession(id)),
+        open: openSession,
+        focusCodex: () => void focusFromPalette(focusCodexApp),
+        openCodex,
+      }),
+      ...buildWorkspaceItems(workspaces, {
+        open: (name) => void openWorkspaceInEditor(name),
+        show: () => navigate("workspaces"),
+      }),
+      ...(boardEnabled && paletteBoard ? buildTaskItems(paletteBoard.tasks, paletteBoard.projects, (id) => navigate("board", encodeURIComponent(id))) : []),
+    ];
+    return items;
+  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, dailyEnabled, usageEnabled, theme, tick, navigate, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, openSession, openCodex]);
 
   return (
     <div className={`shell ${drawerSession || codexDrawerThread || sharePanel ? "shell--panel" : ""}`}>
@@ -585,22 +878,42 @@ export function App() {
             <span className="nav__slogan">Run many. Forget none.</span>
           </span>
         </div>
+        <div className="nav__search-slot">
+          <button type="button" className="nav__search" onClick={() => setPaletteOpen(true)} aria-label="Search" aria-keyshortcuts="Control+K" title="Search (Ctrl K)">
+            <IconSearch size={16} />
+            <span className="nav__search-label">Search</span>
+            <kbd className="nav__search-key">Ctrl K</kbd>
+          </button>
+        </div>
         <ul className="nav__list">
-          {VIEWS.filter((item) => (item.key !== "daily" || dailyEnabled) && (item.key !== "board" || boardEnabled) && (item.key !== "usage" || usageEnabled)).map((item) => {
-            const badge =
-              item.key === "sessions" ? attention : item.key === "tasks" ? hubRunning + hubAttention : item.key === "reports" ? 0 : 0;
-            return (
-              <li key={item.key}>
-                <a className={`nav__item ${effectiveView === item.key ? "nav__item--on" : ""}`} href={`#/${item.key}`} title={item.label}>
-                  <span className="nav__icon">{item.icon}</span>
-                  <span className="nav__label">{item.label}</span>
-                  {badge > 0 && <span className={`nav__badge ${item.key === "sessions" ? "nav__badge--attn" : ""}`}>{badge}</span>}
-                </a>
-              </li>
-            );
-          })}
+          {navViews(NAV_FIXED).map((item) => (
+            <li key={item.key}>
+              <a
+                className={`nav__item ${effectiveView === item.key ? "nav__item--on" : ""}`}
+                href={`#/${item.key}`}
+                title={item.label}
+                aria-current={effectiveView === item.key ? "page" : undefined}
+              >
+                <span className="nav__icon">{item.icon}</span>
+                <span className="nav__label">{item.label}</span>
+                {item.key === "sessions" && attention > 0 && <span className="nav__badge nav__badge--attn">{attention}</span>}
+              </a>
+            </li>
+          ))}
+          <NavMore items={moreItems} activeKey={effectiveView} />
         </ul>
         <div className="nav__foot">
+          <a
+            className={`nav__item nav__item--foot ${effectiveView === "settings" ? "nav__item--on" : ""}`}
+            href="#/settings"
+            title="Settings"
+            aria-current={effectiveView === "settings" ? "page" : undefined}
+          >
+            <span className="nav__icon">
+              <IconSettings />
+            </span>
+            <span className="nav__label">Settings</span>
+          </a>
           <button
             className={`version ${seenVersion !== __APP_VERSION__ ? "version--new" : ""}`}
             onClick={() => {
@@ -621,16 +934,6 @@ export function App() {
             <h1>{current.label}</h1>
             <p className="head__sub">{current.subtitle}</p>
           </div>
-          {!isMock && (
-            <RuntimeBar
-              runtimes={runtimes}
-              claudeSessions={liveSessions.length}
-              codexSessions={codexSessions.filter((session) => session.status !== "ended").length}
-              hubRunning={hubRunning}
-              hubAttention={hubAttention}
-              onOpenHub={() => navigate("tasks")}
-            />
-          )}
         </header>
 
         <div className="content">
@@ -679,6 +982,8 @@ export function App() {
               subscribeBoard={subscribeBoard}
               subscribeDaily={subscribeDaily}
               onOpenSettings={() => navigate("settings", "features")}
+              openTaskId={route.param}
+              onOpenTaskHandled={consumeBoardParam}
               onDelegated={(taskId, title) => pushToast("ok", `Delegated "${title}".`, { label: "Open task", run: () => navigate("tasks", taskId) })}
               onNotice={ok}
               onError={fail}
@@ -792,6 +1097,20 @@ export function App() {
             />
           )}
         </div>
+
+        {!isMock && (
+          <StatusBar
+            runtimes={runtimes}
+            claudeSessions={liveSessions.length}
+            codexSessions={codexSessions.filter((session) => session.status !== "ended").length}
+            hubRunning={hubRunning}
+            hubAttention={hubAttention}
+            onOpenHub={() => navigate("tasks")}
+            limits={limits}
+            limitsEnabled={limitsEnabled}
+            onOpenUsage={usageEnabled ? () => navigate("usage") : undefined}
+          />
+        )}
       </div>
 
       <div className="shell__slot" ref={setSlotEl} />
@@ -825,6 +1144,7 @@ export function App() {
         />
       )}
       {showWhatsNew && <WhatsNew onClose={() => setShowWhatsNew(false)} />}
+      <CommandPalette open={paletteOpen} items={paletteItems} onClose={closePalette} />
 
       {toasts.length > 0 && (
         <div className="toasts" aria-live="polite">

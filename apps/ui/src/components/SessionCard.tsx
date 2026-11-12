@@ -4,6 +4,7 @@ import { IconFocus, IconStar } from "../icons";
 import { relativeTime } from "../time";
 import type { SessionRecord, SessionStatus } from "../types";
 import { shortFolder } from "../wsmatch";
+import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 
 const statusLabel: Record<SessionStatus, string> = {
   active: "Active",
@@ -77,9 +78,11 @@ export function SessionCard({
 }: Props) {
   const [confirming, setConfirming] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const menu = useCardMenu();
 
   const archived = session.archivedAt != null;
   const favorite = session.favoriteAt != null;
+  const unread = session.unread === true && session.status === "idle";
   const canFocus = !archived && session.status !== "ended" && !stale;
   const name = session.customTitle ?? session.title ?? session.sessionId.slice(0, 8);
   const model = prettyModel(session.model);
@@ -91,6 +94,11 @@ export function SessionCard({
   const agentsTotal = session.agentsTotal ?? 0;
 
   const stop = (event: MouseEvent) => event.stopPropagation();
+  const menuItems: CardMenuItem[] = [
+    { key: "rename", label: "Rename", onSelect: () => setRenaming(true) },
+    ...(archived ? [] : [{ key: "archive", label: "Archive", onSelect: () => onArchive(session.sessionId) }]),
+    { key: "favorite", label: favorite ? "Unfavorite" : "Favorite", onSelect: () => onFavorite(session.sessionId, !favorite) },
+  ];
   const submitRename = (value: string) => {
     setRenaming(false);
     onRename(session.sessionId, value.trim());
@@ -98,20 +106,20 @@ export function SessionCard({
 
   return (
     <article
-      className={`card card--${session.status} ${archived ? "card--archived" : ""} ${stale ? "card--stale" : ""} ${favorite ? "card--favorite" : ""} card--clickable`}
+      className={`card card--${session.status} ${unread ? "card--unread" : ""} ${archived ? "card--archived" : ""} ${stale ? "card--stale" : ""} ${favorite ? "card--favorite" : ""} card--clickable`}
       onClick={() => onOpen(session.sessionId)}
+      onContextMenu={(event) => {
+        if (event.target instanceof HTMLInputElement) return;
+        event.preventDefault();
+        menu.openAt(event.clientX, event.clientY);
+      }}
     >
       <div className="card__head">
-        <button
-          className={`card__star ${favorite ? "card__star--on" : ""}`}
-          title={favorite ? "Unfavorite" : "Favorite"}
-          onClick={(event) => {
-            stop(event);
-            onFavorite(session.sessionId, !favorite);
-          }}
-        >
-          <IconStar filled={favorite} />
-        </button>
+        {favorite && (
+          <span className="card__star card__star--on" title="Favorite" role="img" aria-label="Favorite">
+            <IconStar filled />
+          </span>
+        )}
         {renaming ? (
           <input
             className="in card__rename"
@@ -130,7 +138,8 @@ export function SessionCard({
             {name}
           </span>
         )}
-        <span className="card__status">{stale ? "Inactive" : statusLabel[session.status]}</span>
+        <span className={`card__status ${unread ? "card__status--unread" : ""}`}>{unread ? "Finished" : stale ? "Inactive" : statusLabel[session.status]}</span>
+        <CardMenu menu={menu} items={menuItems} label={`Actions for ${name}`} />
       </div>
 
       <div className="card__badges">
@@ -216,26 +225,6 @@ export function SessionCard({
           )}
         </div>
         <div className="card__manage">
-          <button
-            className="act"
-            onClick={(event) => {
-              stop(event);
-              setRenaming(true);
-            }}
-          >
-            Rename
-          </button>
-          {!archived && (
-            <button
-              className="act"
-              onClick={(event) => {
-                stop(event);
-                onArchive(session.sessionId);
-              }}
-            >
-              Archive
-            </button>
-          )}
           {archived && !confirming && (
             <button
               className="act"

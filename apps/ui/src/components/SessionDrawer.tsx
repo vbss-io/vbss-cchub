@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchSessionLive, focusSession, type ClaimRecord } from "../api";
+import { fetchSessionLive, focusSession, markSessionSeen, type ClaimRecord } from "../api";
 import { ClientBadge, claudeClient, sessionClient } from "../clients";
 import { IconClose, IconExpand, IconFocus, IconShare } from "../icons";
 import { fetchSessionAsks, type SessionAsks } from "../api";
@@ -114,6 +114,15 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
   const [live, setLive] = useState<SessionLive | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const markedRef = useRef<{ id: string; unread: boolean } | null>(null);
+  const unread = session.unread === true;
+  useEffect(() => {
+    const last = markedRef.current;
+    markedRef.current = { id: session.sessionId, unread };
+    if (last && last.id === session.sessionId && (last.unread === unread || !unread)) return;
+    void markSessionSeen(session.sessionId);
+  }, [session.sessionId, unread]);
+
   useEffect(() => {
     let mounted = true;
     let retries = 0;
@@ -183,6 +192,7 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
   }, [full, onClose]);
 
   const current = live?.session ?? session;
+  const finished = current.unread === true && current.status === "idle";
   const name = current.customTitle ?? current.title ?? current.sessionId.slice(0, 8);
   const agents = live?.agents ?? [];
   const running = agents.filter((agent) => agent.status === "running").length;
@@ -204,7 +214,7 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
           </div>
           <div className="card__badges">
             <ClientBadge info={sessionClient(current)} />
-            <span className={`tag tag--${current.status}`}>{current.stale ? "inactive" : current.status}</span>
+            <span className={`tag tag--${finished ? "unread" : current.status}`}>{finished ? "finished" : current.stale ? "inactive" : current.status}</span>
             {workspace && <span className="chip chip--ws">{workspace}</span>}
             {prettyModel(current.model) && <span className="chip">{prettyModel(current.model)}</span>}
           </div>

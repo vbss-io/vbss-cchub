@@ -141,6 +141,16 @@ const ALREADY_IN_DAILY = "already in the daily";
 
 const CARD_CONTROLS = "button, input, select, textarea, a, label, .board-details";
 
+const NEW_TASK_EVENT = "cchub:board-new-task";
+
+const decodeTaskParam = (param: string): string => {
+  try {
+    return decodeURIComponent(param);
+  } catch {
+    return param;
+  }
+};
+
 const targetOf = (task: BoardTask): BoardTarget => ({ projectId: task.projectId, line: task.line, raw: task.raw });
 
 interface Props {
@@ -149,6 +159,8 @@ interface Props {
   subscribeBoard: (listener: (event: TasksBoardStreamEvent) => void) => () => void;
   subscribeDaily: (listener: (event: DailyStreamEvent) => void) => () => void;
   onOpenSettings: () => void;
+  openTaskId: string | null;
+  onOpenTaskHandled: () => void;
   onDelegated: (taskId: string, title: string) => void;
   onNotice: (text: string) => void;
   onError: (text: string) => void;
@@ -463,7 +475,7 @@ function SortHeader({ label, sortKey, sort, onSort }: SortHeaderProps) {
   );
 }
 
-export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily, onOpenSettings, onDelegated, onNotice, onError }: Props) {
+export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily, onOpenSettings, openTaskId, onOpenTaskHandled, onDelegated, onNotice, onError }: Props) {
   const [board, setBoard] = useState<BoardPayload | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [prefs, setPrefs] = useState<BoardPrefs>(readPrefs);
@@ -488,6 +500,7 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
   const refreshTimer = useRef<number | null>(null);
   const hasToday = useRef(false);
   const boardRef = useRef<BoardPayload | null>(null);
+  const pendingNewTask = useRef(false);
 
   const { view, filters } = prefs;
 
@@ -552,6 +565,28 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
   useEffect(() => {
     if (board && drawerId !== null && drawerTask === null) setDrawerId(null);
   }, [board, drawerId, drawerTask]);
+
+  useEffect(() => {
+    if (!board || openTaskId === null) return;
+    const found = findBoardTask(board.tasks, decodeTaskParam(openTaskId));
+    if (found) setDrawerId(found.id);
+    onOpenTaskHandled();
+  }, [board, openTaskId, onOpenTaskHandled]);
+
+  useEffect(() => {
+    const onNewTask = () => {
+      if (boardRef.current?.configured) setCreating({ parent: null });
+      else pendingNewTask.current = true;
+    };
+    window.addEventListener(NEW_TASK_EVENT, onNewTask);
+    return () => window.removeEventListener(NEW_TASK_EVENT, onNewTask);
+  }, []);
+
+  useEffect(() => {
+    if (!board || !pendingNewTask.current) return;
+    pendingNewTask.current = false;
+    if (board.configured) setCreating({ parent: null });
+  }, [board]);
 
   useEffect(() => {
     if (board && picker !== null && pickerTask === null) setPicker(null);

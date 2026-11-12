@@ -5,6 +5,7 @@ import { IconFocus } from "../icons";
 import { relativeTime } from "../time";
 import type { CodexSessionRecord } from "../types";
 import { shortFolder } from "../wsmatch";
+import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 
 const STATUS_LABEL: Record<CodexSessionRecord["status"], string> = {
   active: "Active",
@@ -37,11 +38,16 @@ interface Props {
 export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRename, onArchive, onUnarchive, onDelete }: Props) {
   const [renaming, setRenaming] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const menu = useCardMenu();
 
   const archived = session.archivedAt != null;
   const name = session.customTitle ?? session.title;
 
   const stop = (event: MouseEvent) => event.stopPropagation();
+  const menuItems: CardMenuItem[] = [
+    { key: "rename", label: "Rename", onSelect: () => setRenaming(true) },
+    archived ? { key: "unarchive", label: "Unarchive", onSelect: () => onUnarchive(session.id) } : { key: "archive", label: "Archive", onSelect: () => onArchive(session.id) },
+  ];
   const submitRename = (value: string) => {
     setRenaming(false);
     onRename(session.id, value.trim());
@@ -51,6 +57,11 @@ export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRenam
     <article
       className={`card card--codex card--codex-${session.status} ${archived ? "card--archived" : ""} card--clickable`}
       onClick={() => onOpen(session.id)}
+      onContextMenu={(event) => {
+        if (event.target instanceof HTMLInputElement) return;
+        event.preventDefault();
+        menu.openAt(event.clientX, event.clientY);
+      }}
     >
       <div className="card__head">
         {renaming ? (
@@ -72,6 +83,7 @@ export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRenam
           </span>
         )}
         <span className="card__status">{STATUS_LABEL[session.status]}</span>
+        <CardMenu menu={menu} items={menuItems} label={`Actions for ${name}`} />
       </div>
       <div className="card__badges">
         <ClientBadge info={codexClient(session.client)} />
@@ -104,37 +116,6 @@ export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRenam
           )}
         </div>
         <div className="card__manage">
-          <button
-            className="act"
-            onClick={(event) => {
-              stop(event);
-              setRenaming(true);
-            }}
-          >
-            Rename
-          </button>
-          {!archived && (
-            <button
-              className="act"
-              onClick={(event) => {
-                stop(event);
-                onArchive(session.id);
-              }}
-            >
-              Archive
-            </button>
-          )}
-          {archived && (
-            <button
-              className="act"
-              onClick={(event) => {
-                stop(event);
-                onUnarchive(session.id);
-              }}
-            >
-              Unarchive
-            </button>
-          )}
           {archived && !confirming && (
             <button
               className="act"

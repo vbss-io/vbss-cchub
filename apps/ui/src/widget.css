@@ -567,6 +567,10 @@ html.widget-window #root {
   background: var(--ended);
 }
 
+.wg-dot--unread {
+  background: var(--unread);
+}
+
 .wg-star {
   color: var(--amber);
   flex-shrink: 0;

@@ -1,0 +1,243 @@
+.palette__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 16px 16px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.palette {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: min(70vh, 520px);
+  overflow: hidden;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  border-radius: calc(var(--radius) + 4px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.palette__input {
+  flex: none;
+  width: 100%;
+  padding: 14px 16px;
+  font-size: 15px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  outline: none;
+}
+
+.palette__input::placeholder {
+  color: var(--muted);
+}
+
+.palette__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.palette__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.palette__item--active {
+  background: var(--panel-3);
+  box-shadow: inset 2px 0 0 var(--brand);
+}
+
+.palette__kind {
+  flex: none;
+  min-width: 74px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.palette__kind--session {
+  color: var(--go);
+}
+
+.palette__kind--workspace {
+  color: var(--amber);
+}
+
+.palette__kind--task {
+  color: var(--ok);
+}
+
+.palette__kind--command {
+  color: var(--brand);
+}
+
+.palette__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.palette__title {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette__subtitle {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette__empty {
+  margin: 0;
+  padding: 18px 16px;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.palette__foot {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 8px 14px;
+  font-size: 11px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+
+.palette__foot kbd {
+  margin-right: 4px;
+  padding: 0 5px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+}
+
+@media (max-width: 600px) {
+  .palette__overlay {
+    padding: 8px;
+    padding-top: calc(env(safe-area-inset-top, 0px) + 8px);
+  }
+
+  .palette {
+    width: 100%;
+    max-height: calc(100vh - 16px);
+  }
+
+  .palette__kind {
+    min-width: 72px;
+  }
+
+  .palette__foot {
+    display: none;
+  }
+}
+
+.nav__search-slot {
+  padding-bottom: 6px;
+}
+
+.nav__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.nav__search:hover {
+  color: var(--text);
+  border-color: var(--border-2);
+}
+
+.nav__search:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.nav__search svg {
+  flex: none;
+}
+
+.nav__search-label {
+  flex: 1;
+  text-align: left;
+}
+
+.nav__search-key {
+  flex: none;
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: 4px;
+}
+
+@media (max-width: 1100px) {
+  .nav__search {
+    justify-content: center;
+    padding: 10px 0;
+  }
+
+  .nav__search-label,
+  .nav__search-key {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .nav__search-slot {
+    padding: 0 4px 0 0;
+  }
+
+  .nav__search {
+    width: 40px;
+    height: 40px;
+    padding: 0;
+  }
+
+  .palette__input {
+    font-size: 16px;
+  }
+}

@@ -97,6 +97,8 @@ export interface SessionRecord {
   contextTokens: number | null;
   archivedAt: number | null;
   favoriteAt: number | null;
+  seenAt: number | null;
+  unread: boolean;
   agentsRunning: number;
   agentsTotal: number;
   startedAt: number;

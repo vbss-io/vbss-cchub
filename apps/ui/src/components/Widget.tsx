@@ -764,7 +764,7 @@ export function Widget() {
           <div className="wg-sec-h">
             Needs you <span className="wg-sec-n">{model.needYou}</span>
           </div>
-          {model.waiting.map((session) => sessionRow(session, "pend", "input"))}
+          {model.waiting.map((session) => (session.status === "waiting" ? sessionRow(session, "pend", "input") : sessionRow(session, "unread", "done")))}
           {model.attentionTasks.map((task) => taskRow(task, taskDotTone(task.status), TASK_ATTENTION_SUB[task.status] ?? "needs you"))}
         </section>
       )}

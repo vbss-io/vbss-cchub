@@ -68,6 +68,8 @@ for (const [name, type] of [
   ["shell_pid", "INTEGER"],
   ["archived_at", "INTEGER"],
   ["favorite_at", "INTEGER"],
+  ["seen_at", "INTEGER"],
+  ["turn_ended_at", "INTEGER"],
 ] as const) {
   if (!existingColumns.has(name)) db.exec(`ALTER TABLE sessions ADD COLUMN ${name} ${type}`);
 }
@@ -304,11 +306,20 @@ interface SessionRow {
   helpers_total: number;
   archived_at: number | null;
   favorite_at: number | null;
+  seen_at: number | null;
+  turn_ended_at: number | null;
   agents_running: number;
   agents_total: number;
   started_at: number;
   updated_at: number;
 }
+
+const isUnread = (row: SessionRow): boolean =>
+  row.status === "idle" &&
+  row.archived_at == null &&
+  row.turn_ended_at != null &&
+  (row.seen_at == null || row.turn_ended_at > row.seen_at) &&
+  !(row.model == null && row.context_tokens == null);
 
 const toRecord = (row: SessionRow): SessionRecord => ({
   sessionId: row.session_id,
@@ -340,6 +351,8 @@ const toRecord = (row: SessionRow): SessionRecord => ({
   contextTokens: row.context_tokens,
   archivedAt: row.archived_at,
   favoriteAt: row.favorite_at,
+  seenAt: row.seen_at ?? null,
+  unread: isUnread(row),
   agentsRunning: row.agents_running ?? 0,
   agentsTotal: row.agents_total ?? 0,
   startedAt: row.started_at,
@@ -348,10 +361,12 @@ const toRecord = (row: SessionRow): SessionRecord => ({
 
 const upsertStmt = db.prepare(`
   INSERT INTO sessions
-    (session_id, status, cwd, source, host_pid, shell_pid, claude_pid, client, transcript_path, share_label, title, last_message, model, tokens_in, tokens_out, context_tokens, started_at, updated_at)
+    (session_id, status, cwd, source, host_pid, shell_pid, claude_pid, client, transcript_path, share_label, title, last_message, model, tokens_in, tokens_out, context_tokens, started_at, updated_at, seen_at, turn_ended_at)
   VALUES
-    (@sessionId, @status, @cwd, @source, @hostPid, @shellPid, @claudePid, @client, @transcriptPath, @shareLabel, @title, @message, @model, @tokensIn, @tokensOut, @contextTokens, @now, @now)
+    (@sessionId, @status, @cwd, @source, @hostPid, @shellPid, @claudePid, @client, @transcriptPath, @shareLabel, @title, @message, @model, @tokensIn, @tokensOut, @contextTokens, @now, @now, CASE WHEN @markSeen = 1 THEN @now ELSE NULL END, CASE WHEN @status = 'idle' THEN @now ELSE NULL END)
   ON CONFLICT(session_id) DO UPDATE SET
+    turn_ended_at = CASE WHEN @keepStatus = 0 AND @status = 'idle' AND status != 'idle' THEN @now ELSE turn_ended_at END,
+    seen_at = CASE WHEN @markSeen = 1 THEN @now ELSE seen_at END,
     status = CASE WHEN @keepStatus = 1 THEN status ELSE @status END,
     cwd = CASE WHEN @pinCwd = 1 THEN COALESCE(@cwd, cwd) ELSE COALESCE(cwd, @cwd) END,
     source = COALESCE(@source, source),
@@ -462,6 +477,7 @@ const apply = db.transaction((payload: HookPayload, now: number): SessionRecord 
     sessionId: payload.sessionId,
     status,
     keepStatus,
+    markSeen: payload.kind === "user_prompt" || payload.kind === "session_start" ? 1 : 0,
     cwd: payload.cwd,
     pinCwd: payload.kind === "session_start" ? 1 : 0,
     source: payload.source,
@@ -584,6 +600,14 @@ const favoriteStmt = db.prepare(`UPDATE sessions SET favorite_at = ? WHERE sessi
 
 export function setSessionFavorite(sessionId: string, favorite: boolean): SessionRecord | null {
   favoriteStmt.run(favorite ? Date.now() : null, sessionId);
+  const row = getStmt.get(sessionId) as SessionRow | undefined;
+  return row ? toRecord(row) : null;
+}
+
+const seenStmt = db.prepare(`UPDATE sessions SET seen_at = ? WHERE session_id = ?`);
+
+export function markSessionSeen(sessionId: string): SessionRecord | null {
+  seenStmt.run(Date.now(), sessionId);
   const row = getStmt.get(sessionId) as SessionRow | undefined;
   return row ? toRecord(row) : null;
 }

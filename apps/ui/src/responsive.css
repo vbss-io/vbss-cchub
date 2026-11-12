@@ -13,6 +13,10 @@
   .view--tasks .filters--tight {
     flex-wrap: wrap;
   }
+
+  .card__menu-btn {
+    opacity: 1;
+  }
 }
 
 @media (max-width: 720px) {
@@ -132,7 +136,39 @@
   }
 
   .main {
-    padding-bottom: calc(74px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(var(--nav-h) + var(--statusbar-h) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .statusbar .runtime--limit .runtime__detail {
+    display: inline;
+  }
+
+  .statusbar .runtimes {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 18px), transparent);
+  }
+
+  .nav__menu {
+    min-width: 200px;
+  }
+
+  .nav__menu .nav__item {
+    flex: none;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    text-align: left;
+  }
+
+  .nav__menu .nav__label {
+    font-size: 13px;
+    max-width: none;
+    overflow: visible;
+  }
+
+  .statusbar__limits {
+    gap: 12px;
   }
 }
 

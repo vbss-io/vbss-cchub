@@ -438,6 +438,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
   const [generateBusy, setGenerateBusy] = useState(false);
   const [taskFilter, setTaskFilter] = useState<TaskFilter>(readStoredTaskFilter);
   const [organizeBusy, setOrganizeBusy] = useState(false);
+  const [refreshBusy, setRefreshBusy] = useState(false);
   const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
   const noticeTimerRef = useRef<number | null>(null);
 
@@ -789,6 +790,33 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
       .finally(() => setPrepareLoading(false));
   };
 
+  const refresh = async () => {
+    if (!date || refreshBusy) return;
+    setRefreshBusy(true);
+    loadOverview();
+    refreshSessions(date);
+    try {
+      if (dirty || saveStatus === "saving") showNotice("ok", "Unsaved edits kept; sessions refreshed");
+      else await loadEntry(date);
+    } catch (err) {
+      showNotice("error", err instanceof Error ? err.message : "could not refresh the daily");
+    } finally {
+      setRefreshBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!enabled) return;
+    const onRefresh = () => void refresh();
+    const onPlanToday = () => openWizard();
+    window.addEventListener("cchub:daily-refresh", onRefresh);
+    window.addEventListener("cchub:daily-plan-today", onPlanToday);
+    return () => {
+      window.removeEventListener("cchub:daily-refresh", onRefresh);
+      window.removeEventListener("cchub:daily-plan-today", onPlanToday);
+    };
+  });
+
   const computeCarriedItems = (): DailyFocusDraftItem[] => {
     const tasks = prepare?.yesterday?.tasks ?? [];
     return keepPickedDoingItems(carryOverFromYesterday(tasks, yesterdayDone, yesterdayCarry), carriedItems, tasks);
@@ -902,6 +930,9 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
           Next ›
         </button>
         <input className="in" style={{ maxWidth: 170 }} type="date" value={date} onChange={(event) => event.target.value && setDate(event.target.value)} />
+        <button className="act" disabled={refreshBusy} aria-busy={refreshBusy} title="Reload this day from the server" onClick={() => void refresh()}>
+          {refreshBusy ? "Refreshing…" : "Refresh"}
+        </button>
         <span className="spacer" />
         {running && (
           <button className="chip chip--agents-on" onClick={() => onOpenTask(running.taskId)}>

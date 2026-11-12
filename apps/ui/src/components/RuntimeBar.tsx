@@ -9,15 +9,16 @@ interface Props {
   onOpenHub: () => void;
 }
 
-interface ChipProps {
+export interface ChipProps {
   label: string;
   on: boolean;
   detail: string;
   onClick?: () => void;
+  tone?: string;
 }
 
-function RuntimeChip({ label, on, detail, onClick }: ChipProps) {
-  const className = `runtime ${on ? "runtime--on" : ""} ${onClick ? "runtime--button" : ""}`;
+export function RuntimeChip({ label, on, detail, onClick, tone }: ChipProps) {
+  const className = `runtime ${on ? "runtime--on" : ""} ${onClick ? "runtime--button" : ""} ${tone ?? ""}`.trim();
   const content = (
     <>
       <span className="runtime__dot" />

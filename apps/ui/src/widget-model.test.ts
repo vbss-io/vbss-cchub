@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { SessionRecord, SessionStatus } from "./types";
 import { splitSessions } from "./widget-model";
 
-const session = (sessionId: string, status: SessionStatus, updatedAt: number, favoriteAt: number | null = null): SessionRecord => ({
+const session = (sessionId: string, status: SessionStatus, updatedAt: number, favoriteAt: number | null = null, unread = false): SessionRecord => ({
   sessionId,
   status,
   cwd: null,
@@ -18,6 +18,7 @@ const session = (sessionId: string, status: SessionStatus, updatedAt: number, fa
   contextTokens: null,
   archivedAt: null,
   favoriteAt,
+  unread,
   startedAt: 0,
   updatedAt,
 });
@@ -30,6 +31,16 @@ describe("splitSessions", () => {
     assert.deepEqual(ids(result.needsYou), ["a"]);
     assert.deepEqual(ids(result.running), ["b"]);
     assert.deepEqual(ids(result.idle), ["c"]);
+  });
+
+  it("puts unread idle sessions in needs you and keeps seen ones in idle", () => {
+    const result = splitSessions([
+      session("w", "waiting", 5),
+      session("u", "idle", 9, null, true),
+      session("seen", "idle", 3),
+    ]);
+    assert.deepEqual(ids(result.needsYou), ["u", "w"]);
+    assert.deepEqual(ids(result.idle), ["seen"]);
   });
 
   it("orders each bucket by most recent update", () => {

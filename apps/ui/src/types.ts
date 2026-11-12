@@ -28,6 +28,8 @@ export interface SessionRecord {
   contextTokens: number | null;
   archivedAt: number | null;
   favoriteAt?: number | null;
+  unread?: boolean;
+  seenAt?: number | null;
   agentsRunning?: number;
   agentsTotal?: number;
   shareLabel?: string | null;
