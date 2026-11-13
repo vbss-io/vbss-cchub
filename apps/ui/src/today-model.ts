@@ -1,5 +1,5 @@
 import { findBoardTask, groupTasksByProject, type ProjectTaskGroup } from "./board-model";
-import type { BoardProject, BoardTarget, BoardTask, TodayEntry } from "./delegation";
+import type { BoardProject, BoardTarget, BoardTask, TodayAmbiguityReason, TodayAmbiguous, TodayData, TodayEntry } from "./delegation";
 import { addDays, flattenNodes, parseInlineTokens, type KeyEventLike, type OutlineGroup, type OutlineNode } from "./outliner-model";
 
 export const TODAY_DRAG_MIME = "application/x-cchub-task";
@@ -215,3 +215,14 @@ export function backlogGroups(
 export function countBacklog(groups: readonly ProjectTaskGroup[]): number {
   return groups.reduce((total, group) => total + group.tasks.length, 0);
 }
+
+export const noteOnlyLines = (data: Pick<TodayData, "inNote" | "unlinked">): string[] => data.inNote ?? data.unlinked;
+
+const AMBIGUITY_HINT: Record<TodayAmbiguityReason, string> = {
+  "same-title": "Another task has the same title, so it was not added to the note.",
+  "unclear-line": "A line in the note could mean this task or another one, so nothing was added.",
+  "several-lines": "Its parent appears more than once in the note, so it was not placed.",
+  "several-tasks": "This line matches more than one task, so its checkbox is not synced.",
+};
+
+export const ambiguityHint = (item: Pick<TodayAmbiguous, "reason">): string => AMBIGUITY_HINT[item.reason];

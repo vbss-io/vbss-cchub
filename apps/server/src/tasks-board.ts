@@ -695,7 +695,7 @@ function splitReason(text: string, status: BoardStatus, separator: string): { ti
   return { title, reason };
 }
 
-function joinReason(title: string, reason: string | null, separator: string): string {
+export function joinReason(title: string, reason: string | null, separator: string): string {
   return reason ? `${title}${separator}${reason}` : title;
 }
 
@@ -2434,7 +2434,7 @@ export interface TaskMatch {
   candidates: string[];
 }
 
-function taskNeedle(text: string, config: TasksFeatureSettings): string {
+export function taskNeedle(text: string, config: TasksFeatureSettings): string {
   const clean = removePriorityTokens(splitSignifiers(text.trim(), config).text, config);
   return normalizeText(matchPrefix(clean, config)?.title ?? clean);
 }
@@ -2903,14 +2903,14 @@ export function syncTaskToDaily(settings: DelegationSettings, input: SyncDailyIn
   return { date, updated: writeDailyMarks(settings, daily, linksOfTask(scan.links, task, true).map(syncedMark)) };
 }
 
-interface DailyStatusChange {
+export interface DailyStatusChange {
   task: BoardTask;
   status: BoardStatus;
 }
 
 const unmarkedLine = (raw: string): string => raw.replace(DAILY_MARK_RE, "$1$3");
 
-function statusFromCheckbox(current: BoardStatus, checkbox: BoardCheckbox): BoardStatus | null {
+export function statusFromCheckbox(current: BoardStatus, checkbox: BoardCheckbox): BoardStatus | null {
   if (!isSyncedStatus(current)) return null;
   if (checkbox === "done") return current === "done" ? null : "done";
   if (checkbox === "doing") return current === "doing" ? null : "doing";
@@ -2930,7 +2930,7 @@ function relocatedTask(settings: DelegationSettings, task: BoardTask): BoardTask
   return found;
 }
 
-function applyStatusChange(settings: DelegationSettings, change: DailyStatusChange): void {
+export function applyStatusChange(settings: DelegationSettings, change: DailyStatusChange): void {
   const task = relocatedTask(settings, change.task);
   writeBoardTask(settings, { projectId: task.projectId, line: task.line, raw: task.raw, status: change.status });
 }

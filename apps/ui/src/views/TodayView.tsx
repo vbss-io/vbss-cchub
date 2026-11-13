@@ -60,12 +60,14 @@ import { Markdown } from "../markdown";
 import { openExternal } from "../notify";
 import { addDays, previousSibling, nextSibling, type OutlineGroup, type OutlineNode } from "../outliner-model";
 import {
+  ambiguityHint,
   decodeDragTarget,
   describeDay,
   entryTaskIds,
   localDay,
   moveSteps,
   nextDay,
+  noteOnlyLines,
   outlineGroupsOf,
   parentOfTask,
   parseQuickAdd,
@@ -776,6 +778,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const projects = board?.projects ?? [];
   const focus = data?.focus ?? [];
   const carried = data?.carriedOver ?? [];
+  const noteLines = data ? noteOnlyLines(data) : [];
+  const ambiguous = data?.ambiguous ?? [];
   const groups: OutlineGroup[] = useMemo(() => outlineGroupsOf(focus), [focus]);
   const focusIds = useMemo(() => entryTaskIds(focus), [focus]);
   const excluded = useMemo(() => new Set([...focusIds, ...entryTaskIds(carried)]), [focusIds, carried]);
@@ -1222,17 +1226,28 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                 )}
               </section>
 
-              {data.unlinked.length > 0 && (
+              {(noteLines.length > 0 || ambiguous.length > 0) && (
                 <details className="today__disclosure">
-                  <summary>Unlinked in note ({data.unlinked.length})</summary>
-                  <p className="hint">These lines live in the note and are not linked to a project task. Edit them in the Note tab.</p>
-                  <ul className="today__plain">
-                    {data.unlinked.map((line, index) => (
-                      <li key={`${index}:${line}`} className="today__raw">
-                        {line.trim()}
-                      </li>
-                    ))}
-                  </ul>
+                  <summary>Also in the note ({noteLines.length + ambiguous.length})</summary>
+                  <p className="hint">These lines live in the note but are not in today's focus. The hub never removes or rewrites them; edit them in the Note tab.</p>
+                  {noteLines.length > 0 && (
+                    <ul className="today__plain">
+                      {noteLines.map((line, index) => (
+                        <li key={`${index}:${line}`} className="today__raw">
+                          {line.trim()}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {ambiguous.length > 0 && (
+                    <ul className="today__plain" aria-label="Ambiguous">
+                      {ambiguous.map((item, index) => (
+                        <li key={`${index}:${item.kind}:${item.text}`} className="today__raw">
+                          {item.text.trim()} <span className="muted small">{ambiguityHint(item)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </details>
               )}
 

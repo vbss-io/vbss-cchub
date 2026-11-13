@@ -383,7 +383,10 @@ export function composeDaily(template: string, input: ComposeInput, opts: Compos
   lines = insertSection(lines, opts.headings.focus, focusContent);
   lines = insertSection(lines, opts.headings.meetings, meetingsContent);
   lines = insertSection(lines, opts.headings.sessions, sessionsContent);
-  return lines.join("\n");
+  const content = lines.join("\n");
+  const heads = input.focus.map((item) => renderFocusItem(item, opts.wikilinks, opts.board ?? null)[0] ?? "").filter((head) => head.trim() !== "");
+  composedDailies.set(opts.date, { content, heads });
+  return content;
 }
 
 export interface OrganizeFocusOptions {
@@ -767,8 +770,24 @@ const lastServerWriteAt = new Map<string, number>();
 export type DailyWriteOrigin = "client" | "server";
 
 export interface DailyHooks {
-  written?: (settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin) => void;
+  written?: (settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin, previous: string | null) => void;
   diskChanged?: (date: string) => void;
+  composed?: (settings: DelegationSettings, date: string, content: string, heads: string[]) => void;
+}
+
+interface ComposedDaily {
+  content: string;
+  heads: string[];
+}
+
+const composedDailies = new Map<string, ComposedDaily>();
+
+function readPrevious(path: string): string | null {
+  try {
+    return existsSync(path) ? readFileSync(path, "utf8") : null;
+  } catch {
+    return null;
+  }
 }
 
 let dailyHooks: DailyHooks = {};
@@ -877,6 +896,7 @@ export function writeDaily(
       }
     }
   }
+  const previous = dailyHooks.written ? readPrevious(path) : null;
   mkdirSync(dirname(path), { recursive: true });
   snapshotVaultFile(root, path);
   writeFileAtomic(path, content);
@@ -884,7 +904,12 @@ export function writeDaily(
   lastHubHash.set(path, hashOf(content));
   if (origin === "server") lastServerWriteAt.set(path, stat.mtimeMs);
   broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "hub", writeId: writeId ?? null });
-  runHook(() => dailyHooks.written?.(settings, date, content, origin));
+  runHook(() => dailyHooks.written?.(settings, date, content, origin, previous));
+  const composed = composedDailies.get(date);
+  if (composed && composed.content === content) {
+    composedDailies.delete(date);
+    runHook(() => dailyHooks.composed?.(settings, date, content, composed.heads));
+  }
   return { date, path, updatedAt: stat.mtimeMs };
 }
 

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   DailyConflictError,
+  dailyFile,
   dailyTemplateText,
   findHeadingIndex,
   isPlaceholderLine,
@@ -11,15 +12,17 @@ import {
   setDailyHooks,
   taskBlock,
   writeDaily,
+  type ComposeBoard,
   type ComposeFocusItem,
   type DailyReadResult,
   type DailyWriteOrigin,
 } from "./daily.js";
 import { BadRequestError, NotFoundError } from "./delegation-launch.js";
-import { getSetting, getSettings, setSetting } from "./delegation-store.js";
+import { getSetting, getSettings, getTodayBaseline, saveTodayBaseline, setSetting } from "./delegation-store.js";
 import type { DelegationSettings, FocusSource } from "./delegation-types.js";
 import { localDate } from "./second-brain.js";
 import {
+  applyStatusChange,
   checkboxForStatus,
   collectBoard,
   composeBoardFrom,
@@ -28,22 +31,23 @@ import {
   effectiveProjectOrder,
   flattenTasks,
   focusRange,
+  joinReason,
   normalizeText,
   openDoc,
   renderDoc,
   requireBoardRoot,
   scanDaily,
   setBoardHooks,
-  syncTaskFromDaily,
-  syncTasksFromDaily,
+  statusFromCheckbox,
+  taskNeedle,
   writeBoardTask,
   type BoardCheckbox,
   type BoardProject,
   type BoardStatus,
   type BoardTask,
   type DocLine,
-  type FocusChild,
-  type FocusEntry,
+  type FocusScan,
+  type ParsedDoc,
 } from "./tasks-board.js";
 
 export interface TodayProject {
@@ -65,6 +69,16 @@ export interface TodayCapture {
   promotedTo: string | null;
 }
 
+export type AmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks";
+
+export interface TodayAmbiguous {
+  kind: "task" | "line";
+  text: string;
+  line: number | null;
+  taskId: string | null;
+  reason: AmbiguityReason;
+}
+
 export interface TodayPayload {
   date: string;
   focusSource: FocusSource;
@@ -73,6 +87,8 @@ export interface TodayPayload {
   meetings: string[];
   captures: TodayCapture[];
   unlinked: string[];
+  inNote: string[];
+  ambiguous: TodayAmbiguous[];
   summary: string | null;
   dailyExists: boolean;
   dailyUpdatedAt: number | null;
@@ -124,6 +140,7 @@ export interface MigrationResult {
   synced: number;
   skipped: MigrationSkip[];
   failed: MigrationFailure[];
+  ambiguous: TodayAmbiguous[];
 }
 
 export interface TodayApi {
@@ -147,23 +164,25 @@ export class StaleCaptureError extends Error {
 const LINE_SPLIT_RE = /\r\n|\n/;
 const SECTION_RE = /^##\s+/;
 const MARK_RE = /^(\s*[-*]\s+\[)([ xX-])(\])/;
+const FOCUS_LINE_RE = /^\s*[-*]\s+\[[ xX-]\]\s?(.*)$/;
 const BULLET_RE = /^[-*+]\s+(.*)$/;
 const LEADING_CHECKBOX_RE = /^\[[ xX-]\]\s*/;
 const PROMOTED_RE = /\s*(?:\u2192|->)\s*\[\[([^\]]+)\]\]\s*$/;
 const BQUOTE_RE = /^\s{0,3}>\s?/;
 const SCHEDULED_DATE_RE = /\u23F3\uFE0F?\s*(\d{4}-\d{2}-\d{2})/g;
-const SCHEDULED_MARK = "\u23F3";
 const PROMOTE_ARROW = "\u2192";
 const SUBTASK_INDENT = "  ";
+const KEY_SEPARATOR = "\u0000";
 const CAPTURE_MAX = 2000;
+const SEEN_LIMIT = 400;
+const BASELINE_KEEP_DAYS = 7;
 const MIGRATED_KEY = "today.migrated.";
 const BOARD_DELAY_MS = 50;
 const CLIENT_DELAY_MS = 400;
 const DISK_DELAY_MS = 1200;
 const OPEN_STATUSES: ReadonlySet<BoardStatus> = new Set<BoardStatus>(["todo", "doing", "blocked", "hold"]);
 const SYNCED_STATUSES: ReadonlySet<BoardStatus> = new Set<BoardStatus>(["todo", "doing", "done"]);
-const MARKS = { todo: " ", doing: "-", done: "x" } as const;
-const CHECKBOX_RANK: Record<BoardCheckbox, number> = { todo: 0, doing: 1, done: 2 };
+const MARKS: Record<BoardCheckbox, string> = { todo: " ", doing: "-", done: "x" };
 
 export function focusSourceOf(settings: DelegationSettings): FocusSource {
   return settings.daily.focusSource ?? "scheduled";
@@ -238,18 +257,304 @@ function computeCarried(settings: DelegationSettings, data: BoardData | null, da
   return data === null || !isCurrentOrFuture(date) ? [] : selectEntries(settings, data, (task) => isCarried(task, date));
 }
 
-function markOf(task: BoardTask): string {
-  return MARKS[checkboxForStatus(task.status)];
+const isBlankText = (text: string | undefined): boolean => text === undefined || text.trim() === "";
+
+const splitLines = (content: string): string[] => content.split(LINE_SPLIT_RE);
+
+function checkboxOfMark(mark: string): BoardCheckbox {
+  if (mark === "-") return "doing";
+  return mark === " " ? "todo" : "done";
 }
 
-function withMark(raw: string, task: BoardTask): string {
-  if (!SYNCED_STATUSES.has(task.status)) return raw;
-  const match = raw.match(MARK_RE);
-  if (!match) return raw;
-  const wanted = markOf(task);
-  const current = match[2] === "-" ? "-" : match[2] === " " ? " " : "x";
-  if (current === wanted) return raw;
-  return raw.replace(MARK_RE, (_whole, open: string, _mark: string, close: string) => `${open}${wanted}${close}`);
+function checkboxOfLine(text: string): BoardCheckbox | null {
+  const match = text.match(MARK_RE);
+  return match ? checkboxOfMark(match[2] as string) : null;
+}
+
+function withCheckbox(text: string, checkbox: BoardCheckbox): string {
+  const current = checkboxOfLine(text);
+  if (current === null || current === checkbox) return text;
+  return text.replace(MARK_RE, (_whole, open: string, _mark: string, close: string) => `${open}${MARKS[checkbox]}${close}`);
+}
+
+const unmarkedText = (text: string): string => text.replace(MARK_RE, "$1$3");
+
+function lineKeys(texts: string[]): string[] {
+  const counts = new Map<string, number>();
+  return texts.map((text) => {
+    const base = unmarkedText(text);
+    const seen = counts.get(base) ?? 0;
+    counts.set(base, seen + 1);
+    return `${base}${KEY_SEPARATOR}${seen}`;
+  });
+}
+
+function checkboxesByKey(texts: string[]): Map<string, BoardCheckbox> {
+  const keys = lineKeys(texts);
+  const out = new Map<string, BoardCheckbox>();
+  texts.forEach((text, index) => {
+    const checkbox = checkboxOfLine(text);
+    if (checkbox !== null) out.set(keys[index] as string, checkbox);
+  });
+  return out;
+}
+
+function keepsEveryLine(before: string, after: string): boolean {
+  const next = splitLines(after).map(unmarkedText);
+  let at = 0;
+  for (const line of splitLines(before)) {
+    const wanted = unmarkedText(line);
+    while (at < next.length && next[at] !== wanted) at += 1;
+    if (at >= next.length) return false;
+    at += 1;
+  }
+  return true;
+}
+
+const fingerprintOf = (projectId: string, title: string): string => `${projectId}${KEY_SEPARATOR}${normalizeText(title)}`;
+
+const fingerprint = (task: BoardTask): string => fingerprintOf(task.projectId, task.title);
+
+const projectCheckbox = (task: BoardTask): BoardCheckbox | null => (SYNCED_STATUSES.has(task.status) ? checkboxForStatus(task.status) : null);
+
+const isOccurrence = (task: BoardTask): boolean => task.repeat !== null && task.doneAt !== null;
+
+const markOf = (task: BoardTask): string => MARKS[checkboxForStatus(task.status)];
+
+interface MarkMemo {
+  checkbox: BoardCheckbox;
+  task: string;
+  id: string;
+}
+
+interface SeenTask {
+  projectId: string;
+  title: string;
+}
+
+interface BaselineState {
+  marks: Record<string, MarkMemo>;
+  seen: SeenTask[];
+  focus: SeenTask[];
+}
+
+interface Baseline {
+  content: string;
+  state: BaselineState;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isCheckbox(value: unknown): value is BoardCheckbox {
+  return value === "todo" || value === "doing" || value === "done";
+}
+
+function parseState(raw: string): BaselineState | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isRecord(value)) return null;
+  const marks: Record<string, MarkMemo> = {};
+  if (isRecord(value.marks)) {
+    for (const [key, memo] of Object.entries(value.marks)) {
+      if (isRecord(memo) && isCheckbox(memo.checkbox) && typeof memo.task === "string" && typeof memo.id === "string") {
+        marks[key] = { checkbox: memo.checkbox, task: memo.task, id: memo.id };
+      }
+    }
+  }
+  return { marks, seen: parseSeen(value.seen), focus: parseSeen(value.focus) };
+}
+
+function parseSeen(value: unknown): SeenTask[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item: unknown) =>
+    isRecord(item) && typeof item.projectId === "string" && typeof item.title === "string" ? [{ projectId: item.projectId, title: item.title }] : [],
+  );
+}
+
+function daysBefore(date: string, days: number): string {
+  const at = new Date(`${date}T12:00:00Z`);
+  at.setUTCDate(at.getUTCDate() - days);
+  return at.toISOString().slice(0, 10);
+}
+
+function loadBaseline(date: string, path: string): Baseline | null {
+  const record = getTodayBaseline(date);
+  if (!record || record.path !== path) return null;
+  const state = parseState(record.state);
+  return state === null ? null : { content: record.content, state };
+}
+
+function storeBaseline(date: string, path: string, baseline: Baseline): void {
+  const state = JSON.stringify(baseline.state);
+  const current = getTodayBaseline(date);
+  if (current && current.path === path && current.content === baseline.content && current.state === state) return;
+  saveTodayBaseline({ date, path, content: baseline.content, state }, daysBefore(localDate(), BASELINE_KEEP_DAYS));
+}
+
+interface LinkedLine {
+  line: number;
+  checkbox: BoardCheckbox;
+  task: BoardTask;
+  effective: BoardCheckbox | null;
+  userSynced: boolean;
+}
+
+function linkedLinesOf(scan: FocusScan): LinkedLine[] {
+  const out: LinkedLine[] = [];
+  for (const entry of scan.entries) {
+    const task = entry.match.task;
+    if (task === null) continue;
+    if (!entry.held) out.push({ line: entry.line, checkbox: entry.checkbox, task, effective: projectCheckbox(task), userSynced: true });
+    else if (entry.recurred) out.push({ line: entry.line, checkbox: entry.checkbox, task, effective: "done", userSynced: false });
+    if (entry.recurring) continue;
+    for (const child of entry.children) {
+      if (child.task) out.push({ line: child.line, checkbox: child.checkbox, task: child.task, effective: projectCheckbox(child.task), userSynced: true });
+    }
+  }
+  return out;
+}
+
+const syncedLinksOf = (scan: FocusScan): LinkedLine[] => linkedLinesOf(scan).filter((link) => link.task.scheduled !== null);
+
+const isSameTask = (memo: MarkMemo, task: BoardTask): boolean => memo.task === fingerprint(task) || memo.id === task.id;
+
+function memoMarks(content: string, scan: FocusScan): Record<string, MarkMemo> {
+  const keys = lineKeys(splitLines(content));
+  const marks: Record<string, MarkMemo> = {};
+  for (const link of linkedLinesOf(scan)) {
+    const key = keys[link.line];
+    if (key === undefined || link.effective === null) continue;
+    marks[key] = { checkbox: link.effective, task: fingerprint(link.task), id: link.task.id };
+  }
+  return marks;
+}
+
+function linkedTasks(scan: FocusScan): BoardTask[] {
+  const out: BoardTask[] = [];
+  for (const entry of scan.entries) {
+    if (entry.match.task) out.push(entry.match.task);
+    for (const child of entry.children) if (child.task) out.push(child.task);
+  }
+  return out;
+}
+
+const seenKey = (item: SeenTask): string => `${item.projectId}${KEY_SEPARATOR}${item.title}`;
+
+function mergeSeen(seen: SeenTask[], tasks: BoardTask[]): SeenTask[] {
+  const out = [...seen];
+  const keys = new Set(out.map(seenKey));
+  for (const task of tasks) {
+    const item: SeenTask = { projectId: task.projectId, title: normalizeText(task.title) };
+    const key = seenKey(item);
+    if (keys.has(key)) continue;
+    keys.add(key);
+    out.push(item);
+  }
+  return out.slice(-SEEN_LIMIT);
+}
+
+function focusMemory(focus: TodayEntry[]): SeenTask[] {
+  return mergeSeen(
+    [],
+    focus.flatMap((entry) => flattenTasks([entry.task])),
+  );
+}
+
+function adoptBaseline(settings: DelegationSettings, date: string, path: string, content: string, data: BoardData): Baseline {
+  const scan = scanDaily(settings, date, content, data.projects, data.tasks);
+  const state: BaselineState = { marks: memoMarks(content, scan), seen: mergeSeen([], linkedTasks(scan)), focus: focusMemory(computeFocus(settings, data, date)) };
+  const baseline: Baseline = { content, state };
+  storeBaseline(date, path, baseline);
+  return baseline;
+}
+
+function isKnown(task: BoardTask, seen: SeenTask[], existing: ReadonlySet<string>): boolean {
+  const title = normalizeText(task.title);
+  return seen.some((item) => item.title === title && (item.projectId === task.projectId || !existing.has(seenKey(item))));
+}
+
+function renameBudget(memory: SeenTask[], data: BoardData, existing: ReadonlySet<string>): Map<string, number> {
+  const titles = new Set(flattenTasks(data.tasks).map((task) => normalizeText(task.title)));
+  const budget = new Map<string, number>();
+  for (const item of memory) {
+    if (existing.has(seenKey(item)) || titles.has(item.title)) continue;
+    budget.set(item.projectId, (budget.get(item.projectId) ?? 0) + 1);
+  }
+  return budget;
+}
+
+interface Presence {
+  lines: Map<string, number[]>;
+  unclear: Set<string>;
+  recurred: Set<string>;
+}
+
+function presenceOf(scan: FocusScan): Presence {
+  const presence: Presence = { lines: new Map(), unclear: new Set(), recurred: new Set() };
+  const add = (id: string, line: number): void => {
+    presence.lines.set(id, [...(presence.lines.get(id) ?? []), line]);
+  };
+  for (const entry of scan.entries) {
+    const task = entry.match.task;
+    if (task) {
+      add(task.id, entry.line);
+      if (entry.recurred) presence.recurred.add(fingerprint(task));
+    } else {
+      for (const candidate of entry.match.candidates) presence.unclear.add(candidate);
+    }
+    for (const child of entry.children) if (child.task) add(child.task.id, child.line);
+  }
+  return presence;
+}
+
+function isPresent(presence: Presence, task: BoardTask): boolean {
+  if ((presence.lines.get(task.id)?.length ?? 0) > 0) return true;
+  return isOccurrence(task) && presence.recurred.has(fingerprint(task));
+}
+
+function linkedAt(scan: FocusScan): Map<number, string | null> {
+  const map = new Map<number, string | null>();
+  for (const entry of scan.entries) {
+    map.set(entry.line, entry.match.task?.id ?? null);
+    for (const child of entry.children) map.set(child.line, child.task?.id ?? null);
+  }
+  return map;
+}
+
+interface TreeLine {
+  text: string;
+  taskId: string;
+  depth: number;
+}
+
+function treeLines(task: BoardTask, depth: number, prefix: (depth: number) => string, skip: (task: BoardTask) => boolean): TreeLine[] {
+  return [
+    { text: `${prefix(depth)}- [${markOf(task)}] ${task.title}`, taskId: task.id, depth },
+    ...task.subtasks.filter((subtask) => !skip(subtask)).flatMap((subtask) => treeLines(subtask, depth + 1, prefix, skip)),
+  ];
+}
+
+function withoutLine(lines: TreeLine[], index: number): TreeLine[] {
+  const depth = (lines[index] as TreeLine).depth;
+  let end = index + 1;
+  while (end < lines.length && (lines[end] as TreeLine).depth > depth) end += 1;
+  return [...lines.slice(0, index), ...lines.slice(end)];
+}
+
+function leadOf(text: string): string {
+  return text.match(/^\s*/)?.[0] ?? "";
+}
+
+function indentWidth(text: string): number {
+  let width = 0;
+  for (const ch of leadOf(text)) width += ch === "\t" ? 4 : 1;
+  return width;
 }
 
 function canonicalHead(settings: DelegationSettings, project: TodayProject, task: BoardTask): string {
@@ -257,236 +562,251 @@ function canonicalHead(settings: DelegationSettings, project: TodayProject, task
   return `- [${markOf(task)}] ${label} - ${task.title}`;
 }
 
-interface BlockLine {
-  text: string;
-  origin: number | null;
+function projectOfFocusLine(text: string | undefined, board: ComposeBoard): string | null {
+  const match = text?.match(FOCUS_LINE_RE);
+  const rest = match ? (match[1] as string).trim() : "";
+  return rest === "" ? null : board.projectOfLine(rest);
 }
 
-function childLines(subtasks: BoardTask[], level: number, pool: FocusChild[], claimed: Set<number>): BlockLine[] {
-  const out: BlockLine[] = [];
-  for (const subtask of subtasks) {
-    const open = pool.filter((child) => !claimed.has(child.line) && child.task !== null);
-    const reused =
-      open.find((child) => child.task?.id === subtask.id) ??
-      open.find((child) => normalizeText((child.task as BoardTask).title) === normalizeText(subtask.title));
-    if (reused) {
-      claimed.add(reused.line);
-      out.push({ text: withMark(reused.raw, subtask), origin: reused.line });
-    } else {
-      out.push({ text: `${SUBTASK_INDENT.repeat(level)}- [${markOf(subtask)}] ${subtask.title}`, origin: null });
+interface InsertSpot {
+  at: number;
+  prefix: string[];
+  suffix: string[];
+}
+
+function insertionSpot(settings: DelegationSettings, texts: string[], board: ComposeBoard, first: string | undefined): InsertSpot {
+  const range = focusRange(texts, settings);
+  if (!range) {
+    let last = texts.length - 1;
+    while (last >= 0 && isBlankText(texts[last])) last -= 1;
+    return { at: last + 1, prefix: [...(last >= 0 ? [""] : []), `## ${settings.daily.headings.focus}`, ""], suffix: [] };
+  }
+  let last = range.end - 1;
+  while (last > range.heading && isBlankText(texts[last])) last -= 1;
+  if (last === range.heading) {
+    const at = range.heading + 1;
+    if (at < texts.length && isBlankText(texts[at])) return { at: at + 1, prefix: [], suffix: at + 1 < texts.length && !isBlankText(texts[at + 1]) ? [""] : [] };
+    return { at, prefix: [""], suffix: at < texts.length ? [""] : [] };
+  }
+  let top = last;
+  while (top > range.heading && (isBlankText(texts[top]) || indentWidth(texts[top] as string) > 0)) top -= 1;
+  const lastText = top > range.heading ? (texts[top] as string) : undefined;
+  if (lastText !== undefined && isPlaceholderLine(lastText)) return { at: last + 1, prefix: [], suffix: [] };
+  const lastProject = projectOfFocusLine(lastText, board);
+  const firstProject = projectOfFocusLine(first, board);
+  const separate = lastProject === null || firstProject === null || lastProject !== firstProject;
+  return { at: last + 1, prefix: separate ? [""] : [], suffix: [] };
+}
+
+interface InsertResult {
+  inserted: BoardTask[];
+  renamed: BoardTask[];
+  ambiguous: TodayAmbiguous[];
+}
+
+interface InsertMemory {
+  seen: SeenTask[];
+  focus: SeenTask[];
+}
+
+interface TopItem {
+  task: BoardTask;
+  lines: TreeLine[];
+}
+
+function layoutOf(rendered: string[], items: TopItem[]): (TreeLine | null)[] | null {
+  const owners: (TreeLine | null)[] = [];
+  const used = new Set<number>();
+  let index = 0;
+  while (index < rendered.length) {
+    const text = rendered[index] as string;
+    const match = items.findIndex(
+      (item, position) => !used.has(position) && item.lines.every((line, offset) => rendered[index + offset] === line.text),
+    );
+    if (match === -1) {
+      if (text !== "") return null;
+      owners.push(null);
+      index += 1;
+      continue;
     }
-    out.push(...childLines(subtask.subtasks, level + 1, pool, claimed));
+    used.add(match);
+    const item = items[match] as TopItem;
+    owners.push(...item.lines);
+    index += item.lines.length;
   }
-  return out;
+  return used.size === items.length ? owners : null;
 }
 
-function withForeign(elements: BlockLine[], start: number, linked: Set<number>, foreign: number[], texts: string[]): string[] {
-  const placed = new Map<number, string[]>();
-  const orphans: string[] = [];
-  for (const index of foreign) {
-    let owner = start;
-    for (const line of linked) if (line < index && line > owner) owner = line;
-    const text = texts[index] as string;
-    if (elements.some((element) => element.origin === owner)) placed.set(owner, [...(placed.get(owner) ?? []), text]);
-    else orphans.push(text);
-  }
-  return [...elements.flatMap((element) => [element.text, ...(element.origin === null ? [] : (placed.get(element.origin) ?? []))]), ...orphans];
-}
-
-interface FocusPlan {
-  content: string;
-  changed: boolean;
-  unlinked: string[];
-  generated: string[];
-  refused: boolean;
-}
-
-const isBlankText = (text: string): boolean => text.trim() === "";
-
-function leadingBlanks(lines: DocLine[]): number {
-  let count = 0;
-  while (count < lines.length && isBlankText((lines[count] as DocLine).text)) count += 1;
-  return count;
-}
-
-function trailingBlanks(lines: DocLine[], leading: number): number {
-  if (leading === lines.length) return 0;
-  let count = 0;
-  while (isBlankText((lines[lines.length - 1 - count] as DocLine).text)) count += 1;
-  return count;
-}
-
-function recurrenceTarget(entry: FocusEntry, task: BoardTask, focus: TodayEntry[]): TodayEntry | undefined {
-  if (!entry.recurring || !entry.recurred) return undefined;
-  const title = normalizeText(task.title);
-  return focus.find(
-    (candidate) =>
-      candidate.task.repeat !== null &&
-      candidate.task.doneAt !== null &&
-      candidate.task.projectId === task.projectId &&
-      normalizeText(candidate.task.title) === title,
-  );
-}
-
-function containsAll(output: string[], kept: string[]): boolean {
-  const counts = new Map<string, number>();
-  for (const line of output) if (!isBlankText(line)) counts.set(line, (counts.get(line) ?? 0) + 1);
-  for (const line of kept) {
-    const left = counts.get(line) ?? 0;
-    if (left === 0) return false;
-    counts.set(line, left - 1);
-  }
-  return true;
-}
-
-function planFocus(
+function insertMissing(
   settings: DelegationSettings,
   date: string,
-  content: string,
+  doc: ParsedDoc,
   data: BoardData,
   focus: TodayEntry[],
+  memory: InsertMemory,
   hints: ReadonlySet<string>,
-  previous: ReadonlySet<string> | null,
-): FocusPlan {
-  const unchanged: FocusPlan = { content, changed: false, unlinked: [], generated: [], refused: false };
-  const doc = openDoc(content);
-  const texts = doc.lines.map((line) => line.text);
-  let range = focusRange(texts, settings);
-  const existing = range !== null;
-  if (!range) {
-    if (focus.length === 0) return unchanged;
-    let last = texts.length - 1;
-    while (last >= 0 && isBlankText(texts[last] as string)) last -= 1;
-    doc.lines.push(...(last >= 0 ? [docLine("")] : []), docLine(`## ${settings.daily.headings.focus}`), docLine(""));
-    range = focusRange(
-      doc.lines.map((line) => line.text),
-      settings,
-    );
-    if (!range) return unchanged;
-  }
-  const scan = existing ? scanDaily(settings, date, content, data.projects, data.tasks) : { entries: [], links: [] };
-  const byTask = new Map(focus.map((entry) => [entry.task.id, entry]));
-  const shown = new Set(focus.flatMap((entry) => flattenTasks([entry.task]).map((task) => task.id)));
-  const claimed = new Set<string>();
-  const consumed = new Set<number>();
-  const blocks = new Map<string, string[]>();
-  const generatedOnly: string[] = [];
-  const keptBlocks: { start: number; end: number }[] = [];
-  const attached: string[] = [];
-  let dropped = 0;
-  for (const entry of scan.entries) {
-    const task = entry.match.task;
-    const start = entry.line;
-    const end = start + taskBlock(content, start).split(LINE_SPLIT_RE).length;
-    const linkedChildren = entry.children.filter((child) => child.task !== null);
-    const linkedLines = new Set(linkedChildren.map((child) => child.line));
-    const foreign: number[] = [];
-    for (let index = start + 1; index < end; index += 1) {
-      if (!isBlankText(texts[index] as string) && !linkedLines.has(index)) foreign.push(index);
+): InsertResult {
+  const result: InsertResult = { inserted: [], renamed: [], ambiguous: [] };
+  const parents = parentMap(data.tasks);
+  const byId = new Map(flattenTasks(data.tasks).map((task) => [task.id, task]));
+  const projects = new Map(data.projects.map((project) => [project.id, project]));
+  const existing = new Set(flattenTasks(data.tasks).map((task) => `${task.projectId}${KEY_SEPARATOR}${normalizeText(task.title)}`));
+  const budget = renameBudget(memory.focus, data, existing);
+  const board = composeBoardFrom(settings, data.projects);
+  const textsOf = (): string[] => doc.lines.map((line) => line.text);
+  const scanOf = (texts: string[]): FocusScan => scanDaily(settings, date, texts.join("\n"), data.projects, data.tasks);
+  let presence = presenceOf(scanOf(textsOf()));
+  const refresh = (): void => {
+    presence = presenceOf(scanOf(textsOf()));
+  };
+  const reported = new Set<string>();
+  const ambiguous = (task: BoardTask, reason: AmbiguityReason): void => {
+    if (reported.has(task.id)) return;
+    reported.add(task.id);
+    const project = projects.get(task.projectId);
+    result.ambiguous.push({ kind: "task", text: project ? `${project.title} - ${task.title}` : task.title, line: null, taskId: task.id, reason });
+  };
+  const known = (task: BoardTask): boolean => {
+    if (hints.has(task.id)) return false;
+    if (isKnown(task, memory.seen, existing)) return true;
+    const left = budget.get(task.projectId) ?? 0;
+    if (left === 0) return false;
+    budget.set(task.projectId, left - 1);
+    result.renamed.push(task);
+    return true;
+  };
+  const skip = (task: BoardTask): boolean => isPresent(presence, task) || presence.unclear.has(task.id) || known(task);
+  const settle = (lines: TreeLine[], check: (lines: TreeLine[]) => number[]): TreeLine[] | null => {
+    let current = lines;
+    for (;;) {
+      if (current.length === 0) return null;
+      const failing = check(current);
+      if (failing.length === 0) return current;
+      if (failing.includes(0)) return null;
+      const index = failing[0] as number;
+      ambiguous(byId.get((current[index] as TreeLine).taskId) as BoardTask, "same-title");
+      current = withoutLine(current, index);
     }
-    const target = task === null ? undefined : (byTask.get(task.id) ?? recurrenceTarget(entry, task, focus));
-    if (task !== null && target !== undefined && !claimed.has(target.task.id)) {
-      claimed.add(target.task.id);
-      const reuse = entry.projectId === null || entry.projectId === target.task.projectId;
-      const head = reuse ? withMark(entry.raw, target.task) : canonicalHead(settings, target.project, target.task);
-      const elements: BlockLine[] = [{ text: head, origin: reuse ? start : null }, ...childLines(target.task.subtasks, 1, linkedChildren, new Set<number>())];
-      blocks.set(target.task.id, withForeign(elements, start, linkedLines, foreign, texts));
-      generatedOnly.push(...elements.map((element) => element.text));
-      attached.push(...foreign.map((index) => texts[index] as string));
-      consumed.add(start);
-      for (const child of linkedChildren) consumed.add(child.line);
-      for (const index of foreign) consumed.add(index);
-    } else if (task !== null && target === undefined && !entry.held && (shown.has(task.id) || task.scheduled !== null || hints.has(task.id))) {
-      dropped += 1;
-      consumed.add(start);
-      for (const child of linkedChildren) consumed.add(child.line);
-    } else {
-      keptBlocks.push({ start, end });
+  };
+  const record = (lines: TreeLine[]): void => {
+    for (const line of lines) {
+      const task = byId.get(line.taskId);
+      if (task) result.inserted.push(task);
     }
-  }
+  };
+  const placeUnder = (parent: BoardTask, task: BoardTask): void => {
+    const at = presence.lines.get(parent.id) ?? [];
+    if (at.length !== 1) {
+      ambiguous(task, "several-lines");
+      return;
+    }
+    const texts = textsOf();
+    const start = at[0] as number;
+    const last = start + taskBlock(texts.join("\n"), start).split(LINE_SPLIT_RE).length - 1;
+    const parentLead = leadOf(texts[start] as string);
+    let childLead: string | null = null;
+    for (let index = start + 1; index <= last; index += 1) {
+      const text = texts[index] as string;
+      if (FOCUS_LINE_RE.test(text) && indentWidth(text) > indentWidth(texts[start] as string)) {
+        childLead = leadOf(text);
+        break;
+      }
+    }
+    const unit = parentLead.includes("\t") ? "\t" : SUBTASK_INDENT;
+    const lead = childLead ?? `${parentLead}${unit}`;
+    const step = lead.length > parentLead.length && lead.startsWith(parentLead) ? lead.slice(parentLead.length) : unit;
+    const lines = treeLines(task, 1, (depth) => `${lead}${step.repeat(depth - 1)}`, skip);
+    const accepted = settle(lines, (candidate) => {
+      const copy = [...texts];
+      copy.splice(last + 1, 0, ...candidate.map((line) => line.text));
+      const linked = linkedAt(scanOf(copy));
+      return candidate.flatMap((line, offset) => (linked.get(last + 1 + offset) === line.taskId ? [] : [offset]));
+    });
+    if (accepted === null) {
+      ambiguous(task, "same-title");
+      return;
+    }
+    doc.lines.splice(last + 1, 0, ...accepted.map((line) => docLine(line.text)));
+    record(accepted);
+    refresh();
+  };
+  const visitChildren = (task: BoardTask): void => {
+    if ((presence.lines.get(task.id)?.length ?? 0) === 0) return;
+    for (const subtask of task.subtasks) {
+      if (isPresent(presence, subtask)) {
+        visitChildren(subtask);
+        continue;
+      }
+      if (presence.unclear.has(subtask.id)) {
+        ambiguous(subtask, "unclear-line");
+        continue;
+      }
+      if (known(subtask)) continue;
+      placeUnder(task, subtask);
+    }
+  };
+  let tops: TopItem[] = [];
   for (const entry of focus) {
-    if (claimed.has(entry.task.id)) continue;
-    const elements: BlockLine[] = [
-      { text: canonicalHead(settings, entry.project, entry.task), origin: null },
-      ...childLines(entry.task.subtasks, 1, [], new Set<number>()),
-    ];
-    blocks.set(entry.task.id, elements.map((element) => element.text));
-    generatedOnly.push(...elements.map((element) => element.text));
-  }
-  if (blocks.size === 0 && dropped === 0) {
-    const everything = texts.slice(range.heading + 1, range.end).filter((text) => !isBlankText(text) && !isPlaceholderLine(text));
-    return { ...unchanged, unlinked: everything };
-  }
-  if (previous !== null) {
-    for (const block of keptBlocks) {
-      const blockTexts = texts.slice(block.start, block.end).filter((text) => !isBlankText(text));
-      if (blockTexts.length === 0 || !blockTexts.every((text) => previous.has(text))) continue;
-      for (let index = block.start; index < block.end; index += 1) consumed.add(index);
-    }
-  }
-  const remaining = new Map<string, number>();
-  for (const block of blocks.values()) remaining.set(block.join("\n"), (remaining.get(block.join("\n")) ?? 0) + 1);
-  for (const block of keptBlocks) {
-    const key = texts.slice(block.start, block.end).join("\n");
-    const left = remaining.get(key) ?? 0;
-    if (left === 0) continue;
-    remaining.set(key, left - 1);
-    for (let index = block.start; index < block.end; index += 1) consumed.add(index);
-  }
-  const items: ComposeFocusItem[] = focus.map((entry) => ({ project: null, text: "", block: (blocks.get(entry.task.id) as string[]).join("\n"), keepMark: true }));
-  const generated = renderFocusLines(items, settings.daily.wikilinks, composeBoardFrom(settings, data.projects));
-  const from = range.heading + 1;
-  const sectionLines = doc.lines.slice(from, range.end);
-  const keptSeq: (DocLine | null)[] = [];
-  const keptTexts: string[] = [];
-  const unlinked: string[] = [];
-  const placeholders: string[] = [];
-  for (let index = from; index < range.end; index += 1) {
-    if (consumed.has(index) || index >= texts.length) continue;
-    const line = doc.lines[index] as DocLine;
-    if (isBlankText(line.text)) {
-      if (keptSeq.length > 0 && keptSeq[keptSeq.length - 1] !== null) keptSeq.push(null);
+    const task = entry.task;
+    if (isPresent(presence, task)) {
+      visitChildren(task);
       continue;
     }
-    if (generated.length > 0 && isPlaceholderLine(line.text)) {
-      placeholders.push(line.text);
+    if (presence.unclear.has(task.id)) {
+      ambiguous(task, "unclear-line");
       continue;
     }
-    keptSeq.push(line);
-    keptTexts.push(line.text);
-    if (!isPlaceholderLine(line.text)) unlinked.push(line.text);
+    if (known(task)) continue;
+    const parent = parents.get(task.id) ?? null;
+    if (parent !== null && (presence.lines.get(parent.id)?.length ?? 0) > 0) {
+      placeUnder(parent, task);
+      continue;
+    }
+    const subtree = task.subtasks.filter((subtask) => !skip(subtask)).flatMap((subtask) => treeLines(subtask, 1, (depth) => SUBTASK_INDENT.repeat(depth), skip));
+    tops.push({ task, lines: [{ text: canonicalHead(settings, entry.project, task), taskId: task.id, depth: 0 }, ...subtree] });
   }
-  while (keptSeq.length > 0 && keptSeq[keptSeq.length - 1] === null) keptSeq.pop();
-  const body: DocLine[] = [
-    ...generated.map((text) => docLine(text)),
-    ...(generated.length > 0 && keptSeq.length > 0 ? [docLine("")] : []),
-    ...keptSeq.map((line) => line ?? docLine("")),
-  ];
-  if (body.length === 0) body.push(docLine(placeholders[0] ?? "- [ ]"));
-  const leading = leadingBlanks(sectionLines);
-  const trailing = trailingBlanks(sectionLines, leading);
-  const lead = sectionLines.slice(0, leading);
-  const trail = trailing > 0 ? sectionLines.slice(sectionLines.length - trailing) : [];
-  const nextSection = [...lead, ...body, ...trail];
-  const preserved = [...keptTexts, ...attached];
-  const outputTexts = nextSection.map((line) => line.text);
-  const expected = preserved.length + generatedOnly.length;
-  if (!containsAll(outputTexts, preserved) || outputTexts.filter((text) => !isBlankText(text)).length < expected) {
-    return { ...unchanged, unlinked, refused: true };
+  while (tops.length > 0) {
+    const items: ComposeFocusItem[] = tops.map((item) => ({ project: null, text: "", block: item.lines.map((line) => line.text).join("\n"), keepMark: true }));
+    const rendered = renderFocusLines(items, settings.daily.wikilinks, board);
+    const owners = layoutOf(rendered, tops);
+    if (owners === null) {
+      for (const item of tops) ambiguous(item.task, "same-title");
+      break;
+    }
+    const texts = textsOf();
+    const spot = insertionSpot(settings, texts, board, rendered[0]);
+    const block = [...spot.prefix, ...rendered, ...spot.suffix];
+    const copy = [...texts];
+    copy.splice(spot.at, 0, ...block);
+    const linked = linkedAt(scanOf(copy));
+    const failing = new Set<TreeLine>();
+    owners.forEach((owner, offset) => {
+      if (owner !== null && linked.get(spot.at + spot.prefix.length + offset) !== owner.taskId) failing.add(owner);
+    });
+    if (failing.size === 0) {
+      doc.lines.splice(spot.at, 0, ...block.map((text) => docLine(text)));
+      for (const item of tops) record(item.lines);
+      break;
+    }
+    tops = tops.flatMap((item) => {
+      const head = item.lines[0] as TreeLine;
+      if (failing.has(head)) {
+        ambiguous(item.task, "same-title");
+        return [];
+      }
+      const index = item.lines.findIndex((line) => failing.has(line));
+      if (index === -1) return [item];
+      ambiguous(byId.get((item.lines[index] as TreeLine).taskId) as BoardTask, "same-title");
+      return [{ task: item.task, lines: withoutLine(item.lines, index) }];
+    });
   }
-  doc.lines.splice(from, range.end - from, ...nextSection);
-  const next = renderDoc(doc);
-  return { content: next, changed: next !== content, unlinked, generated: generated.filter((text) => !isBlankText(text)), refused: false };
+  return result;
 }
 
-const knownContent = new Map<string, string>();
-const lastGenerated = new Map<string, Set<string>>();
 const pending = new Map<string, MirrorSource>();
 const timers = new Map<string, NodeJS.Timeout>();
 
 export function forgetTodayState(): void {
-  knownContent.clear();
-  lastGenerated.clear();
   pending.clear();
   for (const timer of timers.values()) clearTimeout(timer);
   timers.clear();
@@ -496,10 +816,10 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function hasStake(settings: DelegationSettings, date: string, content: string, data: BoardData, hints: ReadonlySet<string>): boolean {
-  if (hints.size > 0 || (lastGenerated.get(date)?.size ?? 0) > 0) return true;
-  if (computeFocus(settings, data, date).length > 0) return true;
-  return scanDaily(settings, date, content, data.projects, data.tasks).entries.some((entry) => entry.match.task !== null && entry.match.task.scheduled !== null);
+interface UserTick {
+  task: BoardTask;
+  targets: Set<BoardCheckbox>;
+  keys: string[];
 }
 
 function runMirror(settings: DelegationSettings, date: string, options: MirrorOptions = {}): MirrorResult {
@@ -507,40 +827,108 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
   if (!settings.features.daily || !settings.features.tasks) return skip("disabled");
   if (focusSourceOf(settings) !== "scheduled") return skip("list");
   if (!isCurrentOrFuture(date)) return skip("past");
+  let applied = 0;
   try {
     const daily = readDailySafe(settings, date);
     if (daily === null || !daily.exists) return skip("no-daily");
     let data = loadBoardData(settings);
     if (data === null) return skip("no-board");
-    const hints = options.hints ?? new Set<string>();
-    if (!hasStake(settings, date, daily.content, data, hints)) {
-      knownContent.set(date, daily.content);
-      return { changed: false, skipped: null, applied: 0 };
+    const baseline = loadBaseline(date, daily.path) ?? adoptBaseline(settings, date, daily.path, daily.content, data);
+    const keys = lineKeys(splitLines(daily.content));
+    const before = checkboxesByKey(splitLines(baseline.content));
+    let scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
+    const touched = new Set<string>();
+    const ticks = new Map<string, UserTick>();
+    for (const link of syncedLinksOf(scan)) {
+      const key = keys[link.line];
+      const old = key === undefined ? undefined : before.get(key);
+      if (key === undefined || old === undefined || old === link.checkbox || !link.userSynced) continue;
+      touched.add(key);
+      const memo = baseline.state.marks[key];
+      const projectMoved = memo !== undefined && isSameTask(memo, link.task) && link.effective !== null && link.effective !== memo.checkbox;
+      if (projectMoved && link.effective !== link.checkbox) continue;
+      const tick = ticks.get(link.task.id) ?? { task: link.task, targets: new Set<BoardCheckbox>(), keys: [] };
+      tick.targets.add(link.checkbox);
+      tick.keys.push(key);
+      ticks.set(link.task.id, tick);
     }
-    let before = knownContent.get(date) ?? null;
-    if (before === null && options.source === "disk") {
-      const baseline = planFocus(settings, date, daily.content, data, computeFocus(settings, data, date), hints, lastGenerated.get(date) ?? null);
-      before = baseline.refused ? null : baseline.content;
+    const retry = new Map<string, BoardCheckbox>();
+    for (const tick of ticks.values()) {
+      const [target] = [...tick.targets];
+      const keepOld = (): void => {
+        for (const key of tick.keys) retry.set(key, before.get(key) as BoardCheckbox);
+      };
+      if (tick.targets.size !== 1 || target === undefined) {
+        keepOld();
+        continue;
+      }
+      const status = statusFromCheckbox(tick.task.status, target);
+      if (status === null) continue;
+      try {
+        applyStatusChange(settings, { task: tick.task, status });
+        applied += 1;
+      } catch (err) {
+        console.error(`focus mirror could not apply a tick for ${tick.task.id}: ${errorText(err)}`);
+        keepOld();
+      }
     }
-    let applied = 0;
-    if (before !== null && before !== daily.content) {
-      applied = syncTasksFromDaily(settings, date, before, daily.content);
-      if (applied > 0) data = loadBoardData(settings) ?? data;
+    if (applied > 0) {
+      data = loadBoardData(settings) ?? data;
+      scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
     }
-    const plan = planFocus(settings, date, daily.content, data, computeFocus(settings, data, date), hints, lastGenerated.get(date) ?? null);
-    if (plan.refused) return skip("refused", applied);
-    lastGenerated.set(date, new Set(plan.generated));
-    if (!plan.changed) {
-      knownContent.set(date, daily.content);
-      return { changed: false, skipped: null, applied };
+    const doc = openDoc(daily.content);
+    const retryLines = new Map<DocLine, { checkbox: BoardCheckbox; key: string }>();
+    keys.forEach((key, index) => {
+      const checkbox = retry.get(key);
+      const line = doc.lines[index];
+      if (checkbox !== undefined && line) retryLines.set(line, { checkbox, key });
+    });
+    for (const link of syncedLinksOf(scan)) {
+      const key = keys[link.line];
+      if (key === undefined || touched.has(key) || link.effective === null) continue;
+      const old = before.get(key);
+      const memo = baseline.state.marks[key];
+      if (old === undefined || memo === undefined || old !== link.checkbox) continue;
+      if (!isSameTask(memo, link.task) || link.effective === memo.checkbox || link.effective === link.checkbox) continue;
+      const line = doc.lines[link.line];
+      if (line) line.text = withCheckbox(line.text, link.effective);
     }
-    writeDaily(settings, date, plan.content, daily.updatedAt ?? undefined, `mirror-${randomUUID().slice(0, 8)}`, "server");
-    knownContent.set(date, plan.content);
-    return { changed: true, skipped: null, applied };
+    const insertion = insertMissing(settings, date, doc, data, computeFocus(settings, data, date), baseline.state, options.hints ?? new Set<string>());
+    const next = renderDoc(doc);
+    if (!keepsEveryLine(daily.content, next)) {
+      console.error(`focus mirror refused a change that would lose a line of ${date}`);
+      return skip("refused", applied);
+    }
+    const changed = next !== daily.content;
+    if (changed) writeDaily(settings, date, next, daily.updatedAt ?? undefined, `mirror-${randomUUID().slice(0, 8)}`, "server");
+    const finalScan = scanDaily(settings, date, next, data.projects, data.tasks);
+    const marks = memoMarks(next, finalScan);
+    const finalKeys = lineKeys(splitLines(next));
+    const baseDoc: ParsedDoc = {
+      ...doc,
+      lines: doc.lines.map((line, index) => {
+        const retried = retryLines.get(line);
+        if (retried === undefined) return { text: line.text, eol: line.eol };
+        const oldMemo = baseline.state.marks[retried.key];
+        const finalKey = finalKeys[index] as string;
+        if (oldMemo) marks[finalKey] = oldMemo;
+        else delete marks[finalKey];
+        return { text: withCheckbox(line.text, retried.checkbox), eol: line.eol };
+      }),
+    };
+    storeBaseline(date, daily.path, {
+      content: renderDoc(baseDoc),
+      state: {
+        marks,
+        seen: mergeSeen(baseline.state.seen, [...linkedTasks(finalScan), ...insertion.inserted, ...insertion.renamed]),
+        focus: focusMemory(computeFocus(settings, data, date)),
+      },
+    });
+    return { changed, skipped: null, applied };
   } catch (err) {
-    if (err instanceof DailyConflictError) return skip("conflict");
+    if (err instanceof DailyConflictError) return skip("conflict", applied);
     console.error(`focus mirror failed for ${date}: ${errorText(err)}`);
-    return skip("failed");
+    return skip("failed", applied);
   }
 }
 
@@ -580,8 +968,8 @@ function scheduledDatesIn(text: string): string[] {
 }
 
 function queueScheduledDates(...texts: string[]): void {
+  if (!isScheduledMode(getSettings())) return;
   const dates = new Set(texts.flatMap((text) => scheduledDatesIn(text)));
-  if (!texts.some((text) => text.includes(SCHEDULED_MARK))) return;
   dates.add(localDate());
   for (const date of dates) scheduleMirror(date, "board");
 }
@@ -590,14 +978,82 @@ export function queueDailyDiskChange(date: string): void {
   if (isScheduledMode(getSettings())) scheduleMirror(date, "disk");
 }
 
+function transferHubMarks(date: string, path: string, previous: string, content: string): void {
+  const baseline = loadBaseline(date, path);
+  if (!baseline) return;
+  const before = checkboxesByKey(splitLines(previous));
+  const moved = new Map<string, BoardCheckbox>();
+  for (const [key, checkbox] of checkboxesByKey(splitLines(content))) {
+    const old = before.get(key);
+    if (old !== undefined && old !== checkbox) moved.set(key, checkbox);
+  }
+  if (moved.size === 0) return;
+  const doc = openDoc(baseline.content);
+  const marks = { ...baseline.state.marks };
+  let touched = false;
+  lineKeys(splitLines(baseline.content)).forEach((key, index) => {
+    const checkbox = moved.get(key);
+    const line = doc.lines[index];
+    if (checkbox === undefined || !line) return;
+    line.text = withCheckbox(line.text, checkbox);
+    delete marks[key];
+    touched = true;
+  });
+  if (touched) storeBaseline(date, path, { content: renderDoc(doc), state: { ...baseline.state, marks } });
+}
+
+function onDailyWritten(settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin, previous: string | null): void {
+  if (!isScheduledMode(settings) || !isCurrentOrFuture(date)) return;
+  if (origin === "client") {
+    scheduleMirror(date, "client");
+    return;
+  }
+  const path = dailyFile(settings, date);
+  if (path === null) return;
+  if (previous !== null) {
+    transferHubMarks(date, path, previous, content);
+    return;
+  }
+  const data = loadBoardData(settings);
+  if (data !== null) adoptBaseline(settings, date, path, content, data);
+}
+
+function isExactTitle(settings: DelegationSettings, text: string, task: BoardTask): boolean {
+  const needle = taskNeedle(text, settings.tasks);
+  return needle === normalizeText(task.title) || needle === normalizeText(joinReason(task.title, task.reason, settings.tasks.reasonSeparator));
+}
+
+function onDailyComposed(settings: DelegationSettings, date: string, content: string, heads: string[]): void {
+  if (!isScheduledMode(settings) || !isCurrentOrFuture(date)) return;
+  const path = dailyFile(settings, date);
+  const data = loadBoardData(settings);
+  if (path === null || data === null) return;
+  adoptBaseline(settings, date, path, content, data);
+  const scan = scanDaily(settings, date, content, data.projects, data.tasks);
+  const counts = new Map<string, number>();
+  for (const task of linkedTasks(scan)) counts.set(task.id, (counts.get(task.id) ?? 0) + 1);
+  const wanted = new Set(heads);
+  const hints = new Set<string>();
+  for (const entry of scan.entries) {
+    const task = entry.match.task;
+    if (task === null || entry.held || entry.projectId === null || !wanted.has(entry.raw)) continue;
+    if (!isOpenTask(task) || counts.get(task.id) !== 1 || !isExactTitle(settings, entry.text, task)) continue;
+    hints.add(task.id);
+    if (task.scheduled === date) continue;
+    try {
+      writeBoardTask(settings, { projectId: task.projectId, line: task.line, raw: task.raw, scheduled: date });
+    } catch (err) {
+      console.error(`could not schedule the picked task ${task.id}: ${errorText(err)}`);
+    }
+  }
+  runMirror(settings, date, { source: "api", hints });
+}
+
 export function installTodayHooks(): void {
   setDailyHooks({
-    written: (settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin) => {
-      if (!isCurrentOrFuture(date)) return;
-      knownContent.set(date, content);
-      if (origin === "client" && isScheduledMode(settings)) scheduleMirror(date, "client");
-    },
+    written: onDailyWritten,
     diskChanged: queueDailyDiskChange,
+    composed: onDailyComposed,
   });
   setBoardHooks({
     committed: (previous: string, next: string) => queueScheduledDates(previous, next),
@@ -702,6 +1158,51 @@ function listModeFocus(settings: DelegationSettings, date: string, daily: DailyR
   return out;
 }
 
+interface NoteView {
+  inNote: string[];
+  unlinked: string[];
+  ambiguous: TodayAmbiguous[];
+}
+
+function noteView(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData, focus: TodayEntry[], scheduled: boolean): NoteView {
+  const content = daily.content;
+  const texts = splitLines(content);
+  const scan = scanDaily(settings, date, content, data.projects, data.tasks);
+  const ambiguous: TodayAmbiguous[] = scan.entries
+    .filter((entry) => entry.match.task === null && entry.match.candidates.length >= 2)
+    .map((entry): TodayAmbiguous => ({ kind: "line", text: entry.raw, line: entry.line, taskId: null, reason: "several-tasks" }));
+  if (scheduled && isCurrentOrFuture(date)) {
+    const memory: InsertMemory = loadBaseline(date, daily.path)?.state ?? { seen: mergeSeen([], linkedTasks(scan)), focus: focusMemory(focus) };
+    ambiguous.push(...insertMissing(settings, date, openDoc(content), data, focus, memory, new Set<string>()).ambiguous);
+  }
+  const range = focusRange(texts, settings);
+  if (!range) return { inNote: [], unlinked: [], ambiguous };
+  const focusIds = new Set(focus.flatMap((entry) => flattenTasks([entry.task]).map((task) => task.id)));
+  const occurrences = new Set(focus.filter((entry) => isOccurrence(entry.task)).map((entry) => fingerprint(entry.task)));
+  const entries = new Map(scan.entries.map((entry) => [entry.line, entry]));
+  const inNote: string[] = [];
+  const unlinked: string[] = [];
+  let index = range.heading + 1;
+  while (index < range.end) {
+    if (isBlankText(texts[index])) {
+      index += 1;
+      continue;
+    }
+    const length = Math.max(1, taskBlock(content, index).split(LINE_SPLIT_RE).length);
+    const end = Math.min(index + length, range.end);
+    const entry = entries.get(index);
+    const task = entry?.match.task ?? null;
+    const focused = task !== null && (focusIds.has(task.id) || (entry?.recurred === true && occurrences.has(fingerprint(task))));
+    if (!focused) {
+      const lines = texts.slice(index, end).filter((text) => !isBlankText(text) && !isPlaceholderLine(text));
+      inNote.push(...lines);
+      if (task === null) unlinked.push(...lines);
+    }
+    index = end;
+  }
+  return { inNote, unlinked, ambiguous };
+}
+
 function validateDate(date: string): void {
   if (!isValidDailyDate(date)) throw new BadRequestError("date must be YYYY-MM-DD");
 }
@@ -716,10 +1217,32 @@ function validateLine(text: unknown): string {
   return text.trim();
 }
 
+function initialContent(settings: DelegationSettings, date: string): string {
+  const content = renderTemplate(dailyTemplateText(settings), date);
+  if (!isScheduledMode(settings) || !isCurrentOrFuture(date)) return content;
+  const data = loadBoardData(settings);
+  const focus = computeFocus(settings, data, date);
+  if (data === null || focus.length === 0) return content;
+  const doc = openDoc(content);
+  const range = focusRange(
+    doc.lines.map((line) => line.text),
+    settings,
+  );
+  if (range) {
+    const filled: number[] = [];
+    for (let index = range.heading + 1; index < range.end; index += 1) if (!isBlankText((doc.lines[index] as DocLine).text)) filled.push(index);
+    if (filled.length > 0 && filled.every((index) => isPlaceholderLine((doc.lines[index] as DocLine).text))) {
+      for (const index of [...filled].reverse()) doc.lines.splice(index, 1);
+    }
+  }
+  insertMissing(settings, date, doc, data, focus, { seen: [], focus: [] }, new Set<string>());
+  return renderDoc(doc);
+}
+
 function createDailyFile(settings: DelegationSettings, date: string): DailyReadResult {
   const daily = readDaily(settings, date);
   if (daily.exists) return daily;
-  writeDaily(settings, date, renderTemplate(dailyTemplateText(settings), date), undefined, `create-${randomUUID().slice(0, 8)}`, "server");
+  writeDaily(settings, date, initialContent(settings, date), undefined, `create-${randomUUID().slice(0, 8)}`, "server");
   return readDaily(settings, date);
 }
 
@@ -731,8 +1254,7 @@ function createToday(settings: DelegationSettings, date: string): { dailyExists:
   requireDailyFeature(settings);
   validateDate(date);
   const daily = readDaily(settings, date);
-  const created = !daily.exists;
-  if (created) createDailyFile(settings, date);
+  if (!daily.exists) createDailyFile(settings, date);
   if (isScheduledMode(settings) && isCurrentOrFuture(date)) {
     runMirror(settings, date, { source: "api" });
     if (date === localDate()) setSetting(migratedKey(date), "1");
@@ -748,11 +1270,11 @@ function appendBullet(settings: DelegationSettings, date: string, heading: strin
   const range = dailySections(texts, heading);
   if (!range) {
     let last = texts.length - 1;
-    while (last >= 0 && isBlankText(texts[last] as string)) last -= 1;
+    while (last >= 0 && isBlankText(texts[last])) last -= 1;
     doc.lines.splice(last + 1, 0, ...(last >= 0 ? [docLine("")] : []), docLine(`## ${heading}`), line);
   } else {
     const content: number[] = [];
-    for (let index = range.heading + 1; index < range.end; index += 1) if (!isBlankText(texts[index] as string)) content.push(index);
+    for (let index = range.heading + 1; index < range.end; index += 1) if (!isBlankText(texts[index])) content.push(index);
     if (content.length > 0 && content.every((index) => isPlaceholderLine(texts[index] as string))) {
       const first = content[0] as number;
       const last = content[content.length - 1] as number;
@@ -812,7 +1334,7 @@ function promoteCapture(settings: DelegationSettings, date: string, input: Promo
   if (!target || target.text !== input.raw) throw new StaleCaptureError();
   target.text = `${input.raw} ${PROMOTE_ARROW} [[${project.name}]]`;
   writeDaily(settings, date, renderDoc(doc), fresh.updatedAt ?? undefined, `promote-${randomUUID().slice(0, 8)}`, "server");
-  if (input.schedule === true) runMirror(settings, date, { source: "api" });
+  if (input.schedule === true) runMirror(settings, date, { source: "api", hints: new Set([created.task.id]) });
   return { task: created.task };
 }
 
@@ -821,21 +1343,10 @@ function schedule(settings: DelegationSettings, input: ScheduleInput): { task: B
   const before = loadBoardData(settings);
   const old = before ? flattenTasks(before.tasks).find((task) => task.projectId === input.projectId && task.line === input.line) : undefined;
   const result = writeBoardTask(settings, { projectId: input.projectId, line: input.line, raw: input.raw, scheduled: input.date });
-  const hints = new Set([result.task.id]);
+  const hints = new Set(input.date === null ? [] : [result.task.id]);
   const dates = new Set([old?.scheduled ?? null, input.date].filter((date): date is string => date !== null && isCurrentOrFuture(date)));
-  for (const date of dates) runMirror(settings, date, { source: "api", hints });
+  for (const date of dates) runMirror(settings, date, { source: "api", hints: date === input.date ? hints : new Set<string>() });
   return { task: result.task };
-}
-
-function isForward(checkbox: BoardCheckbox, task: BoardTask): boolean {
-  return SYNCED_STATUSES.has(task.status) && CHECKBOX_RANK[checkbox] > CHECKBOX_RANK[checkboxForStatus(task.status)];
-}
-
-function hasForwardTick(entry: FocusEntry): boolean {
-  const task = entry.match.task;
-  if (!task || entry.held) return false;
-  if (isForward(entry.checkbox, task)) return true;
-  return !entry.recurring && entry.children.some((child) => child.task !== null && isForward(child.checkbox, child.task));
 }
 
 function migrateFocus(settings: DelegationSettings, date: string): MigrationResult {
@@ -844,20 +1355,18 @@ function migrateFocus(settings: DelegationSettings, date: string): MigrationResu
   if (!isCurrentOrFuture(date)) throw new BadRequestError("past dailies are never migrated");
   const daily = readDaily(settings, date);
   if (!daily.exists) throw new NotFoundError("create the daily first");
-  let data = loadBoardData(settings);
+  const data = loadBoardData(settings);
   if (data === null) throw new BadRequestError("the tasks board is not available");
-  const result: MigrationResult = { scheduled: 0, synced: 0, skipped: [], failed: [] };
-  for (const entry of scanDaily(settings, date, daily.content, data.projects, data.tasks).entries.filter(hasForwardTick)) {
-    try {
-      if (syncTaskFromDaily(settings, { line: entry.line, date }).updated > 0) result.synced += 1;
-    } catch (err) {
-      result.failed.push({ taskId: (entry.match.task as BoardTask).id, error: errorText(err) });
-    }
-  }
-  if (result.synced > 0) data = loadBoardData(settings) ?? data;
+  if (loadBaseline(date, daily.path) === null) adoptBaseline(settings, date, daily.path, daily.content, data);
+  const result: MigrationResult = { scheduled: 0, synced: 0, skipped: [], failed: [], ambiguous: [] };
   const linked = new Map<string, BoardTask>();
   for (const entry of scanDaily(settings, date, daily.content, data.projects, data.tasks).entries) {
-    if (entry.match.task && !entry.held) linked.set(entry.match.task.id, entry.match.task);
+    const task = entry.match.task;
+    if (task !== null) {
+      if (!entry.held) linked.set(task.id, task);
+    } else if (entry.match.candidates.length >= 2) {
+      result.ambiguous.push({ kind: "line", text: entry.raw, line: entry.line, taskId: null, reason: "several-tasks" });
+    }
   }
   for (const task of linked.values()) {
     if (task.scheduled === date) continue;
@@ -911,7 +1420,7 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
   const lines = exists ? content.split(LINE_SPLIT_RE) : [];
   const scheduledFocus = focusSource === "scheduled";
   const focus = scheduledFocus ? computeFocus(settings, data, date) : exists && data ? listModeFocus(settings, date, daily as DailyReadResult, data) : [];
-  const unlinked = exists && data ? planFocus(settings, date, content, data, focus, new Set<string>(), lastGenerated.get(date) ?? null).unlinked : [];
+  const view: NoteView = exists && data ? noteView(settings, date, daily as DailyReadResult, data, focus, scheduledFocus) : { inNote: [], unlinked: [], ambiguous: [] };
   return {
     date,
     focusSource,
@@ -919,7 +1428,9 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
     carriedOver: scheduledFocus ? computeCarried(settings, data, date) : [],
     meetings: meetingsOf(settings, lines),
     captures: capturesOf(settings, lines),
-    unlinked,
+    unlinked: view.unlinked,
+    inNote: view.inNote,
+    ambiguous: view.ambiguous,
     summary: summaryOf(lines),
     dailyExists: exists,
     dailyUpdatedAt: exists ? ((daily as DailyReadResult).updatedAt ?? null) : null,

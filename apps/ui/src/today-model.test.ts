@@ -19,6 +19,8 @@ import {
   realSiblings,
   rootNodeOf,
   toggleBacklogStatus,
+  ambiguityHint,
+  noteOnlyLines,
 } from "./today-model";
 
 const TODAY = "2026-11-12";
@@ -244,5 +246,20 @@ describe("backlog filtering", () => {
     assert.equal(countBacklog(groups), 4);
     assert.deepEqual(toggleBacklogStatus(["todo", "blocked"], "doing"), ["todo", "doing", "blocked"]);
     assert.deepEqual(toggleBacklogStatus(["todo", "doing"], "todo"), ["doing"]);
+  });
+});
+
+describe("note lines and ambiguity", () => {
+  it("prefers the lines in the note and falls back to the unlinked ones of an older hub", () => {
+    assert.deepEqual(noteOnlyLines({ unlinked: ["- free"], inNote: ["- [ ] [[a|A]] - Other day", "- free"] }), ["- [ ] [[a|A]] - Other day", "- free"]);
+    assert.deepEqual(noteOnlyLines({ unlinked: ["- free"] }), ["- free"]);
+  });
+
+  it("gives a short hint for every reason", () => {
+    for (const reason of ["same-title", "unclear-line", "several-lines", "several-tasks"] as const) {
+      const hint = ambiguityHint({ reason });
+      assert.ok(hint.length > 10 && hint.length < 100, reason);
+    }
+    assert.match(ambiguityHint({ reason: "several-tasks" }), /not synced/);
   });
 });

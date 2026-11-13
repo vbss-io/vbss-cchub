@@ -453,6 +453,60 @@ export function setSetting(key: string, value: string | null): void {
   upsertSettingStmt.run(key, value);
 }
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS today_baselines (
+    date       TEXT PRIMARY KEY,
+    path       TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    state      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+`);
+
+export interface TodayBaselineRecord {
+  date: string;
+  path: string;
+  content: string;
+  state: string;
+  updatedAt: number;
+}
+
+interface TodayBaselineRow {
+  date: string;
+  path: string;
+  content: string;
+  state: string;
+  updated_at: number;
+}
+
+const getTodayBaselineStmt = db.prepare(`SELECT * FROM today_baselines WHERE date = ?`);
+const saveTodayBaselineStmt = db.prepare(`
+  INSERT INTO today_baselines (date, path, content, state, updated_at)
+  VALUES (@date, @path, @content, @state, @updatedAt)
+  ON CONFLICT(date) DO UPDATE SET
+    path = excluded.path,
+    content = excluded.content,
+    state = excluded.state,
+    updated_at = excluded.updated_at
+`);
+const deleteTodayBaselineStmt = db.prepare(`DELETE FROM today_baselines WHERE date = ?`);
+const pruneTodayBaselinesStmt = db.prepare(`DELETE FROM today_baselines WHERE date < ?`);
+
+export function getTodayBaseline(date: string): TodayBaselineRecord | null {
+  const row = getTodayBaselineStmt.get(date) as TodayBaselineRow | undefined;
+  if (!row) return null;
+  return { date: row.date, path: row.path, content: row.content, state: row.state, updatedAt: row.updated_at };
+}
+
+export function saveTodayBaseline(record: Omit<TodayBaselineRecord, "updatedAt">, pruneBefore: string | null = null): void {
+  saveTodayBaselineStmt.run({ ...record, updatedAt: Date.now() });
+  if (pruneBefore !== null) pruneTodayBaselinesStmt.run(pruneBefore);
+}
+
+export function deleteTodayBaseline(date: string): void {
+  deleteTodayBaselineStmt.run(date);
+}
+
 export interface UpdateSettingsInput {
   workspacesRoot?: string | null;
   editorCommand?: string;

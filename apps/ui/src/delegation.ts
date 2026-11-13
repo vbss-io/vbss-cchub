@@ -506,6 +506,16 @@ export interface TodayCapture {
   promotedTo: string | null;
 }
 
+export type TodayAmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks";
+
+export interface TodayAmbiguous {
+  kind: "task" | "line";
+  text: string;
+  line: number | null;
+  taskId: string | null;
+  reason: TodayAmbiguityReason;
+}
+
 export interface TodayData {
   date: string;
   focusSource: "scheduled" | "list";
@@ -514,6 +524,8 @@ export interface TodayData {
   meetings: string[];
   captures: TodayCapture[];
   unlinked: string[];
+  inNote?: string[];
+  ambiguous?: TodayAmbiguous[];
   summary: string | null;
   dailyExists: boolean;
   dailyUpdatedAt: number | null;
