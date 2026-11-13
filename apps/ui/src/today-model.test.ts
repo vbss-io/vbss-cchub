@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { BoardProject, BoardTask, TodayEntry } from "./delegation";
+import type { BoardProject, BoardTask, TodayEntry, TodayOutOfSync } from "./delegation";
 import {
   backlogGroups,
   backlogKeyIntent,
@@ -20,7 +20,12 @@ import {
   rootNodeOf,
   toggleBacklogStatus,
   ambiguityHint,
+  keepDismissed,
   noteOnlyLines,
+  outOfSyncKey,
+  parseDismissedOutOfSync,
+  taskOfOutOfSync,
+  visibleOutOfSync,
 } from "./today-model";
 
 const TODAY = "2026-11-12";
@@ -256,10 +261,40 @@ describe("note lines and ambiguity", () => {
   });
 
   it("gives a short hint for every reason", () => {
-    for (const reason of ["same-title", "unclear-line", "several-lines", "several-tasks"] as const) {
+    for (const reason of ["same-title", "unclear-line", "several-lines", "several-tasks", "duplicate-line"] as const) {
       const hint = ambiguityHint({ reason });
       assert.ok(hint.length > 10 && hint.length < 100, reason);
     }
     assert.match(ambiguityHint({ reason: "several-tasks" }), /not synced/);
+  });
+});
+
+describe("lines changed in the note", () => {
+  const item = (line: string, taskTitle = "Other task"): TodayOutOfSync => ({ line, taskTitle, projectId: "alpha", dailyCheckbox: "done", projectStatus: "todo" });
+
+  it("hides the items the user kept and shows them again once the line changes", () => {
+    const first = item("- [x] [[alpha|Alpha]] - Call the bank");
+    const kept = [outOfSyncKey(first)];
+    assert.deepEqual(visibleOutOfSync([first], kept), []);
+    const changed = item("- [x] [[alpha|Alpha]] - Call the bank today");
+    assert.deepEqual(visibleOutOfSync([changed], kept), [changed]);
+    assert.deepEqual(keepDismissed(kept, [changed]), []);
+    assert.deepEqual(keepDismissed(kept, [first, changed]), kept);
+    assert.deepEqual(visibleOutOfSync(undefined, kept), []);
+  });
+
+  it("reads the stored dismissals defensively", () => {
+    assert.deepEqual(parseDismissedOutOfSync('["a", 1, "b"]'), ["a", "b"]);
+    assert.deepEqual(parseDismissedOutOfSync("not json"), []);
+    assert.deepEqual(parseDismissedOutOfSync('{"a":1}'), []);
+    assert.deepEqual(parseDismissedOutOfSync(""), []);
+  });
+
+  it("finds the task only when exactly one task of the project has the title", () => {
+    const nested = task("t3", "alpha", 3, { title: "Other task" });
+    const tasks = [task("t1", "alpha", 1, { title: "Ship" }, [nested]), task("t2", "beta", 2, { title: "Other task" })];
+    assert.equal(taskOfOutOfSync(tasks, item("- [x] x"))?.id, "t3");
+    assert.equal(taskOfOutOfSync([...tasks, task("t4", "alpha", 4, { title: "Other task" })], item("- [x] x")), null);
+    assert.equal(taskOfOutOfSync(tasks, item("- [x] x", "Missing")), null);
   });
 });

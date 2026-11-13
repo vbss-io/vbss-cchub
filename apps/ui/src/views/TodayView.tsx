@@ -53,6 +53,7 @@ import {
   type TodayCapture,
   type TodayData,
   type TodayEntry,
+  type TodayOutOfSync,
   type WorkspaceRecord,
 } from "../delegation";
 import { IconClose } from "../icons";
@@ -64,16 +65,21 @@ import {
   decodeDragTarget,
   describeDay,
   entryTaskIds,
+  keepDismissed,
   localDay,
   moveSteps,
   nextDay,
   noteOnlyLines,
   outlineGroupsOf,
+  outOfSyncKey,
   parentOfTask,
+  parseDismissedOutOfSync,
   parseQuickAdd,
   rootNodeOf,
   targetOfTask,
+  taskOfOutOfSync,
   TODAY_DRAG_MIME,
+  visibleOutOfSync,
 } from "../today-model";
 import { DAILY_ORGANIZE_EVENT, DAILY_REFINE_EVENT, DailyView, useDailySessions, type DailyEntryInfo } from "./DailyView";
 
@@ -107,6 +113,7 @@ const NARROW_QUERY = "(max-width: 899px)";
 const QUICK_PROJECT_KEY = "hub.today.quickProject";
 const PROMOTE_PROJECT_KEY = "hub.today.promoteProject";
 const TAB_KEY = "hub.today.tab";
+const KEPT_TASKS_KEY = "hub.today.keptTasks";
 const CONFLICT_NOTICE = "This task changed on disk, so Today was refreshed. Try again.";
 
 const messageOf = (error: unknown, fallback = "Something went wrong"): string => (error instanceof Error && error.message !== "" ? error.message : fallback);
@@ -678,6 +685,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const [entryInfo, setEntryInfo] = useState<DailyEntryInfo>({ exists: false, path: null });
   const [quick, setQuick] = useState<QuickAddState>({ open: false, projectId: "", text: "", busy: false, error: null });
   const [creatingNote, setCreatingNote] = useState(false);
+  const [kept, setKept] = useState<string[]>(() => parseDismissedOutOfSync(readStored(KEPT_TASKS_KEY)));
   const narrow = useNarrow();
 
   const requestRef = useRef(0);
@@ -780,6 +788,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const carried = data?.carriedOver ?? [];
   const noteLines = data ? noteOnlyLines(data) : [];
   const ambiguous = data?.ambiguous ?? [];
+  const outOfSync = visibleOutOfSync(data?.outOfSync, kept);
   const groups: OutlineGroup[] = useMemo(() => outlineGroupsOf(focus), [focus]);
   const focusIds = useMemo(() => entryTaskIds(focus), [focus]);
   const excluded = useMemo(() => new Set([...focusIds, ...entryTaskIds(carried)]), [focusIds, carried]);
@@ -789,6 +798,35 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   useEffect(() => {
     if (board && drawerId !== null && drawerTask === null) setDrawerId(null);
   }, [board, drawerId, drawerTask]);
+
+  useEffect(() => {
+    if (data === null) return;
+    setKept((current) => {
+      const next = keepDismissed(current, data.outOfSync);
+      if (next.length === current.length) return current;
+      writeStored(KEPT_TASKS_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, [data]);
+
+  const keepTask = (item: TodayOutOfSync) =>
+    setKept((current) => {
+      const next = [...current, outOfSyncKey(item)];
+      writeStored(KEPT_TASKS_KEY, JSON.stringify(next));
+      return next;
+    });
+
+  const applyNote = async (item: TodayOutOfSync, task: BoardTask) => {
+    markBusy(task.id, true);
+    try {
+      await patchBoardItem(targetOfTask(task), { status: item.dailyCheckbox });
+    } catch (err) {
+      failWith(err, "could not update the task");
+    } finally {
+      markBusy(task.id, false);
+      await refresh();
+    }
+  };
 
   const markBusy = (id: string, on: boolean) =>
     setBusyIds((current) => {
@@ -1225,6 +1263,45 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                   />
                 )}
               </section>
+
+              {outOfSync.length > 0 && (
+                <section className="today__section" aria-label="Changed in the note">
+                  <header className="today__section-head">
+                    <h3>Changed in the note - check status</h3>
+                  </header>
+                  <ul className="today__plain">
+                    {outOfSync.map((item) => {
+                      const task = taskOfOutOfSync(boardTasks, item);
+                      const busy = task !== null && busyIds.has(task.id);
+                      return (
+                        <li key={outOfSyncKey(item)} className="today__row">
+                          <span className="today__text">
+                            {item.line.trim()}{" "}
+                            <span className="muted small">
+                              Task "{item.taskTitle}" is {item.projectStatus}, the note says {item.dailyCheckbox}.
+                            </span>
+                          </span>
+                          <span className="today__actions">
+                            <button
+                              type="button"
+                              className="act"
+                              disabled={task === null || busy}
+                              onClick={() => {
+                                if (task) void applyNote(item, task);
+                              }}
+                            >
+                              Use note
+                            </button>
+                            <button type="button" className="act today__ghost" disabled={busy} onClick={() => keepTask(item)}>
+                              Keep task
+                            </button>
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              )}
 
               {(noteLines.length > 0 || ambiguous.length > 0) && (
                 <details className="today__disclosure">

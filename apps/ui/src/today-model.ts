@@ -1,5 +1,5 @@
 import { findBoardTask, groupTasksByProject, type ProjectTaskGroup } from "./board-model";
-import type { BoardProject, BoardTarget, BoardTask, TodayAmbiguityReason, TodayAmbiguous, TodayData, TodayEntry } from "./delegation";
+import type { BoardProject, BoardTarget, BoardTask, TodayAmbiguityReason, TodayAmbiguous, TodayData, TodayEntry, TodayOutOfSync } from "./delegation";
 import { addDays, flattenNodes, parseInlineTokens, type KeyEventLike, type OutlineGroup, type OutlineNode } from "./outliner-model";
 
 export const TODAY_DRAG_MIME = "application/x-cchub-task";
@@ -223,6 +223,40 @@ const AMBIGUITY_HINT: Record<TodayAmbiguityReason, string> = {
   "unclear-line": "A line in the note could mean this task or another one, so nothing was added.",
   "several-lines": "Its parent appears more than once in the note, so it was not placed.",
   "several-tasks": "This line matches more than one task, so its checkbox is not synced.",
+  "duplicate-line": "This line was copied or removed, so its checkbox was not synced. Check the task status.",
 };
 
 export const ambiguityHint = (item: Pick<TodayAmbiguous, "reason">): string => AMBIGUITY_HINT[item.reason];
+
+export const outOfSyncKey = (item: TodayOutOfSync): string => [item.projectId, item.taskTitle, item.line].join("\u0000");
+
+export function parseDismissedOutOfSync(raw: string): string[] {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+export function visibleOutOfSync(items: readonly TodayOutOfSync[] | undefined, dismissed: readonly string[]): TodayOutOfSync[] {
+  const hidden = new Set(dismissed);
+  return (items ?? []).filter((item) => !hidden.has(outOfSyncKey(item)));
+}
+
+export function keepDismissed(dismissed: readonly string[], items: readonly TodayOutOfSync[] | undefined): string[] {
+  const live = new Set((items ?? []).map(outOfSyncKey));
+  return dismissed.filter((key) => live.has(key));
+}
+
+export function taskOfOutOfSync(tasks: readonly BoardTask[], item: TodayOutOfSync): BoardTask | null {
+  const found: BoardTask[] = [];
+  const visit = (list: readonly BoardTask[]): void => {
+    for (const candidate of list) {
+      if (candidate.projectId === item.projectId && candidate.title === item.taskTitle) found.push(candidate);
+      visit(candidate.subtasks);
+    }
+  };
+  visit(tasks);
+  return found.length === 1 ? (found[0] as BoardTask) : null;
+}

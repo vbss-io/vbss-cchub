@@ -506,7 +506,15 @@ export interface TodayCapture {
   promotedTo: string | null;
 }
 
-export type TodayAmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks";
+export type TodayAmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks" | "duplicate-line";
+
+export interface TodayOutOfSync {
+  line: string;
+  taskTitle: string;
+  projectId: string;
+  dailyCheckbox: BoardCheckbox;
+  projectStatus: BoardStatus;
+}
 
 export interface TodayAmbiguous {
   kind: "task" | "line";
@@ -526,6 +534,7 @@ export interface TodayData {
   unlinked: string[];
   inNote?: string[];
   ambiguous?: TodayAmbiguous[];
+  outOfSync?: TodayOutOfSync[];
   summary: string | null;
   dailyExists: boolean;
   dailyUpdatedAt: number | null;

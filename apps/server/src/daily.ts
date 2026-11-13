@@ -770,7 +770,7 @@ const lastServerWriteAt = new Map<string, number>();
 export type DailyWriteOrigin = "client" | "server";
 
 export interface DailyHooks {
-  written?: (settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin, previous: string | null) => void;
+  written?: (settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin, previous: string | null, unseen: boolean) => void;
   diskChanged?: (date: string) => void;
   composed?: (settings: DelegationSettings, date: string, content: string, heads: string[]) => void;
 }
@@ -897,6 +897,7 @@ export function writeDaily(
     }
   }
   const previous = dailyHooks.written ? readPrevious(path) : null;
+  const unseen = previous !== null && lastHubHash.get(path) !== hashOf(previous);
   mkdirSync(dirname(path), { recursive: true });
   snapshotVaultFile(root, path);
   writeFileAtomic(path, content);
@@ -904,7 +905,7 @@ export function writeDaily(
   lastHubHash.set(path, hashOf(content));
   if (origin === "server") lastServerWriteAt.set(path, stat.mtimeMs);
   broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "hub", writeId: writeId ?? null });
-  runHook(() => dailyHooks.written?.(settings, date, content, origin, previous));
+  runHook(() => dailyHooks.written?.(settings, date, content, origin, previous, unseen));
   const composed = composedDailies.get(date);
   if (composed && composed.content === content) {
     composedDailies.delete(date);

@@ -69,7 +69,15 @@ export interface TodayCapture {
   promotedTo: string | null;
 }
 
-export type AmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks";
+export type AmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks" | "duplicate-line";
+
+export interface TodayOutOfSync {
+  line: string;
+  taskTitle: string;
+  projectId: string;
+  dailyCheckbox: BoardCheckbox;
+  projectStatus: BoardStatus;
+}
 
 export interface TodayAmbiguous {
   kind: "task" | "line";
@@ -89,6 +97,7 @@ export interface TodayPayload {
   unlinked: string[];
   inNote: string[];
   ambiguous: TodayAmbiguous[];
+  outOfSync?: TodayOutOfSync[];
   summary: string | null;
   dailyExists: boolean;
   dailyUpdatedAt: number | null;
@@ -332,10 +341,23 @@ interface SeenTask {
   title: string;
 }
 
+interface StoredOutOfSync {
+  line: string;
+  task: string;
+  checkbox: BoardCheckbox;
+}
+
+interface StoredDuplicate {
+  text: string;
+  lines: string[];
+}
+
 interface BaselineState {
   marks: Record<string, MarkMemo>;
   seen: SeenTask[];
   focus: SeenTask[];
+  outOfSync: StoredOutOfSync[];
+  duplicates: StoredDuplicate[];
 }
 
 interface Baseline {
@@ -367,7 +389,25 @@ function parseState(raw: string): BaselineState | null {
       }
     }
   }
-  return { marks, seen: parseSeen(value.seen), focus: parseSeen(value.focus) };
+  return { marks, seen: parseSeen(value.seen), focus: parseSeen(value.focus), outOfSync: parseOutOfSync(value.outOfSync), duplicates: parseDuplicates(value.duplicates) };
+}
+
+function parseOutOfSync(value: unknown): StoredOutOfSync[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item: unknown) =>
+    isRecord(item) && typeof item.line === "string" && typeof item.task === "string" && isCheckbox(item.checkbox)
+      ? [{ line: item.line, task: item.task, checkbox: item.checkbox }]
+      : [],
+  );
+}
+
+function parseDuplicates(value: unknown): StoredDuplicate[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item: unknown) =>
+    isRecord(item) && typeof item.text === "string" && Array.isArray(item.lines) && item.lines.every((line: unknown) => typeof line === "string")
+      ? [{ text: item.text, lines: item.lines as string[] }]
+      : [],
+  );
 }
 
 function parseSeen(value: unknown): SeenTask[] {
@@ -420,8 +460,6 @@ function linkedLinesOf(scan: FocusScan): LinkedLine[] {
   return out;
 }
 
-const syncedLinksOf = (scan: FocusScan): LinkedLine[] => linkedLinesOf(scan).filter((link) => link.task.scheduled !== null);
-
 const isSameTask = (memo: MarkMemo, task: BoardTask): boolean => memo.task === fingerprint(task) || memo.id === task.id;
 
 function memoMarks(content: string, scan: FocusScan): Record<string, MarkMemo> {
@@ -468,7 +506,13 @@ function focusMemory(focus: TodayEntry[]): SeenTask[] {
 
 function adoptBaseline(settings: DelegationSettings, date: string, path: string, content: string, data: BoardData): Baseline {
   const scan = scanDaily(settings, date, content, data.projects, data.tasks);
-  const state: BaselineState = { marks: memoMarks(content, scan), seen: mergeSeen([], linkedTasks(scan)), focus: focusMemory(computeFocus(settings, data, date)) };
+  const state: BaselineState = {
+    marks: memoMarks(content, scan),
+    seen: mergeSeen([], linkedTasks(scan)),
+    focus: focusMemory(computeFocus(settings, data, date)),
+    outOfSync: [],
+    duplicates: [],
+  };
   const baseline: Baseline = { content, state };
   storeBaseline(date, path, baseline);
   return baseline;
@@ -803,8 +847,289 @@ function insertMissing(
   return result;
 }
 
+function commonPairs(before: string[], after: string[]): [number, number][] {
+  const width = after.length + 1;
+  const table = new Int32Array((before.length + 1) * width);
+  const at = (i: number, j: number): number => table[i * width + j] ?? 0;
+  for (let i = before.length - 1; i >= 0; i -= 1) {
+    for (let j = after.length - 1; j >= 0; j -= 1) {
+      table[i * width + j] = before[i] === after[j] ? at(i + 1, j + 1) + 1 : Math.max(at(i + 1, j), at(i, j + 1));
+    }
+  }
+  const pairs: [number, number][] = [];
+  let i = 0;
+  let j = 0;
+  while (i < before.length && j < after.length) {
+    if (before[i] === after[j]) {
+      pairs.push([i, j]);
+      i += 1;
+      j += 1;
+    } else if (at(i + 1, j) >= at(i, j + 1)) {
+      i += 1;
+    } else {
+      j += 1;
+    }
+  }
+  return pairs;
+}
+
+const restOf = (text: string): string => (text.match(FOCUS_LINE_RE)?.[1] ?? "").trim();
+
+function continues(before: string, after: string): boolean {
+  if (restOf(before) === "" || restOf(after) === "") return false;
+  const a = unmarkedText(before);
+  const b = unmarkedText(after);
+  return a !== b && (b.startsWith(a) || a.startsWith(b));
+}
+
+function pairGap(before: string[], after: string[], gapBefore: number[], gapAfter: number[], pairs: Map<number, number>): void {
+  const boxedBefore = gapBefore.filter((index) => checkboxOfLine(before[index] as string) !== null);
+  const boxedAfter = gapAfter.filter((index) => checkboxOfLine(after[index] as string) !== null);
+  const used = new Set<number>();
+  let from = 0;
+  for (const index of boxedBefore) {
+    for (let k = from; k < boxedAfter.length; k += 1) {
+      const candidate = boxedAfter[k] as number;
+      if (!continues(before[index] as string, after[candidate] as string)) continue;
+      pairs.set(candidate, index);
+      used.add(index);
+      used.add(-1 - candidate);
+      from = k + 1;
+      break;
+    }
+  }
+  const restBefore = boxedBefore.filter((index) => !used.has(index));
+  const restAfter = boxedAfter.filter((index) => !used.has(-1 - index));
+  if (restBefore.length !== restAfter.length) return;
+  restBefore.forEach((index, k) => {
+    const candidate = restAfter[k] as number;
+    if (leadOf(before[index] as string) === leadOf(after[candidate] as string)) pairs.set(candidate, index);
+  });
+}
+
+function alignLines(before: string[], after: string[]): Map<number, number> {
+  const a = before.map(unmarkedText);
+  const b = after.map(unmarkedText);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1;
+  const pairs = new Map<number, number>();
+  for (let index = 0; index < head; index += 1) pairs.set(index, index);
+  for (let k = 0; k < tail; k += 1) pairs.set(b.length - 1 - k, a.length - 1 - k);
+  const endA = a.length - tail;
+  const endB = b.length - tail;
+  const anchors = commonPairs(a.slice(head, endA), b.slice(head, endB)).map(([i, j]): [number, number] => [i + head, j + head]);
+  const range = (from: number, to: number): number[] => Array.from({ length: Math.max(0, to - from) }, (_unused, k) => from + k);
+  let previousA = head - 1;
+  let previousB = head - 1;
+  for (const [i, j] of [...anchors, [endA, endB] as [number, number]]) {
+    pairGap(before, after, range(previousA + 1, i), range(previousB + 1, j), pairs);
+    if (i < endA) pairs.set(j, i);
+    previousA = i;
+    previousB = j;
+  }
+  return pairs;
+}
+
+function checkboxLineCounts(texts: string[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const text of texts) {
+    if (checkboxOfLine(text) === null) continue;
+    const base = unmarkedText(text);
+    out.set(base, [...(out.get(base) ?? []), text]);
+  }
+  return out;
+}
+
+function changedCopies(before: string[], after: string[]): Set<string> {
+  const was = checkboxLineCounts(before);
+  const now = checkboxLineCounts(after);
+  const out = new Set<string>();
+  for (const [base, lines] of now) {
+    const count = was.get(base)?.length ?? 0;
+    if (count >= 1 && count !== lines.length && Math.max(count, lines.length) >= 2) out.add(base);
+  }
+  return out;
+}
+
+type PrintIndex = Map<string, BoardTask | null>;
+
+function printIndex(data: BoardData): PrintIndex {
+  const map: PrintIndex = new Map();
+  for (const task of flattenTasks(data.tasks)) {
+    const key = fingerprint(task);
+    map.set(key, map.has(key) ? null : task);
+  }
+  return map;
+}
+
+const taskOfPrint = (index: PrintIndex, print: string): BoardTask | null => index.get(print) ?? null;
+
+interface OpenLine {
+  text: string;
+  projectId: string | null;
+}
+
+function openLinesOf(scan: FocusScan): Map<number, OpenLine> {
+  const out = new Map<number, OpenLine>();
+  for (const entry of scan.entries) {
+    if (entry.match.task === null && entry.match.candidates.length === 0 && entry.text.trim() !== "") out.set(entry.line, { text: entry.text, projectId: entry.projectId });
+    if (entry.recurring) continue;
+    for (const child of entry.children) if (child.task === null) out.set(child.line, { text: child.text, projectId: null });
+  }
+  return out;
+}
+
+interface SyncLink extends LinkedLine {
+  base: number | undefined;
+}
+
+interface PendingOutOfSync {
+  line: number;
+  task: BoardTask;
+  checkbox: BoardCheckbox;
+}
+
+interface TickPlan {
+  baseTexts: string[];
+  baseKeys: string[];
+  links: SyncLink[];
+  continued: Map<number, BoardTask>;
+  outOfSync: PendingOutOfSync[];
+  copies: Set<string>;
+}
+
+function planTicks(settings: DelegationSettings, date: string, baseline: Baseline, texts: string[], scan: FocusScan, data: BoardData): TickPlan {
+  const baseTexts = splitLines(baseline.content);
+  const baseKeys = lineKeys(baseTexts);
+  const prints = printIndex(data);
+  const baseScan = scanDaily(settings, date, baseline.content, data.projects, data.tasks);
+  const baseLinked = new Map(
+    linkedLinesOf(baseScan)
+      .filter((link) => link.userSynced)
+      .map((link) => [link.line, link.task]),
+  );
+  const baseTaskAt = (index: number): BoardTask | null => {
+    const linked = baseLinked.get(index);
+    if (linked) return linked;
+    const memo = baseline.state.marks[baseKeys[index] as string];
+    return memo === undefined ? null : taskOfPrint(prints, memo.task);
+  };
+  const pairs = alignLines(baseTexts, texts);
+  const scanLinks = new Map(linkedLinesOf(scan).map((link) => [link.line, link]));
+  const open = openLinesOf(scan);
+  const plan: TickPlan = { baseTexts, baseKeys, links: [], continued: new Map(), outOfSync: [], copies: new Set() };
+  texts.forEach((text, line) => {
+    const base = pairs.get(line);
+    const baseText = base === undefined ? undefined : (baseTexts[base] as string);
+    const same = baseText !== undefined && unmarkedText(baseText) === unmarkedText(text);
+    const checkbox = checkboxOfLine(text);
+    const ticked = baseText !== undefined && checkbox !== null && checkboxOfLine(baseText) !== checkbox;
+    const link = scanLinks.get(line);
+    if (link) {
+      if (base === undefined || same) {
+        plan.links.push({ ...link, base });
+        return;
+      }
+      const before = baseTaskAt(base);
+      if (before !== null && before.id === link.task.id) {
+        plan.links.push({ ...link, base });
+        return;
+      }
+      plan.links.push({ ...link, base: undefined });
+      if (before === null && ticked && link.userSynced && link.effective !== null && link.effective !== checkbox) plan.outOfSync.push({ line, task: link.task, checkbox: checkbox as BoardCheckbox });
+      return;
+    }
+    const openLine = open.get(line);
+    if (openLine === undefined || base === undefined || checkbox === null) return;
+    const before = baseTaskAt(base);
+    if (before === null || before.repeat !== null) return;
+    const sameProject = openLine.projectId === null || openLine.projectId === before.projectId;
+    if (sameProject && (same || taskNeedle(openLine.text, settings.tasks).startsWith(normalizeText(before.title)))) {
+      plan.links.push({ line, checkbox, task: before, effective: projectCheckbox(before), userSynced: true, base });
+      plan.continued.set(line, before);
+      return;
+    }
+    if (ticked && !same) plan.outOfSync.push({ line, task: before, checkbox });
+  });
+  const linkedBases = new Set<string>();
+  for (const link of plan.links) linkedBases.add(unmarkedText(texts[link.line] as string));
+  baseTexts.forEach((text, index) => {
+    if (baseTaskAt(index) !== null) linkedBases.add(unmarkedText(text));
+  });
+  for (const base of changedCopies(baseTexts, texts)) if (linkedBases.has(base)) plan.copies.add(base);
+  return plan;
+}
+
+function isCopied(plan: TickPlan, texts: string[], link: SyncLink): boolean {
+  if (plan.copies.has(unmarkedText(texts[link.line] as string))) return true;
+  return link.base !== undefined && plan.copies.has(unmarkedText(plan.baseTexts[link.base] as string));
+}
+
+function syncableLinks(plan: TickPlan, texts: string[]): SyncLink[] {
+  return plan.links.filter((link) => link.task.scheduled !== null && !isCopied(plan, texts, link));
+}
+
+function nextOutOfSync(stored: StoredOutOfSync[], found: StoredOutOfSync[], texts: string[], prints: PrintIndex): StoredOutOfSync[] {
+  const present = new Set(texts);
+  const seen = new Set<string>();
+  const out: StoredOutOfSync[] = [];
+  for (const item of [...found, ...stored]) {
+    const key = `${item.line}${KEY_SEPARATOR}${item.task}`;
+    if (seen.has(key) || !present.has(item.line)) continue;
+    seen.add(key);
+    const task = taskOfPrint(prints, item.task);
+    if (task !== null && projectCheckbox(task) === item.checkbox) continue;
+    out.push(item);
+  }
+  return out;
+}
+
+function reportOutOfSync(items: StoredOutOfSync[], prints: PrintIndex): TodayOutOfSync[] {
+  return items.flatMap((item) => {
+    const task = taskOfPrint(prints, item.task);
+    const effective = task === null ? null : projectCheckbox(task);
+    if (task === null || effective === null || effective === item.checkbox) return [];
+    return [{ line: item.line, taskTitle: task.title, projectId: task.projectId, dailyCheckbox: item.checkbox, projectStatus: task.status }];
+  });
+}
+
+function storedFound(plan: TickPlan, texts: string[]): StoredOutOfSync[] {
+  return plan.outOfSync.map((item) => ({ line: texts[item.line] as string, task: fingerprint(item.task), checkbox: item.checkbox }));
+}
+
+function nextDuplicates(stored: StoredDuplicate[], copies: Set<string>, texts: string[]): StoredDuplicate[] {
+  const now = checkboxLineCounts(texts);
+  const out: StoredDuplicate[] = [];
+  const seen = new Set<string>();
+  for (const text of copies) {
+    const lines = now.get(text);
+    if (!lines || seen.has(text)) continue;
+    seen.add(text);
+    out.push({ text, lines });
+  }
+  for (const item of stored) {
+    const lines = now.get(item.text);
+    if (seen.has(item.text) || !lines || lines.join("\n") !== item.lines.join("\n")) continue;
+    seen.add(item.text);
+    out.push(item);
+  }
+  return out;
+}
+
+function reportDuplicates(items: StoredDuplicate[], texts: string[], scan: FocusScan): TodayAmbiguous[] {
+  const linked = linkedAt(scan);
+  return items.flatMap((item) => {
+    const line = texts.findIndex((text) => checkboxOfLine(text) !== null && unmarkedText(text) === item.text);
+    if (line === -1) return [];
+    return [{ kind: "line" as const, text: texts[line] as string, line, taskId: linked.get(line) ?? null, reason: "duplicate-line" as const }];
+  });
+}
+
 const pending = new Map<string, MirrorSource>();
 const timers = new Map<string, NodeJS.Timeout>();
+let mirrorWriting = false;
 
 export function forgetTodayState(): void {
   pending.clear();
@@ -819,7 +1144,7 @@ function errorText(err: unknown): string {
 interface UserTick {
   task: BoardTask;
   targets: Set<BoardCheckbox>;
-  keys: string[];
+  lines: { line: number; checkbox: BoardCheckbox; key: string }[];
 }
 
 function runMirror(settings: DelegationSettings, date: string, options: MirrorOptions = {}): MirrorResult {
@@ -834,29 +1159,30 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
     let data = loadBoardData(settings);
     if (data === null) return skip("no-board");
     const baseline = loadBaseline(date, daily.path) ?? adoptBaseline(settings, date, daily.path, daily.content, data);
-    const keys = lineKeys(splitLines(daily.content));
-    const before = checkboxesByKey(splitLines(baseline.content));
+    const texts = splitLines(daily.content);
     let scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
-    const touched = new Set<string>();
+    let plan = planTicks(settings, date, baseline, texts, scan, data);
+    const oldCheckbox = (link: SyncLink): BoardCheckbox | null => (link.base === undefined ? null : checkboxOfLine(plan.baseTexts[link.base] as string));
+    const memoOf = (link: SyncLink): MarkMemo | undefined => (link.base === undefined ? undefined : baseline.state.marks[plan.baseKeys[link.base] as string]);
+    const touched = new Set<number>();
     const ticks = new Map<string, UserTick>();
-    for (const link of syncedLinksOf(scan)) {
-      const key = keys[link.line];
-      const old = key === undefined ? undefined : before.get(key);
-      if (key === undefined || old === undefined || old === link.checkbox || !link.userSynced) continue;
-      touched.add(key);
-      const memo = baseline.state.marks[key];
+    for (const link of syncableLinks(plan, texts)) {
+      const old = oldCheckbox(link);
+      if (old === null || old === link.checkbox || !link.userSynced) continue;
+      touched.add(link.line);
+      const memo = memoOf(link);
       const projectMoved = memo !== undefined && isSameTask(memo, link.task) && link.effective !== null && link.effective !== memo.checkbox;
       if (projectMoved && link.effective !== link.checkbox) continue;
-      const tick = ticks.get(link.task.id) ?? { task: link.task, targets: new Set<BoardCheckbox>(), keys: [] };
+      const tick = ticks.get(link.task.id) ?? { task: link.task, targets: new Set<BoardCheckbox>(), lines: [] };
       tick.targets.add(link.checkbox);
-      tick.keys.push(key);
+      tick.lines.push({ line: link.line, checkbox: old, key: plan.baseKeys[link.base as number] as string });
       ticks.set(link.task.id, tick);
     }
-    const retry = new Map<string, BoardCheckbox>();
+    const retry = new Map<number, { checkbox: BoardCheckbox; key: string }>();
     for (const tick of ticks.values()) {
       const [target] = [...tick.targets];
       const keepOld = (): void => {
-        for (const key of tick.keys) retry.set(key, before.get(key) as BoardCheckbox);
+        for (const item of tick.lines) retry.set(item.line, { checkbox: item.checkbox, key: item.key });
       };
       if (tick.targets.size !== 1 || target === undefined) {
         keepOld();
@@ -875,22 +1201,22 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
     if (applied > 0) {
       data = loadBoardData(settings) ?? data;
       scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
+      plan = planTicks(settings, date, baseline, texts, scan, data);
     }
     const doc = openDoc(daily.content);
+    const originals = [...doc.lines];
     const retryLines = new Map<DocLine, { checkbox: BoardCheckbox; key: string }>();
-    keys.forEach((key, index) => {
-      const checkbox = retry.get(key);
-      const line = doc.lines[index];
-      if (checkbox !== undefined && line) retryLines.set(line, { checkbox, key });
-    });
-    for (const link of syncedLinksOf(scan)) {
-      const key = keys[link.line];
-      if (key === undefined || touched.has(key) || link.effective === null) continue;
-      const old = before.get(key);
-      const memo = baseline.state.marks[key];
-      if (old === undefined || memo === undefined || old !== link.checkbox) continue;
+    for (const [index, retried] of retry) {
+      const line = originals[index];
+      if (line) retryLines.set(line, retried);
+    }
+    for (const link of syncableLinks(plan, texts)) {
+      if (touched.has(link.line) || link.effective === null) continue;
+      const old = oldCheckbox(link);
+      const memo = memoOf(link);
+      if (old === null || memo === undefined || old !== link.checkbox) continue;
       if (!isSameTask(memo, link.task) || link.effective === memo.checkbox || link.effective === link.checkbox) continue;
-      const line = doc.lines[link.line];
+      const line = originals[link.line];
       if (line) line.text = withCheckbox(line.text, link.effective);
     }
     const insertion = insertMissing(settings, date, doc, data, computeFocus(settings, data, date), baseline.state, options.hints ?? new Set<string>());
@@ -900,10 +1226,28 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
       return skip("refused", applied);
     }
     const changed = next !== daily.content;
-    if (changed) writeDaily(settings, date, next, daily.updatedAt ?? undefined, `mirror-${randomUUID().slice(0, 8)}`, "server");
+    if (changed) {
+      mirrorWriting = true;
+      try {
+        writeDaily(settings, date, next, daily.updatedAt ?? undefined, `mirror-${randomUUID().slice(0, 8)}`, "server");
+      } finally {
+        mirrorWriting = false;
+      }
+    }
     const finalScan = scanDaily(settings, date, next, data.projects, data.tasks);
+    const finalTexts = splitLines(next);
     const marks = memoMarks(next, finalScan);
-    const finalKeys = lineKeys(splitLines(next));
+    const finalKeys = lineKeys(finalTexts);
+    const prints = printIndex(data);
+    const positions = new Map(doc.lines.map((line, index) => [line, index]));
+    for (const [index, task] of plan.continued) {
+      const position = positions.get(originals[index] as DocLine);
+      const fresh = taskOfPrint(prints, fingerprint(task));
+      const effective = fresh === null ? null : projectCheckbox(fresh);
+      if (position === undefined || fresh === null || effective === null) continue;
+      const finalKey = finalKeys[position] as string;
+      if (marks[finalKey] === undefined) marks[finalKey] = { checkbox: effective, task: fingerprint(fresh), id: fresh.id };
+    }
     const baseDoc: ParsedDoc = {
       ...doc,
       lines: doc.lines.map((line, index) => {
@@ -922,6 +1266,8 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
         marks,
         seen: mergeSeen(baseline.state.seen, [...linkedTasks(finalScan), ...insertion.inserted, ...insertion.renamed]),
         focus: focusMemory(computeFocus(settings, data, date)),
+        outOfSync: nextOutOfSync(baseline.state.outOfSync, storedFound(plan, texts), finalTexts, prints),
+        duplicates: nextDuplicates(baseline.state.duplicates, plan.copies, finalTexts),
       },
     });
     return { changed, skipped: null, applied };
@@ -1002,7 +1348,7 @@ function transferHubMarks(date: string, path: string, previous: string, content:
   if (touched) storeBaseline(date, path, { content: renderDoc(doc), state: { ...baseline.state, marks } });
 }
 
-function onDailyWritten(settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin, previous: string | null): void {
+function onDailyWritten(settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin, previous: string | null, unseen = false): void {
   if (!isScheduledMode(settings) || !isCurrentOrFuture(date)) return;
   if (origin === "client") {
     scheduleMirror(date, "client");
@@ -1012,6 +1358,7 @@ function onDailyWritten(settings: DelegationSettings, date: string, content: str
   if (path === null) return;
   if (previous !== null) {
     transferHubMarks(date, path, previous, content);
+    if (unseen && !mirrorWriting) scheduleMirror(date, "board");
     return;
   }
   const data = loadBoardData(settings);
@@ -1060,6 +1407,11 @@ export function installTodayHooks(): void {
     diskChanged: (content: string) => queueScheduledDates(content),
     taskWritten: (settings: DelegationSettings) => isScheduledMode(settings) && flushMirrors(settings),
   });
+}
+
+export function runStartupMirror(settings: DelegationSettings = getSettings()): MirrorResult | null {
+  if (!isScheduledMode(settings)) return null;
+  return runMirror(settings, localDate(), { source: "api" });
 }
 
 export function removeTodayHooks(): void {
@@ -1201,6 +1553,24 @@ function noteView(settings: DelegationSettings, date: string, daily: DailyReadRe
     index = end;
   }
   return { inNote, unlinked, ambiguous };
+}
+
+interface SyncReport {
+  outOfSync: TodayOutOfSync[];
+  duplicates: TodayAmbiguous[];
+}
+
+function syncReport(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData): SyncReport {
+  const baseline = isScheduledMode(settings) && isCurrentOrFuture(date) ? loadBaseline(date, daily.path) : null;
+  if (baseline === null) return { outOfSync: [], duplicates: [] };
+  const texts = splitLines(daily.content);
+  const scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
+  const plan = planTicks(settings, date, baseline, texts, scan, data);
+  const prints = printIndex(data);
+  return {
+    outOfSync: reportOutOfSync(nextOutOfSync(baseline.state.outOfSync, storedFound(plan, texts), texts, prints), prints),
+    duplicates: reportDuplicates(nextDuplicates(baseline.state.duplicates, plan.copies, texts), texts, scan),
+  };
 }
 
 function validateDate(date: string): void {
@@ -1421,6 +1791,7 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
   const scheduledFocus = focusSource === "scheduled";
   const focus = scheduledFocus ? computeFocus(settings, data, date) : exists && data ? listModeFocus(settings, date, daily as DailyReadResult, data) : [];
   const view: NoteView = exists && data ? noteView(settings, date, daily as DailyReadResult, data, focus, scheduledFocus) : { inNote: [], unlinked: [], ambiguous: [] };
+  const report: SyncReport = exists && data ? syncReport(settings, date, daily as DailyReadResult, data) : { outOfSync: [], duplicates: [] };
   return {
     date,
     focusSource,
@@ -1430,7 +1801,8 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
     captures: capturesOf(settings, lines),
     unlinked: view.unlinked,
     inNote: view.inNote,
-    ambiguous: view.ambiguous,
+    ambiguous: [...view.ambiguous, ...report.duplicates],
+    ...(report.outOfSync.length > 0 ? { outOfSync: report.outOfSync } : {}),
     summary: summaryOf(lines),
     dailyExists: exists,
     dailyUpdatedAt: exists ? ((daily as DailyReadResult).updatedAt ?? null) : null,
