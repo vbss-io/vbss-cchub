@@ -514,6 +514,7 @@ export interface TodayOutOfSync {
   projectId: string;
   dailyCheckbox: BoardCheckbox;
   projectStatus: BoardStatus;
+  reason?: string;
 }
 
 export interface TodayAmbiguous {

@@ -25,6 +25,7 @@ import { getSetting, getSettings, getTodayBaseline, saveTodayBaseline, setSettin
 import type { DelegationSettings, FocusSource } from "./delegation-types.js";
 import { localDate } from "./second-brain.js";
 import {
+  addTaskToDaily,
   applyStatusChange,
   BOARD_STATUSES,
   checkboxForStatus,
@@ -50,6 +51,8 @@ import {
   syncTaskToDaily,
   taskNeedle,
   writeBoardTask,
+  type AddToDailyInput,
+  type AddToDailyResult,
   type BoardCheckbox,
   type BoardProject,
   type BoardStatus,
@@ -84,12 +87,15 @@ export interface TodayCapture {
 
 export type AmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks" | "duplicate-line";
 
+export type OutOfSyncReason = "recurring-done";
+
 export interface TodayOutOfSync {
   line: string;
   taskTitle: string;
   projectId: string;
   dailyCheckbox: BoardCheckbox;
   projectStatus: BoardStatus;
+  reason?: OutOfSyncReason;
 }
 
 export interface TodayAmbiguous {
@@ -302,6 +308,8 @@ function withCheckbox(text: string, checkbox: BoardCheckbox): string {
 
 const unmarkedText = (text: string): string => text.replace(MARK_RE, "$1$3");
 
+const identityText = (text: string): string => unmarkedText(text).trim();
+
 function lineKeys(texts: string[]): string[] {
   const counts = new Map<string, number>();
   return texts.map((text) => {
@@ -356,6 +364,7 @@ interface StoredOutOfSync {
   checkbox: BoardCheckbox;
   title?: string;
   status?: BoardStatus;
+  reason?: OutOfSyncReason;
 }
 
 interface StoredDuplicate {
@@ -370,6 +379,7 @@ interface BaselineState {
   outOfSync: StoredOutOfSync[];
   duplicates: StoredDuplicate[];
   known: string[];
+  unresolved: string[];
 }
 
 interface Baseline {
@@ -426,6 +436,7 @@ function parseState(raw: string): BaselineState | null {
     outOfSync: parseOutOfSync(value.outOfSync),
     duplicates: parseDuplicates(value.duplicates),
     known: parseStrings(value.known),
+    unresolved: parseStrings(value.unresolved),
   };
 }
 
@@ -440,6 +451,7 @@ function parseOutOfSync(value: unknown): StoredOutOfSync[] {
             checkbox: item.checkbox,
             ...(typeof item.title === "string" ? { title: item.title } : {}),
             ...(isStatus(item.status) ? { status: item.status } : {}),
+            ...(item.reason === "recurring-done" ? { reason: item.reason } : {}),
           },
         ]
       : [],
@@ -611,6 +623,7 @@ function adoptBaseline(settings: DelegationSettings, date: string, path: string,
     outOfSync: [],
     duplicates: [],
     known: knownPrints(data, marks),
+    unresolved: [],
   };
   const baseline: Baseline = { content, state };
   storeBaseline(date, path, baseline);
@@ -1006,7 +1019,33 @@ function pairGap(before: string[], after: string[], gapBefore: number[], gapAfte
   });
 }
 
-function alignLines(before: string[], after: string[]): Map<number, number> {
+const isMovable = (text: string): boolean => checkboxOfLine(text) !== null && restOf(text) !== "";
+
+function groupMovable(texts: string[], indexes: Iterable<number>): Map<string, number[]> {
+  const groups = new Map<string, number[]>();
+  for (const index of indexes) {
+    const text = texts[index] as string;
+    if (!isMovable(text)) continue;
+    const key = identityText(text);
+    groups.set(key, [...(groups.get(key) ?? []), index]);
+  }
+  return groups;
+}
+
+function movedCandidates(before: string[], after: string[], freeBefore: number[], freeAfter: number[]): Set<number> {
+  const was = groupMovable(before, freeBefore);
+  const now = groupMovable(after, freeAfter);
+  const held = new Set<number>();
+  for (const [key, lines] of now) {
+    const bases = was.get(key);
+    if (bases === undefined) continue;
+    for (const index of bases) held.add(index);
+    for (const index of lines) held.add(-1 - index);
+  }
+  return held;
+}
+
+function alignLines(before: string[], after: string[], holdMoves = false): Map<number, number> {
   const a = before.map(unmarkedText);
   const b = after.map(unmarkedText);
   let head = 0;
@@ -1020,10 +1059,26 @@ function alignLines(before: string[], after: string[]): Map<number, number> {
   const endB = b.length - tail;
   const anchors = commonPairs(a.slice(head, endA), b.slice(head, endB)).map(([i, j]): [number, number] => [i + head, j + head]);
   const range = (from: number, to: number): number[] => Array.from({ length: Math.max(0, to - from) }, (_unused, k) => from + k);
+  const anchoredA = new Set(anchors.map(([i]) => i));
+  const anchoredB = new Set(anchors.map(([, j]) => j));
+  const held = holdMoves
+    ? movedCandidates(
+        before,
+        after,
+        range(head, endA).filter((index) => !anchoredA.has(index)),
+        range(head, endB).filter((index) => !anchoredB.has(index)),
+      )
+    : new Set<number>();
   let previousA = head - 1;
   let previousB = head - 1;
   for (const [i, j] of [...anchors, [endA, endB] as [number, number]]) {
-    pairGap(before, after, range(previousA + 1, i), range(previousB + 1, j), pairs);
+    pairGap(
+      before,
+      after,
+      range(previousA + 1, i).filter((index) => !held.has(index)),
+      range(previousB + 1, j).filter((index) => !held.has(-1 - index)),
+      pairs,
+    );
     if (i < endA) pairs.set(j, i);
     previousA = i;
     previousB = j;
@@ -1091,6 +1146,7 @@ interface PendingOutOfSync {
   task: BoardTask | null;
   memo: MarkMemo | null;
   checkbox: BoardCheckbox;
+  reason?: OutOfSyncReason;
 }
 
 interface TickPlan {
@@ -1101,11 +1157,70 @@ interface TickPlan {
   carried: Map<number, MarkMemo>;
   outOfSync: PendingOutOfSync[];
   copies: Set<string>;
+  unresolved: Set<number>;
 }
 
 interface Identity {
   task: BoardTask | null;
   memo: MarkMemo | null;
+}
+
+interface MovedLines {
+  moved: Set<number>;
+  unresolved: Set<number>;
+}
+
+const identityKey = (identity: Identity | null): string | null => identity?.task?.id ?? identity?.memo?.task ?? null;
+
+function isFree(identity: Identity | null, claimed: ReadonlySet<string>): boolean {
+  return identity !== null && (identity.task === null || !claimed.has(identity.task.id));
+}
+
+function pairMoved(
+  baseTexts: string[],
+  texts: string[],
+  pairs: Map<number, number>,
+  linkedTask: (line: number) => BoardTask | null,
+  identityAt: (index: number) => Identity | null,
+  claimed: ReadonlySet<string>,
+): MovedLines {
+  const result: MovedLines = { moved: new Set(), unresolved: new Set() };
+  const used = new Set(pairs.values());
+  const freeBase = groupMovable(
+    baseTexts,
+    baseTexts.flatMap((_text, index) => (used.has(index) ? [] : [index])),
+  );
+  const freeAfter = groupMovable(
+    texts,
+    texts.flatMap((_text, index) => (pairs.has(index) ? [] : [index])),
+  );
+  const pair = (line: number, base: number): void => {
+    pairs.set(line, base);
+    result.moved.add(line);
+  };
+  for (const [key, lines] of freeAfter) {
+    const bases = freeBase.get(key);
+    if (bases === undefined) continue;
+    if (lines.length === 1 && bases.length === 1) {
+      pair(lines[0] as number, bases[0] as number);
+      continue;
+    }
+    if (bases.every((base) => identityAt(base) === null)) continue;
+    const left = [...bases];
+    for (const line of lines) {
+      const task = linkedTask(line);
+      const owners = left.filter((base) => (task === null ? isFree(identityAt(base), claimed) : identityAt(base)?.task?.id === task.id));
+      if (owners.length === 1) {
+        const owner = owners[0] as number;
+        pair(line, owner);
+        left.splice(left.indexOf(owner), 1);
+        continue;
+      }
+      const checkbox = checkboxOfLine(texts[line] as string);
+      if (task === null || bases.some((base) => checkboxOfLine(baseTexts[base] as string) !== checkbox)) result.unresolved.add(line);
+    }
+  }
+  return result;
 }
 
 interface ResolveContext {
@@ -1157,16 +1272,34 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
       .map((link) => [link.line, link.task]),
   );
   const memoAt = (index: number): MarkMemo | null => baseline.state.marks[baseKeys[index] as string] ?? null;
+  const identities = new Map<number, Identity | null>();
   const identityAt = (index: number): Identity | null => {
+    if (identities.has(index)) return identities.get(index) ?? null;
     const memo = memoAt(index);
     const linked = baseLinked.get(index);
-    if (linked) return { task: linked, memo };
-    return memo === null ? null : { task: resolveMemo(memo, context), memo };
+    const identity = linked ? { task: linked, memo } : memo === null ? null : { task: resolveMemo(memo, context), memo };
+    identities.set(index, identity);
+    return identity;
   };
-  const pairs = alignLines(baseTexts, texts);
+  const twinCounts = new Map<string, number>();
+  for (const text of baseTexts) if (isMovable(text)) twinCounts.set(identityText(text), (twinCounts.get(identityText(text)) ?? 0) + 1);
+  const isTwinned = (base: number, own: Identity): boolean => {
+    const key = identityText(baseTexts[base] as string);
+    if ((twinCounts.get(key) ?? 0) < 2) return false;
+    const owners = new Set<string>();
+    baseTexts.forEach((text, index) => {
+      if (!isMovable(text) || identityText(text) !== key) return;
+      const identity = identityAt(index);
+      const id = isFree(identity, context.claimed) ? identityKey(identity) : null;
+      if (id !== null) owners.add(id);
+    });
+    return !(owners.size === 1 && owners.has(identityKey(own) ?? ""));
+  };
+  const pairs = alignLines(baseTexts, texts, true);
   const scanLinks = new Map(linkedLinesOf(scan).map((link) => [link.line, link]));
   const open = openLinesOf(scan);
-  const plan: TickPlan = { baseTexts, baseKeys, links: [], continued: new Map(), carried: new Map(), outOfSync: [], copies: new Set() };
+  const moves = pairMoved(baseTexts, texts, pairs, (line) => scanLinks.get(line)?.task ?? null, identityAt, context.claimed);
+  const plan: TickPlan = { baseTexts, baseKeys, links: [], continued: new Map(), carried: new Map(), outOfSync: [], copies: new Set(), unresolved: moves.unresolved };
   texts.forEach((text, line) => {
     const base = pairs.get(line);
     const baseText = base === undefined ? undefined : (baseTexts[base] as string);
@@ -1180,7 +1313,10 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
       const remembered = memo !== null && isSameTask(memo, link.task);
       const tracked = scoped || remembered;
       if (remembered && !scoped) plan.continued.set(line, link.task);
-      if (base === undefined || same) {
+      if (!link.userSynced && link.effective === "done" && ticked && checkbox !== "done") {
+        plan.outOfSync.push({ line, task: link.task, memo: null, checkbox: checkbox as BoardCheckbox, reason: "recurring-done" });
+      }
+      if (base === undefined || (same && !moves.moved.has(line))) {
         plan.links.push({ ...link, base, tracked, remembered });
         return;
       }
@@ -1199,6 +1335,10 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
     if (openLine === undefined || base === undefined || checkbox === null) return;
     const before = identityAt(base);
     if (before === null) return;
+    if (isTwinned(base, before)) {
+      plan.unresolved.add(line);
+      return;
+    }
     if (before.task === null) {
       if (before.memo === null) return;
       plan.carried.set(line, before.memo);
@@ -1245,16 +1385,21 @@ function nextOutOfSync(stored: StoredOutOfSync[], found: StoredOutOfSync[], text
     const key = `${item.line}${KEY_SEPARATOR}${item.task}`;
     if (seen.has(key) || !present.has(item.line)) continue;
     seen.add(key);
-    const task = taskOfPrint(prints, item.task);
-    if (task !== null && projectCheckbox(task) === item.checkbox) continue;
-    if (task === null && item.title === undefined) continue;
+    if (item.reason === undefined) {
+      const task = taskOfPrint(prints, item.task);
+      if (task !== null && projectCheckbox(task) === item.checkbox) continue;
+      if (task === null && item.title === undefined) continue;
+    }
     out.push(item);
   }
   return out;
 }
 
 function reportOutOfSync(items: StoredOutOfSync[], prints: PrintIndex): TodayOutOfSync[] {
-  return items.flatMap((item) => {
+  return items.flatMap((item): TodayOutOfSync[] => {
+    if (item.reason !== undefined) {
+      return [{ line: item.line, taskTitle: item.title ?? "", projectId: projectOfPrint(item.task), dailyCheckbox: item.checkbox, projectStatus: item.status ?? "done", reason: item.reason }];
+    }
     const task = taskOfPrint(prints, item.task);
     if (task === null) {
       if (item.title === undefined) return [];
@@ -1265,7 +1410,8 @@ function reportOutOfSync(items: StoredOutOfSync[], prints: PrintIndex): TodayOut
   });
 }
 
-function storedOutOfSync(line: string, task: BoardTask | null, memo: MarkMemo | null, checkbox: BoardCheckbox): StoredOutOfSync | null {
+function storedOutOfSync(line: string, task: BoardTask | null, memo: MarkMemo | null, checkbox: BoardCheckbox, reason?: OutOfSyncReason): StoredOutOfSync | null {
+  if (task !== null && reason !== undefined) return { line, task: fingerprint(task), checkbox, title: task.title, status: "done", reason };
   if (task !== null) return { line, task: fingerprint(task), checkbox, title: task.title, status: task.status };
   if (memo === null) return null;
   return { line, task: memo.task, checkbox, title: memo.title ?? memo.task.split(KEY_SEPARATOR)[1] ?? "", status: memo.checkbox };
@@ -1273,7 +1419,7 @@ function storedOutOfSync(line: string, task: BoardTask | null, memo: MarkMemo | 
 
 function storedFound(plan: TickPlan, texts: string[]): StoredOutOfSync[] {
   return plan.outOfSync.flatMap((item) => {
-    const stored = storedOutOfSync(texts[item.line] as string, item.task, item.memo, item.checkbox);
+    const stored = storedOutOfSync(texts[item.line] as string, item.task, item.memo, item.checkbox, item.reason);
     return stored === null ? [] : [stored];
   });
 }
@@ -1304,6 +1450,29 @@ function reportDuplicates(items: StoredDuplicate[], texts: string[], scan: Focus
     if (line === -1) return [];
     return [{ kind: "line" as const, text: texts[line] as string, line, taskId: linked.get(line) ?? null, reason: "duplicate-line" as const }];
   });
+}
+
+function unresolvedLines(texts: string[], scan: FocusScan, key: string): { line: number; open: boolean }[] {
+  const links = new Map(linkedLinesOf(scan).map((link) => [link.line, link]));
+  return texts.flatMap((text, line) => {
+    if (checkboxOfLine(text) === null || unmarkedText(text) !== key) return [];
+    const link = links.get(line);
+    return [{ line, open: link === undefined || link.effective !== link.checkbox }];
+  });
+}
+
+function nextUnresolved(stored: string[], found: Set<number>, texts: string[], scan: FocusScan, foundTexts: string[] = texts): string[] {
+  const keys = [...[...found].map((line) => unmarkedText(foundTexts[line] as string)), ...stored];
+  return [...new Set(keys)].filter((key) => unresolvedLines(texts, scan, key).some((item) => item.open));
+}
+
+function reportUnresolved(keys: string[], texts: string[], scan: FocusScan): TodayAmbiguous[] {
+  const linked = linkedAt(scan);
+  return keys.flatMap((key) =>
+    unresolvedLines(texts, scan, key)
+      .filter((item) => item.open)
+      .map((item): TodayAmbiguous => ({ kind: "line", text: texts[item.line] as string, line: item.line, taskId: linked.get(item.line) ?? null, reason: "several-lines" })),
+  );
 }
 
 const pending = new Map<string, MirrorSource>();
@@ -1467,6 +1636,7 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
         outOfSync: nextOutOfSync(baseline.state.outOfSync, [...storedFound(plan, texts), ...unsynced], finalTexts, prints),
         duplicates: nextDuplicates(baseline.state.duplicates, plan.copies, finalTexts),
         known: knownPrints(data, marks),
+        unresolved: nextUnresolved(baseline.state.unresolved, plan.unresolved, finalTexts, finalScan, texts),
       },
     });
     return { changed, skipped: null, applied };
@@ -1699,6 +1869,20 @@ export function syncTaskToDailyChecked(settings: DelegationSettings, input: Sync
   return result;
 }
 
+export function addTaskToDailyChecked(settings: DelegationSettings, input: AddToDailyInput): AddToDailyResult {
+  const date = input.date ?? localDate();
+  const result = addTaskToDaily(settings, input);
+  if (!usesMirror(settings, date)) return result;
+  const data = loadBoardData(settings);
+  const task = data === null ? undefined : flattenTasks(data.tasks).find((item) => item.projectId === input.projectId && item.line === input.line && item.raw === input.raw);
+  if (task === undefined || task.scheduled === date) {
+    runMirror(settings, date, { source: "api" });
+    return result;
+  }
+  schedule(settings, { projectId: task.projectId, line: task.line, raw: task.raw, date });
+  return result;
+}
+
 export function syncTaskFromDailyChecked(settings: DelegationSettings, input: SyncFromDailyInput): SyncFromDailyResult {
   const date = input.date ?? localDate();
   if (!usesMirror(settings, date)) return syncTaskFromDaily(settings, input);
@@ -1862,11 +2046,12 @@ function noteView(settings: DelegationSettings, date: string, daily: DailyReadRe
 interface SyncReport {
   outOfSync: TodayOutOfSync[];
   duplicates: TodayAmbiguous[];
+  unresolved: TodayAmbiguous[];
 }
 
 function syncReport(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData): SyncReport {
   const baseline = isScheduledMode(settings) && isCurrentOrFuture(date) ? loadBaseline(date, daily.path) : null;
-  if (baseline === null) return { outOfSync: [], duplicates: [] };
+  if (baseline === null) return { outOfSync: [], duplicates: [], unresolved: [] };
   const texts = splitLines(daily.content);
   const scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
   const plan = planTicks(settings, date, baseline, texts, scan, data);
@@ -1874,6 +2059,7 @@ function syncReport(settings: DelegationSettings, date: string, daily: DailyRead
   return {
     outOfSync: reportOutOfSync(nextOutOfSync(baseline.state.outOfSync, storedFound(plan, texts), texts, prints), prints),
     duplicates: reportDuplicates(nextDuplicates(baseline.state.duplicates, plan.copies, texts), texts, scan),
+    unresolved: reportUnresolved(nextUnresolved(baseline.state.unresolved, plan.unresolved, texts, scan), texts, scan),
   };
 }
 
@@ -2093,7 +2279,7 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
   const scheduledFocus = focusSource === "scheduled";
   const focus = scheduledFocus ? computeFocus(settings, data, date) : exists && data ? listModeFocus(settings, date, daily as DailyReadResult, data) : [];
   const view: NoteView = exists && data ? noteView(settings, date, daily as DailyReadResult, data, focus, scheduledFocus) : { inNote: [], unlinked: [], ambiguous: [] };
-  const report: SyncReport = exists && data ? syncReport(settings, date, daily as DailyReadResult, data) : { outOfSync: [], duplicates: [] };
+  const report: SyncReport = exists && data ? syncReport(settings, date, daily as DailyReadResult, data) : { outOfSync: [], duplicates: [], unresolved: [] };
   return {
     date,
     focusSource,
@@ -2103,7 +2289,7 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
     captures: capturesOf(settings, lines),
     unlinked: view.unlinked,
     inNote: view.inNote,
-    ambiguous: [...view.ambiguous, ...report.duplicates],
+    ambiguous: [...view.ambiguous, ...report.duplicates, ...report.unresolved],
     ...(report.outOfSync.length > 0 ? { outOfSync: report.outOfSync } : {}),
     summary: summaryOf(lines),
     dailyExists: exists,

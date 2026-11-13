@@ -1,0 +1,180 @@
+.mde {
+  --mde-text: var(--text);
+  --mde-frontmatter: #6272a4;
+  --mde-heading: #bd93f9;
+  --mde-bold: #ffb86c;
+  --mde-italic: #f8f8f2;
+  --mde-quote: #f1fa8c;
+  --mde-wikilink: #ff79c6;
+  --mde-link: #8be9fd;
+  --mde-code: #50fa7b;
+  --mde-code-bg: rgba(80, 250, 123, 0.1);
+  --mde-marker: #6272a4;
+  --mde-task-open: #6272a4;
+  --mde-task-doing: #8be9fd;
+  --mde-task-done: #50fa7b;
+  --mde-tag: #f0c674;
+  --mde-date: #8094d4;
+  --mde-arrow: #6272a4;
+  position: relative;
+  width: 100%;
+  min-height: 320px;
+  overflow: auto;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overscroll-behavior: contain;
+  scroll-padding-block: 14px;
+}
+
+:root[data-theme="midnight"] .mde {
+  --mde-frontmatter: #6b7280;
+  --mde-heading: #a78bfa;
+  --mde-bold: #fb923c;
+  --mde-italic: #e6e9ef;
+  --mde-quote: #facc15;
+  --mde-wikilink: #f472b6;
+  --mde-link: #38bdf8;
+  --mde-code: #4ade80;
+  --mde-code-bg: rgba(74, 222, 128, 0.1);
+  --mde-marker: #6b7280;
+  --mde-task-open: #6b7280;
+  --mde-task-doing: #38bdf8;
+  --mde-task-done: #4ade80;
+  --mde-tag: #fbbf24;
+  --mde-date: #7c93c9;
+  --mde-arrow: #6b7280;
+}
+
+.mde:focus-within {
+  border-color: var(--brand);
+}
+
+.mde--fill {
+  min-height: 0;
+}
+
+.mde__sheet {
+  position: relative;
+  min-height: 100%;
+}
+
+.mde__pre,
+.mde__input {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: 0;
+  word-spacing: 0;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  font-variant-ligatures: none;
+  font-kerning: none;
+  text-indent: 0;
+  text-transform: none;
+}
+
+.mde__pre {
+  position: relative;
+  min-height: 300px;
+  color: var(--mde-text);
+  pointer-events: none;
+  user-select: none;
+}
+
+.mde--fill .mde__pre {
+  min-height: 100%;
+}
+
+.mde__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--text);
+  outline: none;
+}
+
+.mde__input::selection {
+  background: var(--selection);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.mde__frontmatter {
+  color: var(--mde-frontmatter);
+}
+
+.mde__heading {
+  color: var(--mde-heading);
+  font-weight: 700;
+}
+
+.mde__bold {
+  color: var(--mde-bold);
+  font-weight: 700;
+}
+
+.mde__italic {
+  color: var(--mde-italic);
+  font-style: italic;
+}
+
+.mde__quote {
+  color: var(--mde-quote);
+}
+
+.mde__wikilink {
+  color: var(--mde-wikilink);
+}
+
+.mde__link {
+  color: var(--mde-link);
+}
+
+.mde__code,
+.mde__fence {
+  color: var(--mde-code);
+  background: var(--mde-code-bg);
+  border-radius: 3px;
+}
+
+.mde__marker {
+  color: var(--mde-marker);
+}
+
+.mde__task-open {
+  color: var(--mde-task-open);
+}
+
+.mde__task-doing {
+  color: var(--mde-task-doing);
+}
+
+.mde__task-done {
+  color: var(--mde-task-done);
+}
+
+.mde__tag {
+  color: var(--mde-tag);
+}
+
+.mde__date {
+  color: var(--mde-date);
+}
+
+.mde__arrow {
+  color: var(--mde-arrow);
+}

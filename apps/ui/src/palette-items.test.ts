@@ -179,9 +179,10 @@ describe("buildCommandItems", () => {
 
   it("adds feature and desktop commands only when provided", () => {
     const run = () => undefined;
-    const items = buildCommandItems({ ...base, newTask: run, planToday: run, refreshDaily: run, toggleWidget: run });
+    const items = buildCommandItems({ ...base, newTask: run, startDay: run, planToday: run, refreshDaily: run, toggleWidget: run });
     assert.deepEqual(ids(items), [
       "command:new-task",
+      "command:start-day",
       "command:plan-today",
       "command:refresh-daily",
       "command:backup-now",
@@ -209,6 +210,19 @@ describe("capture", () => {
     const items = buildCommandItems({ ...base, planToday: run, refreshDaily: run });
     assert.deepEqual(items.slice(0, 2).map((entry) => entry.subtitle), ["Today", "Today"]);
     assert.equal(items[1]?.title, "Refresh Today");
+  });
+
+  it("offers Start the day first and labels the wizard as the classic planner", () => {
+    const start = () => undefined;
+    const plan = () => undefined;
+    const items = buildCommandItems({ ...base, startDay: start, planToday: plan });
+    assert.deepEqual(items.slice(0, 2).map((entry) => [entry.id, entry.title, entry.subtitle]), [
+      ["command:start-day", "Start the day", "Today"],
+      ["command:plan-today", "Plan today (classic)", "Today"],
+    ]);
+    assert.equal(items[0]?.run, start);
+    assert.equal(items[1]?.run, plan);
+    assert.equal(ids(buildCommandItems({ ...base, planToday: plan })).includes("command:start-day"), false);
   });
 
   it("parses the capture and c: prefixes", () => {

@@ -288,6 +288,77 @@
   font-size: 13px;
 }
 
+.today__struck {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.startday {
+  gap: 14px;
+  border-color: color-mix(in srgb, var(--brand) 45%, var(--border));
+}
+
+.startday__block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.startday__title {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.startday__summary {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-2);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.startday__meetings {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+}
+
+.startday__done > summary {
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.startday__done[open] > summary {
+  margin-bottom: 6px;
+}
+
+.startday__done-line {
+  color: var(--muted);
+}
+
+.startday__foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.startday__links {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+}
+
 .today__empty {
   margin: 0;
   padding: 6px 2px;

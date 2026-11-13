@@ -642,7 +642,7 @@ describe("property: every line of the daily survives any sequence of operations"
         check("prime");
         remember();
         for (let step = 0; step < 18; step += 1) {
-          const op = Math.floor(random() * 16);
+          const op = Math.floor(random() * 18);
           const label = `seed ${seed} step ${step} op ${op}`;
           const task = pick(openTasks());
           const statusBefore = new Map(allTasks().map((item) => [keyOf(item), item.status]));
@@ -761,6 +761,76 @@ describe("property: every line of the daily survives any sequence of operations"
                   const key = identities.get(unmarked(original));
                   if (key !== undefined) identities.set(unmarked(reworded), key);
                   today.saveDailyFromClient(settings, TODAY, lines.join(eolOf(content)));
+                }
+              }
+            }
+            if (op === 16 || op === 17) {
+              const content = readContent();
+              const payload = board.readBoard(settings);
+              const links = board.scanDaily(settings, TODAY, content, payload.projects, payload.tasks).links;
+              const lines = content.split(/\r\n|\n/);
+              const heading = lines.findIndex((line) => line.trim() === "## Focus");
+              let sectionEnd = heading + 1;
+              while (heading !== -1 && sectionEnd < lines.length && !/^##\s/.test(lines[sectionEnd] as string)) sectionEnd += 1;
+              let last = sectionEnd - 1;
+              while (last > heading && (lines[last] as string).trim() === "") last -= 1;
+              const leadOf = (text: string): number => (text.match(/^\s*/)?.[0] ?? "").length;
+              const blockEnd = (start: number): number => {
+                let end = start + 1;
+                while (end < sectionEnd && (lines[end] as string).trim() !== "" && leadOf(lines[end] as string) > leadOf(lines[start] as string)) end += 1;
+                return end;
+              };
+              const chosen = pick(links.filter((link) => (op === 16 ? link.depth === 0 : link.depth > 0)));
+              if (chosen && heading !== -1) {
+                const start = chosen.line;
+                const end = blockEnd(start);
+                const subtree = new Set(Array.from({ length: end - start }, (_unused, k) => start + k));
+                const rest = lines.map((_line, index) => index).filter((index) => !subtree.has(index));
+                let after: number | null = null;
+                let lead = "";
+                if (op === 16) {
+                  after = random() < 0.5 ? heading : last;
+                } else {
+                  const parents = links.filter((link) => link.depth === 0 && !(link.line < start && blockEnd(link.line) >= end));
+                  const parent = random() < 0.3 ? undefined : pick(parents);
+                  if (parent) {
+                    after = blockEnd(parent.line) - 1;
+                    lead = `${(lines[parent.line] as string).match(/^\s*/)?.[0] ?? ""}  `;
+                  } else {
+                    after = last;
+                  }
+                }
+                const at = after === null || subtree.has(after) ? -1 : rest.indexOf(after);
+                if (at !== -1) {
+                  const order = [...rest.slice(0, at + 1), ...subtree, ...rest.slice(at + 1)];
+                  const shift = leadOf(lines[start] as string);
+                  const textAt = (index: number): string => {
+                    const text = lines[index] as string;
+                    return op === 17 && subtree.has(index) ? `${lead}${text.slice(shift)}` : text;
+                  };
+                  const moved = order.map(textAt);
+                  const newIndex = new Map(order.map((index, position) => [index, position]));
+                  const positions = matched(lines);
+                  const next = expected.map((text, k) => {
+                    const old = positions[k] as number;
+                    return { text: subtree.has(old) ? textAt(old) : text, at: newIndex.get(old) ?? Number.MAX_SAFE_INTEGER };
+                  });
+                  expected.splice(0, expected.length, ...next.sort((a, b) => a.at - b.at).map((item) => item.text));
+                  for (const index of subtree) {
+                    const key = identities.get(unmarked(lines[index] as string));
+                    if (key !== undefined) identities.set(unmarked(textAt(index)), key);
+                  }
+                  const headAt = newIndex.get(start) as number;
+                  const plain = moved.join(eolOf(content));
+                  const result = random() < 0.5 ? toggle(plain, headAt) : null;
+                  const saved = result === null ? plain : result.content;
+                  if (result !== null) userTick(saved, headAt, result);
+                  if (random() < 0.5) {
+                    writeFileSync(dailyPath(root), saved);
+                    today.queueDailyDiskChange(TODAY);
+                  } else {
+                    today.saveDailyFromClient(settings, TODAY, saved);
+                  }
                 }
               }
             }
@@ -1369,5 +1439,188 @@ describe("fix wave 3: more adversarial cases", () => {
     assert.equal(taskIn(settings, "alpha", "Child two").status, "done");
     assert.equal(taskIn(settings, "alpha", "Parent job renamed entirely").status, "todo");
     assert.deepEqual(today.readToday(settings, TODAY).outOfSync ?? [], []);
+  });
+});
+
+describe("fix wave 4, finding 1: a moved line keeps its identity", () => {
+  const P1 = "- [ ] [[alpha|Alpha Project]] - First job";
+  const P2 = "- [ ] [[alpha|Alpha Project]] - Second job";
+  const P3 = "- [ ] [[alpha|Alpha Project]] - Third job";
+  const ticked = (line: string): string => line.replace("- [ ]", "- [x]");
+  const setup = (): { root: string; settings: DelegationSettings } => {
+    const root = lab(
+      { alpha: project("Alpha Project", [`- [ ] First job ${SCHEDULED} ${TODAY}`, `- [ ] Second job ${SCHEDULED} ${TODAY}`, `- [ ] Third job ${SCHEDULED} ${TODAY}`]) },
+      { [TODAY]: dailyWith([P1, P2, P3]) },
+    );
+    const settings = useVault(root);
+    today.todayApi.regenerateFocusMirror(settings, TODAY);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([P1, P2, P3]));
+    return { root, settings };
+  };
+
+  it("a line moved to the end and ticked in the same Note tab save reaches the project", () => {
+    const { root, settings } = setup();
+    const saved = dailyWith([P2, P3, ticked(P1)]);
+    today.saveDailyFromClient(settings, TODAY, saved);
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "First job").status, "done");
+    assert.equal(taskIn(settings, "alpha", "Second job").status, "todo");
+    assert.equal(taskIn(settings, "alpha", "Third job").status, "todo");
+    assert.equal(readFileSync(dailyPath(root), "utf8"), saved);
+    assert.deepEqual(today.readToday(settings, TODAY).outOfSync ?? [], []);
+  });
+
+  it("a line moved and ticked on disk reaches the project, and a later untick at the new place reopens it", () => {
+    const { root, settings } = setup();
+    editDaily(root, () => dailyWith([P2, ticked(P1), P3]));
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "First job").status, "done");
+    editDaily(root, () => dailyWith([P2, P1, P3]));
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "First job").status, "todo");
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([P2, P1, P3]));
+  });
+
+  const PA = "- [ ] [[alpha|Alpha Project]] - Parent A";
+  const PB = "- [ ] [[alpha|Alpha Project]] - Parent B";
+  const nested = (): { root: string; settings: DelegationSettings } => {
+    const root = lab(
+      { alpha: project("Alpha Project", [`- [ ] Parent A ${SCHEDULED} ${TODAY}`, "  - [ ] Child step", `- [ ] Parent B ${SCHEDULED} ${TODAY}`, "  - [ ] Other child"]) },
+      { [TODAY]: dailyWith([PA, "  - [ ] Child step", PB, "  - [ ] Other child"]) },
+    );
+    const settings = useVault(root);
+    today.todayApi.regenerateFocusMirror(settings, TODAY);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([PA, "  - [ ] Child step", PB, "  - [ ] Other child"]));
+    return { root, settings };
+  };
+
+  it("a subtask moved under another parent keeps syncing when it is ticked later", () => {
+    const { root, settings } = nested();
+    const moved = dailyWith([PA, PB, "  - [ ] Other child", "  - [ ] Child step"]);
+    today.saveDailyFromClient(settings, TODAY, moved);
+    today.flushMirrors(settings);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), moved);
+    editDaily(root, () => dailyWith([PA, PB, "  - [ ] Other child", "  - [x] Child step"]));
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "Child step").status, "done");
+    assert.equal(taskIn(settings, "alpha", "Other child").status, "todo");
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([PA, PB, "  - [ ] Other child", "  - [x] Child step"]));
+  });
+
+  it("a subtask moved under another parent and ticked in the same save reaches the project", () => {
+    const { root, settings } = nested();
+    const saved = dailyWith([PA, PB, "  - [ ] Other child", "  - [x] Child step"]);
+    editDaily(root, () => saved);
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "Child step").status, "done");
+    assert.equal(readFileSync(dailyPath(root), "utf8"), saved);
+  });
+
+  it("an outdented subtask ticked in the same save and later keeps its identity", () => {
+    const { root, settings } = nested();
+    const outdented = dailyWith([PA, PB, "  - [ ] Other child", "- [x] Child step"]);
+    today.saveDailyFromClient(settings, TODAY, outdented);
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "Child step").status, "done");
+    assert.equal(readFileSync(dailyPath(root), "utf8"), outdented);
+    editDaily(root, () => dailyWith([PA, PB, "  - [ ] Other child", "- [ ] Child step"]));
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "Child step").status, "todo");
+    assert.equal(taskIn(settings, "alpha", "Parent A").status, "todo");
+  });
+
+  it("two identical moved lines that cannot be told apart are reported as ambiguous and tick nothing", () => {
+    const PC = "- [ ] [[alpha|Alpha Project]] - Parent C";
+    const root = lab(
+      {
+        alpha: project("Alpha Project", [
+          `- [ ] Parent A ${SCHEDULED} ${TODAY}`,
+          "  - [ ] Review",
+          `- [ ] Parent B ${SCHEDULED} ${TODAY}`,
+          "  - [ ] Review",
+          `- [ ] Parent C ${SCHEDULED} ${TODAY}`,
+        ]),
+      },
+      { [TODAY]: dailyWith([PA, "  - [ ] Review", PB, "  - [ ] Review", PC]) },
+    );
+    const settings = useVault(root);
+    today.todayApi.regenerateFocusMirror(settings, TODAY);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([PA, "  - [ ] Review", PB, "  - [ ] Review", PC]));
+    const projectBefore = read(root, "projects/alpha.md");
+    const saved = dailyWith([PA, PB, PC, "  - [ ] Review", "  - [x] Review"]);
+    today.saveDailyFromClient(settings, TODAY, saved);
+    today.flushMirrors(settings);
+    today.todayApi.regenerateFocusMirror(settings, TODAY);
+    assert.equal(read(root, "projects/alpha.md"), projectBefore);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), saved);
+    const payload = today.readToday(settings, TODAY);
+    const reported = payload.ambiguous.filter((item) => item.reason === "several-lines").map((item) => item.text);
+    assert.ok(reported.includes("  - [x] Review"), JSON.stringify(payload.ambiguous));
+  });
+});
+
+describe("fix wave 4, finding 2: add to daily schedules the task in scheduled mode", () => {
+  it("writes the scheduled date on the task so a later tick on the line syncs", () => {
+    const root = lab({ alpha: project("Alpha Project", ["- [ ] Ship release", "  - [ ] Write notes", "- [ ] Other task"]) }, { [TODAY]: dailyWith(["- [ ] free"]) });
+    const settings = useVault(root);
+    today.todayApi.regenerateFocusMirror(settings, TODAY);
+    const ship = taskIn(settings, "alpha", "Ship release");
+    const result = today.addTaskToDailyChecked(settings, { projectId: "alpha", line: ship.line, raw: ship.raw, date: TODAY });
+    assert.equal(result.raw, "- [ ] [[alpha|Alpha Project]] - Ship release");
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "Ship release").scheduled, TODAY);
+    assert.equal(taskIn(settings, "alpha", "Other task").scheduled, null);
+    const added = readFileSync(dailyPath(root), "utf8");
+    assert.equal(added.split("\n").filter((line) => line === "- [ ] [[alpha|Alpha Project]] - Ship release").length, 1);
+    assert.equal(added.split("\n").filter((line) => line === "  - [ ] Write notes").length, 1);
+    editDaily(root, (content) => content.replace("- [ ] [[alpha|Alpha Project]] - Ship release", "- [x] [[alpha|Alpha Project]] - Ship release"));
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "Ship release").status, "done");
+    editDaily(root, (content) => content.replace("  - [ ] Write notes", "  - [x] Write notes"));
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "Write notes").status, "done");
+  });
+
+  it("leaves the task unscheduled in list mode and for a past date", () => {
+    const root = lab(
+      { alpha: project("Alpha Project", ["- [ ] Ship release"]) },
+      { [TODAY]: dailyWith(["- [ ] free"]), [YESTERDAY]: dailyWith(["- [ ] free"]).replace(`# ${TODAY}`, `# ${YESTERDAY}`) },
+    );
+    const settings = useVault(root);
+    store.updateSettings({ daily: { ...settings.daily, focusSource: "list" } });
+    const listSettings = store.getSettings();
+    const ship = taskIn(listSettings, "alpha", "Ship release");
+    today.addTaskToDailyChecked(listSettings, { projectId: "alpha", line: ship.line, raw: ship.raw, date: TODAY });
+    assert.equal(taskIn(listSettings, "alpha", "Ship release").scheduled, null);
+    assert.ok(readFileSync(dailyPath(root), "utf8").includes("- [ ] [[alpha|Alpha Project]] - Ship release\n"));
+    const scheduled = useVault(root);
+    const fresh = taskIn(scheduled, "alpha", "Ship release");
+    today.addTaskToDailyChecked(scheduled, { projectId: "alpha", line: fresh.line, raw: fresh.raw, date: YESTERDAY });
+    assert.equal(taskIn(scheduled, "alpha", "Ship release").scheduled, null);
+  });
+});
+
+describe("fix wave 4, finding 3: unticking a recurring task completed today", () => {
+  it("is reported as out of sync with the recurring-done reason and changes nothing", () => {
+    const REPEAT = "\u{1F501}";
+    const LINE = "- [ ] [[lab|Lab]] - Theta";
+    const TICKED = "- [x] [[lab|Lab]] - Theta";
+    const root = lab({ lab: project("Lab", [`- [ ] Theta ${REPEAT} every day ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyWith([LINE]) });
+    const settings = useVault(root);
+    today.todayApi.regenerateFocusMirror(settings, TODAY);
+    editDaily(root, (content) => content.replace(LINE, TICKED));
+    today.flushMirrors(settings);
+    const projectDone = read(root, "projects/lab.md");
+    assert.ok(projectDone.includes(`- [ ] Theta ${REPEAT} every day ${SCHEDULED} ${TOMORROW}`));
+    assert.ok(projectDone.includes(`${DONE} ${TODAY}`));
+    editDaily(root, (content) => content.replace(TICKED, LINE));
+    const unticked = readFileSync(dailyPath(root), "utf8");
+    const expected = [{ line: LINE, taskTitle: "Theta", projectId: "lab", dailyCheckbox: "todo", projectStatus: "done", reason: "recurring-done" }];
+    assert.deepEqual(today.readToday(settings, TODAY).outOfSync, expected);
+    today.flushMirrors(settings);
+    today.todayApi.regenerateFocusMirror(settings, TODAY);
+    assert.equal(read(root, "projects/lab.md"), projectDone);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), unticked);
+    assert.deepEqual(today.readToday(settings, TODAY).outOfSync, expected);
   });
 });

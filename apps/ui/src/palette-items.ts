@@ -158,6 +158,7 @@ export const buildTaskItems = (tasks: BoardTask[], projects: BoardProject[], ope
 
 export interface CommandActions {
   newTask?: () => void;
+  startDay?: () => void;
   planToday?: () => void;
   refreshDaily?: () => void;
   startCapture?: () => void;
@@ -171,7 +172,8 @@ export interface CommandActions {
 export const buildCommandItems = (actions: CommandActions): PaletteItem[] => {
   const items: PaletteItem[] = [];
   if (actions.newTask) items.push({ id: "command:new-task", kind: "command", title: "New task", subtitle: "Tasks", keywords: ["add", "create", "todo"], run: actions.newTask });
-  if (actions.planToday) items.push({ id: "command:plan-today", kind: "command", title: "Plan today", subtitle: "Today", keywords: ["daily", "today", "focus", "organize"], run: actions.planToday });
+  if (actions.startDay) items.push({ id: "command:start-day", kind: "command", title: "Start the day", subtitle: "Today", keywords: ["plan", "daily", "today", "morning", "yesterday", "carry"], run: actions.startDay });
+  if (actions.planToday) items.push({ id: "command:plan-today", kind: "command", title: "Plan today (classic)", subtitle: "Today", keywords: ["daily", "today", "focus", "organize", "wizard", "planner"], run: actions.planToday });
   if (actions.refreshDaily) items.push({ id: "command:refresh-daily", kind: "command", title: "Refresh Today", subtitle: "Today", keywords: ["reload", "daily", "today", "sync"], run: actions.refreshDaily });
   if (actions.startCapture) items.push({ id: "command:capture", kind: "command", title: "Capture…", subtitle: "Today", keywords: ["capture", "note", "inbox", "quick", "idea"], run: actions.startCapture });
   items.push({ id: "command:backup-now", kind: "command", title: "Back up now", subtitle: "Hub data", keywords: ["backup", "snapshot", "save"], run: actions.backupNow });

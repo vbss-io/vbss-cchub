@@ -1,24 +1,35 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { BoardProject, BoardTask, TodayEntry, TodayOutOfSync } from "./delegation";
+import type { BoardProject, BoardTask, DailyYesterday, DailyYesterdayTask, TodayEntry, TodayOutOfSync } from "./delegation";
 import {
   backlogGroups,
   backlogKeyIntent,
+  broughtLines,
+  closeYesterdayBody,
+  composeStartDay,
   countBacklog,
   DEFAULT_BACKLOG_FILTERS,
   decodeDragTarget,
   describeDay,
   encodeDragTarget,
   entryTaskIds,
+  lineInNote,
+  lineMatchesTitle,
   localDay,
   moveSteps,
   nextDay,
   outlineGroupsOf,
   parentOfTask,
   parseQuickAdd,
+  pendingLineKeys,
+  planDraftKey,
+  planYesterday,
+  plainLineText,
   realSiblings,
   rootNodeOf,
+  startPanelAuto,
   toggleBacklogStatus,
+  trailSummary,
   ambiguityHint,
   keepDismissed,
   noteOnlyLines,
@@ -298,5 +309,118 @@ describe("lines changed in the note", () => {
     assert.equal(taskOfOutOfSync(tasks, item("- [x] x"))?.id, "t3");
     assert.equal(taskOfOutOfSync([...tasks, task("t4", "alpha", 4, { title: "Other task" })], item("- [x] x")), null);
     assert.equal(taskOfOutOfSync(tasks, item("- [x] x", "Missing")), null);
+  });
+});
+
+const yesterdayLine = (line: number, text: string, state: DailyYesterdayTask["state"] = "todo", block?: string): DailyYesterdayTask => ({
+  line,
+  depth: 0,
+  state,
+  checked: state === "done",
+  text,
+  raw: `- [ ] ${text}`,
+  ...(block !== undefined ? { block } : {}),
+});
+
+const yesterdayNote = (tasks: DailyYesterdayTask[]): DailyYesterday => ({ date: "2026-11-11", path: "/daily/2026-11-11.md", closed: false, tasks });
+
+describe("start the day: yesterday", () => {
+  it("strips wikilinks and matches a line by the end of its title", () => {
+    assert.equal(plainLineText("[[acme|Acme Corp]] - Renew  contract"), "Acme Corp - Renew contract");
+    assert.equal(plainLineText("[[acme]] - x"), "acme - x");
+    assert.equal(lineMatchesTitle("[[acme|Acme Corp]] - Renew contract", "renew contract"), true);
+    assert.equal(lineMatchesTitle("Renew contract", "Renew contract"), true);
+    assert.equal(lineMatchesTitle("Acme - Renew contract soon", "Renew contract"), false);
+    assert.equal(lineMatchesTitle("anything", "  "), false);
+  });
+
+  it("lists carried tasks plus note lines no task explains, and keeps the done lines apart", () => {
+    const carried = [entry(task("a", "acme", 3, { title: "Renew contract" }), "acme", "Acme Corp")];
+    const board = [task("a", "acme", 3, { title: "Renew contract" }), task("g", "globex", 2, { title: "Rollout checklist" })];
+    const yesterday = yesterdayNote([
+      yesterdayLine(5, "[[acme|Acme Corp]] - Renew contract"),
+      yesterdayLine(6, "[[globex|Globex]] - Rollout checklist"),
+      yesterdayLine(7, "Call the accountant", "doing"),
+      yesterdayLine(8, "Pay the invoice", "done"),
+    ]);
+    const plan = planYesterday(yesterday, carried, board);
+    assert.deepEqual(
+      plan.open.map((item) => item.key),
+      ["task:a", "line:7"],
+    );
+    assert.deepEqual(
+      plan.done.map((line) => line.line),
+      [8],
+    );
+  });
+
+  it("hides note lines already present in today's note", () => {
+    const yesterday = yesterdayNote([yesterdayLine(1, "Book the dentist appointment"), yesterdayLine(2, "Call the accountant")]);
+    assert.equal(lineInNote("Book the dentist appointment", ["- [ ] Book the dentist appointment", "- [x] Other"]), true);
+    assert.equal(lineInNote("Book the dentist", ["- [ ] Book the dentist appointment"]), false);
+    assert.deepEqual(
+      planYesterday(yesterday, [], [], ["- [ ] Book the dentist appointment"]).open.map((item) => item.key),
+      ["line:2"],
+    );
+  });
+
+  it("handles a missing previous diary", () => {
+    assert.deepEqual(planYesterday(null, [], []), { open: [], done: [] });
+  });
+
+  it("tracks which note lines still wait for a choice and which were brought", () => {
+    const yesterday = yesterdayNote([yesterdayLine(1, "One", "todo", "- [ ] One"), yesterdayLine(2, "Two"), yesterdayLine(3, "Three")]);
+    const { open } = planYesterday(yesterday, [], []);
+    assert.deepEqual(pendingLineKeys(open, { "line:1": "bring", "line:2": "drop" }), ["line:3"]);
+    assert.deepEqual(
+      broughtLines(open, { "line:1": "bring", "line:2": "drop" }).map((line) => line.line),
+      [1],
+    );
+  });
+});
+
+describe("start the day: compose", () => {
+  const line = yesterdayLine(4, "Call the accountant", "doing", "- [-] Call the accountant");
+
+  it("builds the compose body the wizard sends", () => {
+    assert.deepEqual(composeStartDay({ summary: "  Shipped X\nFixed Y ", useSummary: true, meetingsText: "Standup 10:00\n\n  Review 15:00  ", lines: [line] }), {
+      focus: [{ project: null, text: "Call the accountant", block: "- [-] Call the accountant" }],
+      meetings: ["Standup 10:00", "Review 15:00"],
+      briefing: "Shipped X\nFixed Y",
+    });
+  });
+
+  it("omits the briefing when unchecked or empty and the block when the line has none", () => {
+    assert.deepEqual(composeStartDay({ summary: "Shipped X", useSummary: false, meetingsText: "", lines: [yesterdayLine(1, "Plain")] }), {
+      focus: [{ project: null, text: "Plain" }],
+      meetings: [],
+    });
+    assert.equal("briefing" in composeStartDay({ summary: "  ", useSummary: true, meetingsText: "", lines: [] }), false);
+  });
+
+  it("closes yesterday like the wizard: done lines checked, the rest as they are", () => {
+    const yesterday = yesterdayNote([yesterdayLine(1, "A", "done"), yesterdayLine(2, "B", "doing"), yesterdayLine(3, "C")]);
+    assert.deepEqual(closeYesterdayBody(yesterday), {
+      yesterday: "2026-11-11",
+      tasks: [
+        { line: 1, checked: true },
+        { line: 2, checked: false },
+        { line: 3, checked: false },
+      ],
+    });
+  });
+
+  it("merges the trail bullets into the summary", () => {
+    assert.equal(trailSummary(null), "");
+    assert.equal(trailSummary({ yesterdayTrail: { path: "p", bullets: ["- a", "- b", "- c", "- d"] } }), "- a\n- b\n- c");
+    assert.equal(trailSummary({ yesterdayTrail: null }), "");
+  });
+
+  it("opens the panel on its own only when the note is missing and the day is not past", () => {
+    assert.equal(startPanelAuto("2026-11-13", "2026-11-13", false), true);
+    assert.equal(startPanelAuto("2026-11-14", "2026-11-13", false), true);
+    assert.equal(startPanelAuto("2026-11-12", "2026-11-13", false), false);
+    assert.equal(startPanelAuto("2026-11-13", "2026-11-13", true), false);
+    assert.equal(planDraftKey("2026-11-13"), "hub.daily.plan.2026-11-13");
   });
 });

@@ -1,5 +1,20 @@
 import { findBoardTask, groupTasksByProject, type ProjectTaskGroup } from "./board-model";
-import type { BoardProject, BoardTarget, BoardTask, TodayAmbiguityReason, TodayAmbiguous, TodayData, TodayEntry, TodayOutOfSync } from "./delegation";
+import { mergeTrailIntoSummary, parseMeetings } from "./daily-plan";
+import type {
+  BoardProject,
+  BoardTarget,
+  BoardTask,
+  DailyCloseYesterdayInput,
+  DailyComposeInput,
+  DailyPrepare,
+  DailyYesterday,
+  DailyYesterdayTask,
+  TodayAmbiguityReason,
+  TodayAmbiguous,
+  TodayData,
+  TodayEntry,
+  TodayOutOfSync,
+} from "./delegation";
 import { addDays, flattenNodes, parseInlineTokens, type KeyEventLike, type OutlineGroup, type OutlineNode } from "./outliner-model";
 
 export const TODAY_DRAG_MIME = "application/x-cchub-task";
@@ -263,3 +278,85 @@ export function taskOfOutOfSync(tasks: readonly BoardTask[], item: TodayOutOfSyn
   visit(tasks);
   return found.length === 1 ? (found[0] as BoardTask) : null;
 }
+
+export const START_DAY_EVENT = "cchub:daily-start-day";
+
+export const planDraftKey = (date: string): string => `hub.daily.plan.${date}`;
+
+export const startPanelAuto = (date: string, today: string, dailyExists: boolean): boolean => !dailyExists && date >= today;
+
+export type LineChoice = "bring" | "drop";
+
+export type YesterdayItem = { kind: "task"; key: string; entry: TodayEntry } | { kind: "line"; key: string; line: DailyYesterdayTask };
+
+export interface YesterdayPlan {
+  open: YesterdayItem[];
+  done: DailyYesterdayTask[];
+}
+
+const WIKILINK_RE = /\[\[([^\]|]*)(?:\|([^\]]*))?\]\]/g;
+
+export function plainLineText(text: string): string {
+  return text
+    .replace(WIKILINK_RE, (_whole, target: string, label: string | undefined) => label ?? target)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function lineMatchesTitle(text: string, title: string): boolean {
+  const wanted = plainLineText(title).toLowerCase();
+  if (wanted === "") return false;
+  const plain = plainLineText(text).toLowerCase();
+  return plain === wanted || plain.endsWith(` - ${wanted}`);
+}
+
+export function flattenBoardTasks(tasks: readonly BoardTask[]): BoardTask[] {
+  return tasks.flatMap((task) => [task, ...flattenBoardTasks(task.subtasks)]);
+}
+
+const NOTE_MARKER_RE = /^\s*[-*]\s+\[[ xX-]\]\s*/;
+
+export const lineInNote = (text: string, noteLines: readonly string[]): boolean => {
+  const wanted = plainLineText(text).toLowerCase();
+  return wanted !== "" && noteLines.some((line) => plainLineText(line.replace(NOTE_MARKER_RE, "")).toLowerCase() === wanted);
+};
+
+export function planYesterday(yesterday: DailyYesterday | null, carried: readonly TodayEntry[], tasks: readonly BoardTask[], noteLines: readonly string[] = []): YesterdayPlan {
+  const lines = yesterday?.tasks ?? [];
+  const known = flattenBoardTasks(tasks);
+  const handled = (line: DailyYesterdayTask): boolean => known.some((task) => lineMatchesTitle(line.text, task.title)) || lineInNote(line.text, noteLines);
+  const open: YesterdayItem[] = [
+    ...carried.map((entry): YesterdayItem => ({ kind: "task", key: `task:${entry.task.id}`, entry })),
+    ...lines.filter((line) => line.state !== "done" && !handled(line)).map((line): YesterdayItem => ({ kind: "line", key: `line:${line.line}`, line })),
+  ];
+  return { open, done: lines.filter((line) => line.state === "done") };
+}
+
+export const pendingLineKeys = (open: readonly YesterdayItem[], choices: Readonly<Record<string, LineChoice>>): string[] =>
+  open.flatMap((item) => (item.kind === "line" && choices[item.key] === undefined ? [item.key] : []));
+
+export const broughtLines = (open: readonly YesterdayItem[], choices: Readonly<Record<string, LineChoice>>): DailyYesterdayTask[] =>
+  open.flatMap((item) => (item.kind === "line" && choices[item.key] === "bring" ? [item.line] : []));
+
+export const trailSummary = (prepare: Pick<DailyPrepare, "yesterdayTrail"> | null): string => mergeTrailIntoSummary("", prepare?.yesterdayTrail?.bullets ?? []);
+
+export interface StartDayDraft {
+  summary: string;
+  useSummary: boolean;
+  meetingsText: string;
+  lines: readonly DailyYesterdayTask[];
+}
+
+export function composeStartDay(draft: StartDayDraft): DailyComposeInput {
+  const briefing = draft.useSummary ? draft.summary.trim() : "";
+  return {
+    focus: draft.lines.map((line) => ({ project: null, text: line.text, ...(line.block !== undefined ? { block: line.block } : {}) })),
+    meetings: parseMeetings(draft.meetingsText),
+    ...(briefing !== "" ? { briefing } : {}),
+  };
+}
+
+export const closeYesterdayBody = (yesterday: DailyYesterday): DailyCloseYesterdayInput => ({
+  yesterday: yesterday.date,
+  tasks: yesterday.tasks.map((task) => ({ line: task.line, checked: task.state === "done" })),
+});

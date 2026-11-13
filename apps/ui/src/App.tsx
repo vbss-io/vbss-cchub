@@ -13,6 +13,7 @@ import { IconBoard, IconChevron, IconClose, IconFlow, IconMore, IconReports, Ico
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { unlockAudio } from "./notify";
 import { buildCaptureItems, buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, CAPTURE_PREFILL } from "./palette-items";
+import { START_DAY_EVENT } from "./today-model";
 import { localDayKey } from "./timeline-model";
 import { useHotkeys } from "./use-hotkeys";
 import { HubOfflineBanner } from "./components/HubOfflineBanner";
@@ -872,6 +873,7 @@ export function App() {
         ...(boardEnabled ? { newTask: () => goThenDispatch("board", "cchub:board-new-task") } : {}),
         ...(dailyEnabled
           ? {
+              startDay: () => goThenDispatch("daily", START_DAY_EVENT),
               planToday: () => goThenDispatch("daily", "cchub:daily-plan-today"),
               refreshDaily: () => goThenDispatch("daily", "cchub:daily-refresh"),
               startCapture,

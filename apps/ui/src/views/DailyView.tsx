@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import type { DailyStreamEvent, TasksBoardStreamEvent } from "../api";
 import { BoardTaskPicker } from "../components/BoardTaskPicker";
 import { DailyTasksCheck } from "../components/DailyTasksCheck";
+import { MarkdownEditor } from "../components/MarkdownEditor";
 import {
   appendNewItem,
   canOrganizeFocus,
@@ -1229,9 +1230,8 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
           )}
           {!wizardOpen && entry && entry.exists && mode === "edit" && (
             <>
-              <textarea
-                className="in daily__editor"
-                spellCheck={false}
+              <MarkdownEditor
+                fill
                 value={text}
                 onChange={(event) => setText(event.target.value)}
                 onBlur={() => {

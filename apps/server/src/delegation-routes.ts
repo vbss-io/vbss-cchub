@@ -56,7 +56,6 @@ import {
 } from "./daily.js";
 import {
   addBoardNote,
-  addTaskToDaily,
   AlreadyInDailyError,
   AmbiguousDailyLineError,
   BOARD_STATUSES,
@@ -76,7 +75,7 @@ import {
   writeBoardTaskSynced,
   type BoardStatus,
 } from "./tasks-board.js";
-import { closeDailyTicks, organizeFocusChecked, saveDailyFromClient, syncTaskFromDailyChecked, syncTaskToDailyChecked } from "./today.js";
+import { addTaskToDailyChecked, closeDailyTicks, organizeFocusChecked, saveDailyFromClient, syncTaskFromDailyChecked, syncTaskToDailyChecked } from "./today.js";
 import { flushTrail, trailStatus } from "./trail.js";
 import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus, WorktreeError } from "./worktrees.js";
 import { portRangeOf } from "./task-ports.js";
@@ -1018,7 +1017,7 @@ export function delegationRouter(): Router {
     const body = (req.body ?? {}) as Record<string, unknown>;
     try {
       const target = boardTarget(body);
-      res.status(201).json(addTaskToDaily(getSettings(), { ...target, date: asString(body.date) }));
+      res.status(201).json(addTaskToDailyChecked(getSettings(), { ...target, date: asString(body.date) }));
     } catch (err) {
       sendBoardError(res, err);
     }

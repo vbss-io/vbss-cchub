@@ -9,6 +9,7 @@ import { BoardNewTaskDialog } from "../components/BoardNewTaskDialog";
 import { BoardMoveProjectDialog, BoardParentPickerDialog } from "../components/BoardOrganizeDialogs";
 import type { BoardNoteActions, BoardTodayControls } from "../components/BoardParts";
 import { FocusOutliner, type OutlineFields } from "../components/FocusOutliner";
+import { StartDayPanel } from "../components/StartDayPanel";
 import {
   effectiveProjectOrder,
   findBoardTask,
@@ -76,6 +77,8 @@ import {
   parseDismissedOutOfSync,
   parseQuickAdd,
   rootNodeOf,
+  START_DAY_EVENT,
+  startPanelAuto,
   targetOfTask,
   taskOfOutOfSync,
   TODAY_DRAG_MIME,
@@ -690,6 +693,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const [entryInfo, setEntryInfo] = useState<DailyEntryInfo>({ exists: false, path: null });
   const [quick, setQuick] = useState<QuickAddState>({ open: false, projectId: "", text: "", busy: false, error: null });
   const [creatingNote, setCreatingNote] = useState(false);
+  const [forcedDate, setForcedDate] = useState<string | null>(null);
   const [modeSlot, setModeSlot] = useState<HTMLElement | null>(null);
   const [kept, setKept] = useState<string[]>(() => parseDismissedOutOfSync(readStored(KEPT_TASKS_KEY)));
   const narrow = useNarrow();
@@ -777,11 +781,17 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
     if (!enabled) return;
     const onRefresh = () => void refresh();
     const onPlan = () => setTab("note");
+    const onStart = () => {
+      setTab("today");
+      setForcedDate(date);
+    };
     window.addEventListener("cchub:daily-refresh", onRefresh);
     window.addEventListener("cchub:daily-plan-today", onPlan);
+    window.addEventListener(START_DAY_EVENT, onStart);
     return () => {
       window.removeEventListener("cchub:daily-refresh", onRefresh);
       window.removeEventListener("cchub:daily-plan-today", onPlan);
+      window.removeEventListener(START_DAY_EVENT, onStart);
     };
   });
 
@@ -1086,24 +1096,32 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
 
   const obsidianHref = entryInfo.path !== null ? obsidianUrl(entryInfo.path) : null;
 
+  const openClassicPlanner = () => {
+    setTab("note");
+    window.dispatchEvent(new CustomEvent("cchub:daily-plan-today"));
+  };
+
+  const openRefine = () => {
+    setTab("note");
+    window.dispatchEvent(new CustomEvent(DAILY_REFINE_EVENT));
+  };
+
   const menuItems: BoardMenuItem[] = [
     {
-      id: "plan",
-      label: "Plan today",
+      id: "start",
+      label: "Start the day",
       onSelect: () => {
-        setTab("note");
-        window.dispatchEvent(new CustomEvent("cchub:daily-plan-today"));
+        setTab("today");
+        setForcedDate(date);
       },
     },
+    { id: "plan", label: "Classic planner", onSelect: openClassicPlanner },
     { id: "organize", label: "Organize focus", title: "Group the focus items of the note by project", onSelect: () => window.dispatchEvent(new CustomEvent(DAILY_ORGANIZE_EVENT)) },
     {
       id: "refine",
       label: "Refine with assistant",
       disabled: !entryInfo.exists,
-      onSelect: () => {
-        setTab("note");
-        window.dispatchEvent(new CustomEvent(DAILY_REFINE_EVENT));
-      },
+      onSelect: openRefine,
     },
     {
       id: "obsidian",
@@ -1125,6 +1143,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
 
   const effectiveTab: Tab = !narrow && tab === "backlog" ? "today" : tab;
   const dailyExists = data?.dailyExists === true;
+  const showStart = data !== null && (startPanelAuto(date, today, dailyExists) || forcedDate === date);
   const showMain = effectiveTab === "today";
   const showSide = tasksEnabled && (effectiveTab === "backlog" || (!narrow && effectiveTab === "today"));
   const tabs: { id: Tab; label: string }[] = narrow
@@ -1156,7 +1175,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
           <span className="today__day muted small">{describeDay(date, today)}</span>
         </div>
         <span className="spacer" />
-        {data !== null && !dailyExists && (
+        {data !== null && !dailyExists && !showStart && (
           <button type="button" className="act act--focus" disabled={creatingNote} onClick={() => void createNote()}>
             {creatingNote ? "Creating…" : isToday ? "Create today's note" : "Create note"}
           </button>
@@ -1220,17 +1239,41 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
         <div className={`today__grid ${showMain && showSide ? "today__grid--split" : ""}`}>
           {showMain && (
             <div className="today__main">
-              <CarriedStrip
-                entries={carried}
-                date={date}
-                isToday={isToday}
-                busyIds={busyIds}
-                onBring={(task) => void scheduleTo(task, date)}
-                onTomorrow={(task) => void scheduleTo(task, tomorrow)}
-                onDrop={(task) => void scheduleTo(task, null)}
-                onBringAll={() => void bringAll()}
-                onOpen={(task) => setDrawerId(task.id)}
-              />
+              {showStart ? (
+                <StartDayPanel
+                  date={date}
+                  isToday={isToday}
+                  noteExists={dailyExists}
+                  data={data}
+                  tasks={boardTasks}
+                  busyIds={busyIds}
+                  onBring={(task) => void scheduleTo(task, date)}
+                  onTomorrow={(task) => void scheduleTo(task, tomorrow)}
+                  onDrop={(task) => void scheduleTo(task, null)}
+                  onBringAll={() => void bringAll()}
+                  onOpenTask={(task) => setDrawerId(task.id)}
+                  onCreated={async () => {
+                    setForcedDate(null);
+                    await refresh();
+                  }}
+                  onRefine={openRefine}
+                  onClassic={openClassicPlanner}
+                  onClose={() => setForcedDate(null)}
+                  onError={onError}
+                />
+              ) : (
+                <CarriedStrip
+                  entries={carried}
+                  date={date}
+                  isToday={isToday}
+                  busyIds={busyIds}
+                  onBring={(task) => void scheduleTo(task, date)}
+                  onTomorrow={(task) => void scheduleTo(task, tomorrow)}
+                  onDrop={(task) => void scheduleTo(task, null)}
+                  onBringAll={() => void bringAll()}
+                  onOpen={(task) => setDrawerId(task.id)}
+                />
+              )}
 
               <section
                 className={`today__section today__focus ${dragging ? "today__focus--target" : ""} ${dropOver ? "today__focus--over" : ""}`}
@@ -1310,19 +1353,22 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                     {outOfSync.map((item) => {
                       const task = taskOfOutOfSync(boardTasks, item);
                       const busy = task !== null && busyIds.has(task.id);
+                      const recurring = item.reason === "recurring-done";
                       return (
                         <li key={outOfSyncKey(item)} className="today__row">
                           <span className="today__text">
                             {item.line.trim()}{" "}
                             <span className="muted small">
-                              Task "{item.taskTitle}" is {item.projectStatus}, the note says {item.dailyCheckbox}.
+                              {recurring
+                                ? `Recurring task "${item.taskTitle}" was already completed today; reopen it from Tasks if needed.`
+                                : `Task "${item.taskTitle}" is ${item.projectStatus}, the note says ${item.dailyCheckbox}.`}
                             </span>
                           </span>
                           <span className="today__actions">
                             <button
                               type="button"
                               className="act"
-                              disabled={task === null || busy}
+                              disabled={task === null || busy || recurring}
                               onClick={() => {
                                 if (task) void applyNote(item, task);
                               }}
@@ -1397,7 +1443,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                   </section>
                 </>
               ) : (
-                <p className="today__empty">No note for this day yet. Create it to add meetings and captures.</p>
+                !showStart && <p className="today__empty">No note for this day yet. Create it to add meetings and captures.</p>
               )}
 
               {data.summary !== null && data.summary.trim() !== "" && (
