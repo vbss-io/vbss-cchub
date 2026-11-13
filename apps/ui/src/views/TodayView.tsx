@@ -36,6 +36,7 @@ import {
   editBoardNote,
   getTasksBoard,
   getToday,
+  linkTick,
   moveBoardItem,
   moveBoardTaskToProject,
   openBoardProjectInEditor,
@@ -55,6 +56,7 @@ import {
   type TodayData,
   type TodayEntry,
   type TodayOutOfSync,
+  type TodayUnmatched,
   type WorkspaceRecord,
 } from "../delegation";
 import { IconClose } from "../icons";
@@ -67,6 +69,8 @@ import {
   describeDay,
   entryTaskIds,
   keepDismissed,
+  linkTargetOfTask,
+  linkTickInput,
   localDay,
   moveSteps,
   nextDay,
@@ -76,13 +80,16 @@ import {
   parentOfTask,
   parseDismissedOutOfSync,
   parseQuickAdd,
+  pickerTasks,
   rootNodeOf,
   START_DAY_EVENT,
   startPanelAuto,
   targetOfTask,
   taskOfOutOfSync,
   TODAY_DRAG_MIME,
+  unmatchedKey,
   visibleOutOfSync,
+  type LinkTarget,
 } from "../today-model";
 import { DAILY_ORGANIZE_EVENT, DAILY_REFINE_EVENT, DailyView, useDailySessions, type DailyEntryInfo } from "./DailyView";
 
@@ -163,6 +170,130 @@ function ProjectSelect({ projects, value, label, onChange }: { projects: BoardPr
         </option>
       ))}
     </select>
+  );
+}
+
+const OTHER_TASK = "other";
+
+const CHECKBOX_LABEL: Record<TodayUnmatched["checkbox"], string> = { todo: "To-do", doing: "Doing", done: "Done" };
+
+interface UnmatchedTicksProps {
+  items: TodayUnmatched[];
+  tasks: BoardTask[];
+  projects: BoardProject[];
+  busyKeys: ReadonlySet<string>;
+  onLink: (item: TodayUnmatched, target: LinkTarget | null) => void;
+}
+
+function UnmatchedTicks({ items, tasks, projects, busyKeys, onLink }: UnmatchedTicksProps) {
+  const [picking, setPicking] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const titles = useMemo(() => new Map(projects.map((project) => [project.id, project.title])), [projects]);
+  const found = useMemo(() => (picking === null ? null : pickerTasks(tasks, projects, query)), [picking, tasks, projects, query]);
+
+  const onSelect = (item: TodayUnmatched, value: string) => {
+    if (value === OTHER_TASK) {
+      setPicking(unmatchedKey(item));
+      setQuery("");
+      return;
+    }
+    const candidate = item.candidates[Number(value)];
+    if (candidate === undefined) return;
+    setPicking(null);
+    onLink(item, { projectId: candidate.projectId, line: candidate.line, raw: candidate.raw });
+  };
+
+  return (
+    <section className="today__section" aria-label="Ticked in the note, no task">
+      <header className="today__section-head">
+        <h3>Ticked in the note - no task</h3>
+      </header>
+      <ul className="today__plain">
+        {items.map((item) => {
+          const key = unmatchedKey(item);
+          const busy = busyKeys.has(key);
+          return (
+            <li key={key} className={`today__unmatched ${busy ? "today__row--busy" : ""}`} aria-busy={busy}>
+              <div className="today__row">
+                <span className="today__text">
+                  {item.line.trim()}{" "}
+                  <span className="muted small">
+                    {item.section} - {CHECKBOX_LABEL[item.checkbox]}
+                  </span>
+                </span>
+                <span className="today__actions">
+                  <select
+                    className="in today__select"
+                    value=""
+                    disabled={busy}
+                    aria-label={`Link "${item.line.trim()}" to a task`}
+                    onChange={(event) => onSelect(item, event.target.value)}
+                  >
+                    <option value="">Link to task…</option>
+                    {item.candidates.map((candidate, index) => (
+                      <option key={`${candidate.projectId}:${candidate.line}`} value={String(index)}>
+                        {candidate.title} - {titles.get(candidate.projectId) ?? candidate.projectId}
+                      </option>
+                    ))}
+                    <option value={OTHER_TASK}>Choose another…</option>
+                  </select>
+                  <button type="button" className="act" disabled={busy} onClick={() => onLink(item, null)}>
+                    Ignore
+                  </button>
+                </span>
+              </div>
+              {picking === key && found !== null && (
+                <div className="today__picker">
+                  <input
+                    className="in today__picker-search"
+                    type="search"
+                    value={query}
+                    placeholder="Search open tasks"
+                    aria-label="Search open tasks to link"
+                    autoFocus
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(event) => setQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setPicking(null);
+                      }
+                    }}
+                  />
+                  <button type="button" className="act" onClick={() => setPicking(null)}>
+                    Cancel
+                  </button>
+                  {found.items.length === 0 ? (
+                    <p className="hint today__picker-empty">No open task matches.</p>
+                  ) : (
+                    <ul className="today__plain today__picker-list" aria-label="Open tasks">
+                      {found.items.map(({ task, projectTitle }) => (
+                        <li key={task.id}>
+                          <button
+                            type="button"
+                            className="today__picker-item"
+                            disabled={busy}
+                            onClick={() => {
+                              setPicking(null);
+                              onLink(item, linkTargetOfTask(task));
+                            }}
+                          >
+                            <span>{task.title}</span>
+                            <span className="muted small">{projectTitle}</span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {found.total > found.items.length && <p className="hint">Showing {found.items.length} of {found.total}. Type to narrow the list.</p>}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }
 
@@ -805,6 +936,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const noteLines = data ? noteOnlyLines(data) : [];
   const ambiguous = data?.ambiguous ?? [];
   const outOfSync = visibleOutOfSync(data?.outOfSync, kept);
+  const unmatched = data?.unmatched ?? [];
   const groups: OutlineGroup[] = useMemo(() => outlineGroupsOf(focus), [focus]);
   const focusIds = useMemo(() => entryTaskIds(focus), [focus]);
   const excluded = useMemo(() => new Set([...focusIds, ...entryTaskIds(carried)]), [focusIds, carried]);
@@ -840,6 +972,19 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
       failWith(err, "could not update the task");
     } finally {
       markBusy(task.id, false);
+      await refresh();
+    }
+  };
+
+  const onLinkTick = async (item: TodayUnmatched, target: LinkTarget | null) => {
+    const key = unmatchedKey(item);
+    markBusy(key, true);
+    try {
+      await linkTick(date, linkTickInput(item, target));
+    } catch (err) {
+      failWith(err, target === null ? "could not ignore the line" : "could not link the line");
+    } finally {
+      markBusy(key, false);
       await refresh();
     }
   };
@@ -1375,7 +1520,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                             >
                               Use note
                             </button>
-                            <button type="button" className="act today__ghost" disabled={busy} onClick={() => keepTask(item)}>
+                            <button type="button" className="act" disabled={busy} onClick={() => keepTask(item)}>
                               Keep task
                             </button>
                           </span>
@@ -1385,6 +1530,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                   </ul>
                 </section>
               )}
+
+              {unmatched.length > 0 && <UnmatchedTicks items={unmatched} tasks={boardTasks} projects={projects} busyKeys={busyIds} onLink={(item, target) => void onLinkTick(item, target)} />}
 
               {(noteLines.length > 0 || ambiguous.length > 0) && (
                 <details className="today__disclosure">

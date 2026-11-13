@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import "../today.css";
-import { BOARD_STATUS_LABEL, dueTone, formatDayMonth, projectOptions, subtaskProgress } from "../board-model";
+import { BOARD_STATUS_LABEL, countedProjectOptions, dueTone, formatDayMonth, subtaskProgress } from "../board-model";
 import type { BoardProject, BoardTask } from "../delegation";
 import { doingTarget } from "../outliner-model";
 import {
@@ -8,6 +8,7 @@ import {
   BACKLOG_STATUS_LABEL,
   backlogGroups,
   backlogKeyIntent,
+  backlogTasks,
   countBacklog,
   DEFAULT_BACKLOG_FILTERS,
   encodeDragTarget,
@@ -45,7 +46,10 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
   const groups = useMemo(() => backlogGroups(tasks, projects, projectOrder, excluded, filters), [tasks, projects, projectOrder, excluded, filters]);
   const flat = useMemo(() => groups.flatMap((group) => group.tasks), [groups]);
   const total = countBacklog(groups);
-  const options = useMemo(() => projectOptions(projects), [projects]);
+  const counted = useMemo(
+    () => countedProjectOptions(projects, backlogTasks(tasks, projects, excluded, { ...filters, projectId: null }), false),
+    [tasks, projects, excluded, filters],
+  );
   const titles = useMemo(() => new Map(projects.map((project) => [project.id, project.title])), [projects]);
   const current = flat.some((task) => task.id === activeId) ? activeId : (flat[Math.min(lastIndex.current, flat.length - 1)]?.id ?? null);
   const isToday = date === today;
@@ -161,9 +165,9 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
           aria-label="Filter by project"
           onChange={(event) => setFilters({ ...filters, projectId: event.target.value === "" ? null : event.target.value })}
         >
-          <option value="">All projects</option>
-          {options.map((option) => (
-            <option key={option.id} value={option.id}>
+          <option value="">All projects ({counted.total})</option>
+          {counted.options.map((option) => (
+            <option key={option.id} value={option.id} disabled={option.count === 0 && option.id !== filters.projectId}>
               {option.label}
             </option>
           ))}

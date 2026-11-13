@@ -4,7 +4,7 @@ import { BadRequestError, NotFoundError } from "./delegation-launch.js";
 import { delegationGuard } from "./delegation-security.js";
 import { getSettings } from "./delegation-store.js";
 import { TaskConflictError } from "./tasks-board.js";
-import { installTodayHooks, readToday, StaleCaptureError, todayApi } from "./today.js";
+import { installTodayHooks, readToday, StaleCaptureError, StaleTodayLineError, todayApi, type LinkTickTarget } from "./today.js";
 
 type Body = Record<string, unknown>;
 
@@ -13,7 +13,7 @@ function sendTodayError(res: Response, err: unknown): void {
     res.status(409).json({ error: err.message, current: err.current });
     return;
   }
-  if (err instanceof DailyConflictError || err instanceof StaleCaptureError) {
+  if (err instanceof DailyConflictError || err instanceof StaleCaptureError || err instanceof StaleTodayLineError) {
     res.status(409).json({ error: err.message });
     return;
   }
@@ -31,6 +31,13 @@ function requireLine(body: Body): number {
   const value = body.line;
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) throw new BadRequestError("line must be a non-negative integer");
   return value;
+}
+
+function linkTarget(value: unknown): LinkTickTarget | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || Array.isArray(value)) throw new BadRequestError("target must be an object or null");
+  const target = value as Body;
+  return { projectId: requireString(target, "projectId"), line: requireLine(target), raw: requireString(target, "raw") };
 }
 
 export function todayRouter(): Router {
@@ -106,6 +113,20 @@ export function todayRouter(): Router {
       const date = dateOf(req.params.date);
       const result = todayApi.createToday(getSettings(), date);
       res.json(result);
+    } catch (err) {
+      sendTodayError(res, err);
+    }
+  });
+
+  router.post("/:date/link-tick", (req, res) => {
+    try {
+      const date = dateOf(req.params.date);
+      const body = (req.body ?? {}) as Body;
+      const lineIndex = body.lineIndex;
+      if (typeof lineIndex !== "number" || !Number.isInteger(lineIndex) || lineIndex < 0) throw new BadRequestError("lineIndex must be a non-negative integer");
+      const action = body.action;
+      if (action !== "apply" && action !== "dismiss") throw new BadRequestError("action must be apply or dismiss");
+      res.json(todayApi.linkTick(getSettings(), date, { lineIndex, raw: requireString(body, "raw"), target: linkTarget(body.target), action }));
     } catch (err) {
       sendTodayError(res, err);
     }

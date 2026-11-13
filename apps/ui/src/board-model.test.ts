@@ -224,6 +224,50 @@ test("projectOptions indents labels by depth", () => {
   assert.equal(options[2]?.id, "acme/globex/initech");
 });
 
+const COUNTED_TASKS = [
+  task("acme", 1, "a"),
+  task("acme/globex", 2, "b"),
+  task("acme/globex", 3, "c"),
+  task("acme/globex/initech", 4, "d"),
+  task("personal", 5, "e"),
+];
+
+test("countedProjectOptions counts each project's own tasks when subprojects are excluded", () => {
+  const result = countedProjectOptions(PROJECTS, COUNTED_TASKS, false);
+  assert.equal(result.total, 5);
+  assert.deepEqual(
+    result.options.map((option) => [option.id, option.count]),
+    [
+      ["acme", 1],
+      ["acme/globex", 2],
+      ["acme/globex/initech", 1],
+      ["acme/globex/hooli", 0],
+      ["personal", 1],
+    ],
+  );
+  assert.equal(result.options[0]?.label, "ACME (1)");
+  assert.equal(result.options[2]?.label, `${String.fromCharCode(160).repeat(4)}INITECH (1)`);
+  assert.equal(result.options[3]?.label, `${String.fromCharCode(160).repeat(4)}HOOLI (0)`);
+});
+
+test("countedProjectOptions rolls descendants into the parent when subprojects are included", () => {
+  const result = countedProjectOptions(PROJECTS, COUNTED_TASKS, true);
+  assert.deepEqual(
+    result.options.map((option) => option.count),
+    [4, 3, 1, 0, 1],
+  );
+  assert.equal(result.total, 5);
+});
+
+test("countedProjectOptions counts only the tasks it is given and leaves projectOptions alone", () => {
+  const visible = COUNTED_TASKS.filter((item) => item.id !== "acme/globex#2");
+  const result = countedProjectOptions(PROJECTS, visible, true);
+  assert.equal(result.total, 4);
+  assert.equal(result.options[1]?.count, 2);
+  assert.equal(projectOptions(PROJECTS)[0]?.label, "ACME");
+  assert.deepEqual(countedProjectOptions([], [], true), { total: 0, options: [] });
+});
+
 test("subtaskProgress counts every nested subtask and the done ones", () => {
   const nested = task("acme", 1, "parent", "todo", {
     subtasks: [
@@ -1158,6 +1202,7 @@ test("todayStatusBadge shows one badge, and an out of sync task shows only the o
 });
 
 import {
+  countedProjectOptions,
   dailyItemOutOfSync,
   dailyItemRecurredToday,
   dueChip,

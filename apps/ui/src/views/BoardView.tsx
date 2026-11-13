@@ -7,6 +7,7 @@ import {
   BOARD_STATUSES,
   BOARD_STATUS_LABEL,
   capDoneSection,
+  countedProjectOptions,
   DEFAULT_BOARD_PREFS,
   DONE_SECTION_PAGE,
   doneColumnView,
@@ -32,7 +33,6 @@ import {
   priorityFilterSummary,
   priorityLabel,
   projectBreadcrumb,
-  projectOptions,
   remapExpanded,
   replaceBoardTask,
   resetFilterPrefs,
@@ -591,7 +591,6 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
   useEffect(() => {
     if (board && picker !== null && pickerTask === null) setPicker(null);
   }, [board, picker, pickerTask]);
-  const options = useMemo(() => projectOptions(projects), [projects]);
   const breadcrumbs = useMemo(() => new Map(projects.map((project) => [project.id, projectBreadcrumb(projects, project.id).join(" › ")])), [projects]);
   const today = board?.today ?? null;
   const todayIds = useMemo(() => todayIdSet(today), [today]);
@@ -599,6 +598,10 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
   const doneEnabled = (settings?.tasks.doneSection ?? "").trim() !== "";
   const finishedIds = useMemo(() => finishedOccurrenceIds(allTasks, doneEnabled), [allTasks, doneEnabled]);
   const visible = useMemo(() => filterBoardTasks(allTasks, projects, filters, todayIds), [allTasks, projects, filters, todayIds]);
+  const projectCounts = useMemo(
+    () => countedProjectOptions(projects, filterBoardTasks(allTasks, projects, { ...filters, projectId: null }, todayIds), filters.includeSubprojects),
+    [allTasks, projects, filters, todayIds],
+  );
   const columns = useMemo(() => groupByStatus(sortByPriority(visible)), [visible]);
   const doneView = useMemo(() => doneColumnView(columns.done, doneShown), [columns, doneShown]);
   const tableView = useMemo(() => capDoneSection(sortTableTasks(visible, prefs.tableSort, breadcrumbs), doneShown), [visible, prefs.tableSort, breadcrumbs, doneShown]);
@@ -1120,8 +1123,8 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
             value={selectedProject}
             onChange={(event) => setFilters({ projectId: event.target.value === "" ? null : event.target.value })}
           >
-            <option value="">All projects</option>
-            {options.map((option) => (
+            <option value="">All projects ({projectCounts.total})</option>
+            {projectCounts.options.map((option) => (
               <option key={option.id} value={option.id}>
                 {option.label}
               </option>

@@ -13,7 +13,9 @@ import type {
   TodayAmbiguous,
   TodayData,
   TodayEntry,
+  TodayLinkTickInput,
   TodayOutOfSync,
+  TodayUnmatched,
 } from "./delegation";
 import { addDays, flattenNodes, parseInlineTokens, type KeyEventLike, type OutlineGroup, type OutlineNode } from "./outliner-model";
 
@@ -279,6 +281,44 @@ export function taskOfOutOfSync(tasks: readonly BoardTask[], item: TodayOutOfSyn
   return found.length === 1 ? (found[0] as BoardTask) : null;
 }
 
+export const unmatchedKey = (item: Pick<TodayUnmatched, "lineIndex" | "line">): string => `${item.lineIndex}\u0000${item.line}`;
+
+export type LinkTarget = NonNullable<TodayLinkTickInput["target"]>;
+
+export const linkTargetOfTask = (task: Pick<BoardTask, "projectId" | "line" | "raw">): LinkTarget => ({ projectId: task.projectId, line: task.line, raw: task.raw });
+
+export const linkTickInput = (item: Pick<TodayUnmatched, "lineIndex" | "line">, target: LinkTarget | null): TodayLinkTickInput => ({
+  lineIndex: item.lineIndex,
+  raw: item.line,
+  target,
+  action: target === null ? "dismiss" : "apply",
+});
+
+export interface PickerTask {
+  task: BoardTask;
+  projectTitle: string;
+}
+
+export const PICKER_LIMIT = 30;
+
+export function pickerTasks(tasks: readonly BoardTask[], projects: readonly BoardProject[], query: string, limit: number = PICKER_LIMIT): { items: PickerTask[]; total: number } {
+  const titles = new Map(projects.map((project) => [project.id, project.title]));
+  const words = query.trim().toLowerCase().split(/\s+/).filter((word) => word !== "");
+  const matches: PickerTask[] = [];
+  const visit = (list: readonly BoardTask[]): void => {
+    for (const candidate of list) {
+      if (candidate.section === "open" && (BACKLOG_STATUSES as readonly string[]).includes(candidate.status)) {
+        const projectTitle = titles.get(candidate.projectId) ?? candidate.projectId;
+        const haystack = `${candidate.title} ${projectTitle}`.toLowerCase();
+        if (words.every((word) => haystack.includes(word))) matches.push({ task: candidate, projectTitle });
+      }
+      visit(candidate.subtasks);
+    }
+  };
+  visit(tasks);
+  return { items: matches.slice(0, limit), total: matches.length };
+}
+
 export const START_DAY_EVENT = "cchub:daily-start-day";
 
 export const planDraftKey = (date: string): string => `hub.daily.plan.${date}`;
@@ -356,7 +396,7 @@ export function composeStartDay(draft: StartDayDraft): DailyComposeInput {
   };
 }
 
-export const closeYesterdayBody = (yesterday: DailyYesterday): DailyCloseYesterdayInput => ({
+export const closeYesterdayBody = (yesterday: Pick<DailyYesterday, "date">): DailyCloseYesterdayInput => ({
   yesterday: yesterday.date,
-  tasks: yesterday.tasks.map((task) => ({ line: task.line, checked: task.state === "done" })),
+  tasks: [],
 });

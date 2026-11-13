@@ -531,6 +531,27 @@ export function projectOptions(projects: BoardProject[]): BoardProjectOption[] {
   return projects.map((project) => ({ id: project.id, depth: project.depth, label: `${NBSP.repeat(project.depth * INDENT_PER_DEPTH)}${project.title}` }));
 }
 
+export interface CountedProjectOption extends BoardProjectOption {
+  count: number;
+}
+
+export interface CountedProjectOptions {
+  total: number;
+  options: CountedProjectOption[];
+}
+
+export function countedProjectOptions(projects: BoardProject[], tasks: readonly BoardTask[], includeSubprojects: boolean): CountedProjectOptions {
+  const own = new Map<string, number>();
+  for (const task of tasks) own.set(task.projectId, (own.get(task.projectId) ?? 0) + 1);
+  const options = projectOptions(projects).map((option) => {
+    const scope = projectScope(projects, option.id, includeSubprojects);
+    let count = 0;
+    for (const id of scope ?? []) count += own.get(id) ?? 0;
+    return { ...option, count, label: `${option.label} (${count})` };
+  });
+  return { total: tasks.length, options };
+}
+
 export function subtaskProgress(task: BoardTask): { done: number; total: number } {
   let done = 0;
   let total = 0;

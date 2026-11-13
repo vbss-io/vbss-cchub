@@ -525,6 +525,21 @@ export interface TodayAmbiguous {
   reason: TodayAmbiguityReason;
 }
 
+export interface TodayUnmatchedCandidate {
+  projectId: string;
+  line: number;
+  raw: string;
+  title: string;
+}
+
+export interface TodayUnmatched {
+  line: string;
+  lineIndex: number;
+  section: string;
+  checkbox: BoardCheckbox;
+  candidates: TodayUnmatchedCandidate[];
+}
+
 export interface TodayData {
   date: string;
   focusSource: "scheduled" | "list";
@@ -536,6 +551,7 @@ export interface TodayData {
   inNote?: string[];
   ambiguous?: TodayAmbiguous[];
   outOfSync?: TodayOutOfSync[];
+  unmatched?: TodayUnmatched[];
   summary: string | null;
   dailyExists: boolean;
   dailyUpdatedAt: number | null;
@@ -557,6 +573,13 @@ export interface TodayPromoteTarget {
 
 const todayPath = (date: string, action?: string): string => `/today/${encodeURIComponent(date)}${action ? `/${action}` : ""}`;
 
+export interface TodayLinkTickInput {
+  lineIndex: number;
+  raw: string;
+  target: { projectId: string; line: number; raw: string } | null;
+  action: "apply" | "dismiss";
+}
+
 export const getToday = (date: string): Promise<TodayData> => call("GET", todayPath(date));
 
 export const scheduleTask = (date: string, target: TodayScheduleTarget): Promise<{ task: BoardTask }> => call("POST", todayPath(date, "schedule"), target);
@@ -568,6 +591,8 @@ export const promoteCapture = (date: string, target: TodayPromoteTarget): Promis
 export const addMeeting = (date: string, text: string): Promise<{ meetings: string[] }> => call("POST", todayPath(date, "meeting"), { text });
 
 export const createTodayNote = (date: string): Promise<{ dailyExists: true }> => call("POST", todayPath(date, "create"));
+
+export const linkTick = (date: string, input: TodayLinkTickInput): Promise<unknown> => call("POST", todayPath(date, "link-tick"), input);
 
 export const migrateToday = (date: string): Promise<{ scheduled: number }> => call("POST", todayPath(date, "migrate"));
 

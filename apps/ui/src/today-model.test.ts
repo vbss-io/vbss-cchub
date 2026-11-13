@@ -32,6 +32,10 @@ import {
   trailSummary,
   ambiguityHint,
   keepDismissed,
+  linkTargetOfTask,
+  linkTickInput,
+  pickerTasks,
+  unmatchedKey,
   noteOnlyLines,
   outOfSyncKey,
   parseDismissedOutOfSync,
@@ -312,6 +316,43 @@ describe("lines changed in the note", () => {
   });
 });
 
+describe("ticked in the note, no task", () => {
+  const unmatched = { line: "- [x] Pay the invoice", lineIndex: 7 };
+
+  it("keys an item by its line index and text", () => {
+    assert.notEqual(unmatchedKey(unmatched), unmatchedKey({ ...unmatched, lineIndex: 8 }));
+    assert.notEqual(unmatchedKey(unmatched), unmatchedKey({ ...unmatched, line: "- [x] Other" }));
+  });
+
+  it("builds the apply and dismiss bodies", () => {
+    const target = linkTargetOfTask(task("t1", "alpha", 12, { raw: "- [ ] Pay invoice" }));
+    assert.deepEqual(target, { projectId: "alpha", line: 12, raw: "- [ ] Pay invoice" });
+    assert.deepEqual(linkTickInput(unmatched, target), { lineIndex: 7, raw: "- [x] Pay the invoice", target, action: "apply" });
+    assert.deepEqual(linkTickInput(unmatched, null), { lineIndex: 7, raw: "- [x] Pay the invoice", target: null, action: "dismiss" });
+  });
+
+  it("searches open tasks, subtasks included, by title and project and caps the list", () => {
+    const nested = task("t3", "beta", 3, { title: "Pay supplier" });
+    const tasks = [
+      task("t1", "alpha", 1, { title: "Pay invoice" }, [nested]),
+      task("t2", "beta", 2, { title: "Done thing", status: "done", checkbox: "done" }),
+      task("t4", "beta", 4, { title: "Archive me", section: "done" }),
+      task("t5", "beta", 5, { title: "Write report" }),
+    ];
+    const projects = [project("alpha", "Alpha"), project("beta", "Bravo")];
+    assert.deepEqual(
+      pickerTasks(tasks, projects, "").items.map((item) => item.task.id),
+      ["t1", "t3", "t5"],
+    );
+    assert.deepEqual(
+      pickerTasks(tasks, projects, "pay bravo").items.map((item) => [item.task.id, item.projectTitle]),
+      [["t3", "Bravo"]],
+    );
+    assert.deepEqual(pickerTasks(tasks, projects, "nothing here"), { items: [], total: 0 });
+    assert.deepEqual(pickerTasks(tasks, projects, "", 2), { items: pickerTasks(tasks, projects, "").items.slice(0, 2), total: 3 });
+  });
+});
+
 const yesterdayLine = (line: number, text: string, state: DailyYesterdayTask["state"] = "todo", block?: string): DailyYesterdayTask => ({
   line,
   depth: 0,
@@ -398,16 +439,10 @@ describe("start the day: compose", () => {
     assert.equal("briefing" in composeStartDay({ summary: "  ", useSummary: true, meetingsText: "", lines: [] }), false);
   });
 
-  it("closes yesterday like the wizard: done lines checked, the rest as they are", () => {
+  it("closes yesterday by sending no task states, so no task line is rewritten", () => {
     const yesterday = yesterdayNote([yesterdayLine(1, "A", "done"), yesterdayLine(2, "B", "doing"), yesterdayLine(3, "C")]);
-    assert.deepEqual(closeYesterdayBody(yesterday), {
-      yesterday: "2026-11-11",
-      tasks: [
-        { line: 1, checked: true },
-        { line: 2, checked: false },
-        { line: 3, checked: false },
-      ],
-    });
+    assert.deepEqual(closeYesterdayBody(yesterday), { yesterday: "2026-11-11", tasks: [] });
+    assert.deepEqual(closeYesterdayBody(yesterdayNote([])), { yesterday: "2026-11-11", tasks: [] });
   });
 
   it("merges the trail bullets into the summary", () => {
