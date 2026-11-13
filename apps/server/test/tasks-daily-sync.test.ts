@@ -125,7 +125,7 @@ describe("daily and tasks sync", () => {
       workspacesRoot: box.root,
       secondBrainRoot: box.brain,
       features: { daily: true, tasks: true },
-      daily: { wikilinks: true, headings: { focus: "Foco de hoje" } },
+      daily: { wikilinks: true, focusSource: "list", headings: { focus: "Foco de hoje" } },
       tasks: { root: vault, doneSection: "Done loops" },
     });
     assert.equal(res.status, 200);

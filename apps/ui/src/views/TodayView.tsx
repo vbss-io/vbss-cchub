@@ -59,7 +59,7 @@ import {
 import { IconClose } from "../icons";
 import { Markdown } from "../markdown";
 import { openExternal } from "../notify";
-import { addDays, previousSibling, nextSibling, type OutlineGroup, type OutlineNode } from "../outliner-model";
+import { addDays, doingTarget, previousSibling, nextSibling, type OutlineGroup, type OutlineNode } from "../outliner-model";
 import {
   ambiguityHint,
   decodeDragTarget,
@@ -335,10 +335,15 @@ function CarriedStrip({
           const from = formatDayMonth(entry.task.scheduled ?? null);
           return (
             <li key={entry.task.id} className={`today__row today__carried-row ${busy ? "today__row--busy" : ""}`}>
-              <button type="button" className="linklike today__carried-title" onClick={() => onOpen(entry.task)}>
+              <div className="today__carried-main">
                 <span className="today__carried-project">{entry.project.title}</span>
-                <span>{entry.task.title}</span>
-              </button>
+                <span className="today__carried-line">
+                  {entry.task.status === "doing" && <span className="statusmark statusmark--doing" role="img" aria-label="In progress" title="In progress" />}
+                  <button type="button" className="linklike today__carried-title" onClick={() => onOpen(entry.task)}>
+                    {entry.task.title}
+                  </button>
+                </span>
+              </div>
               {from !== "" && (
                 <span className="chip" title={`Scheduled for ${entry.task.scheduled}`}>
                   {from}
@@ -685,6 +690,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const [entryInfo, setEntryInfo] = useState<DailyEntryInfo>({ exists: false, path: null });
   const [quick, setQuick] = useState<QuickAddState>({ open: false, projectId: "", text: "", busy: false, error: null });
   const [creatingNote, setCreatingNote] = useState(false);
+  const [modeSlot, setModeSlot] = useState<HTMLElement | null>(null);
   const [kept, setKept] = useState<string[]>(() => parseDismissedOutOfSync(readStored(KEPT_TASKS_KEY)));
   const narrow = useNarrow();
 
@@ -947,6 +953,27 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
       if (result.recurred === true) onNotice(recurrenceNotice(result.task));
     });
 
+  const onToggleDoing = (node: OutlineNode) =>
+    withRefresh(async () => {
+      const next = doingTarget(node.status);
+      if (next === null) return;
+      await patchBoardItem(targetOfNode(node), { status: next });
+    });
+
+  const toggleDoing = async (task: BoardTask) => {
+    const next = doingTarget(task.status);
+    if (next === null) return;
+    markBusy(task.id, true);
+    try {
+      await patchBoardItem(targetOfTask(task), { status: next });
+    } catch (err) {
+      failWith(err, "could not update the task");
+    } finally {
+      markBusy(task.id, false);
+      await refresh();
+    }
+  };
+
   const onAddNote = (node: OutlineNode, text: string) =>
     withRefresh(async () => {
       await addBoardNote(targetOfNode(node), text);
@@ -1142,12 +1169,20 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
         <BoardActionsMenu label="More actions" items={menuItems} />
       </header>
 
-      <div className="today__tabs" role="tablist" aria-label="Today sections">
-        {tabs.map((item) => (
-          <button key={item.id} type="button" role="tab" aria-selected={effectiveTab === item.id} className={`pill ${effectiveTab === item.id ? "pill--on" : ""}`} onClick={() => setTab(item.id)}>
-            {item.label}
-          </button>
-        ))}
+      <div className="today__bar">
+        <div className="today__tabs" role="tablist" aria-label="Today sections">
+          {tabs.map((item) => (
+            <button key={item.id} type="button" role="tab" aria-selected={effectiveTab === item.id} className={`pill ${effectiveTab === item.id ? "pill--on" : ""}`} onClick={() => setTab(item.id)}>
+              {item.label}
+            </button>
+          ))}
+        </div>
+        {effectiveTab === "note" && (
+          <>
+            <span className="today__sep" role="separator" aria-orientation="vertical" />
+            <div className="today__modes" ref={setModeSlot} />
+          </>
+        )}
       </div>
 
       {failure !== null && (
@@ -1173,6 +1208,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
           subscribeDaily={subscribeDaily}
           subscribeBoard={subscribeBoard}
           embedded
+          modeSlot={modeSlot}
           date={date}
           onEntryChange={setEntryInfo}
         />
@@ -1256,6 +1292,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                     onOutdent={onOutdent}
                     onMove={onMove}
                     onToggleDone={onToggleDone}
+                    onToggleDoing={onToggleDoing}
                     onAddNote={onAddNote}
                     onOpen={openNode}
                     onTomorrow={(node) => onShift(node, tomorrow)}
@@ -1408,6 +1445,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                 busyIds={busyIds}
                 onSchedule={(task, target) => void scheduleTo(task, target)}
                 onDone={(task) => void markDone(task)}
+                onDoing={(task) => void toggleDoing(task)}
                 onOpen={(task) => setDrawerId(task.id)}
                 onDragActive={(active) => {
                   setDragging(active);

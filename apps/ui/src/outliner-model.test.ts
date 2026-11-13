@@ -5,6 +5,8 @@ import {
   canIndent,
   canMove,
   canOutdent,
+  checkState,
+  doingTarget,
   findNode,
   flattenVisible,
   keyIntent,
@@ -128,6 +130,22 @@ describe("addDays", () => {
   });
 });
 
+describe("doing helpers", () => {
+  it("toggles only between todo and doing", () => {
+    assert.equal(doingTarget("todo"), "doing");
+    assert.equal(doingTarget("doing"), "todo");
+    for (const status of ["done", "blocked", "hold", "archived"] as const) assert.equal(doingTarget(status), null, status);
+  });
+
+  it("maps statuses to the three checkbox states", () => {
+    assert.equal(checkState("todo"), "unchecked");
+    assert.equal(checkState("blocked"), "unchecked");
+    assert.equal(checkState("hold"), "unchecked");
+    assert.equal(checkState("doing"), "mixed");
+    assert.equal(checkState("done"), "checked");
+  });
+});
+
 describe("keyIntent in view mode", () => {
   it("maps navigation keys", () => {
     assert.equal(keyIntent(key("ArrowDown"), "view"), "next");
@@ -149,6 +167,7 @@ describe("keyIntent in view mode", () => {
   it("maps action keys", () => {
     assert.equal(keyIntent(key("o"), "view"), "open");
     assert.equal(keyIntent(key("m"), "view"), "tomorrow");
+    assert.equal(keyIntent(key("s"), "view"), "toggle-doing");
     assert.equal(keyIntent(key("Delete"), "view"), "unschedule");
     assert.equal(keyIntent(key("Backspace"), "view"), "unschedule");
   });
@@ -161,6 +180,9 @@ describe("keyIntent in view mode", () => {
     assert.equal(keyIntent(key("j", { ctrlKey: true }), "view"), null);
     assert.equal(keyIntent(key("m", { altKey: true }), "view"), null);
     assert.equal(keyIntent(key("o", { metaKey: true }), "view"), null);
+    assert.equal(keyIntent(key("s", { ctrlKey: true }), "view"), null);
+    assert.equal(keyIntent(key("s", { altKey: true }), "view"), null);
+    assert.equal(keyIntent(key("s", { shiftKey: true }), "view"), null);
     assert.equal(keyIntent(key("Delete", { shiftKey: true }), "view"), null);
     assert.equal(keyIntent(key("x"), "view"), null);
     assert.equal(keyIntent(key("Escape"), "view"), null);
@@ -191,7 +213,7 @@ describe("keyIntent in edit mode", () => {
   });
 
   it("leaves typing keys alone so the input behaves like text", () => {
-    for (const name of ["j", "k", "o", "m", "Delete", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "a"]) {
+    for (const name of ["j", "k", "o", "m", "s", "Delete", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "a"]) {
       assert.equal(keyIntent(key(name), "edit"), null, name);
     }
   });

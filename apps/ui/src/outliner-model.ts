@@ -41,6 +41,7 @@ export type OutlineIntent =
   | "move-up"
   | "move-down"
   | "toggle-done"
+  | "toggle-doing"
   | "add-note"
   | "open"
   | "next"
@@ -199,6 +200,18 @@ export function subtreeEnd(nodes: readonly OutlineNode[], index: number): number
   return end;
 }
 
+export function doingTarget(status: OutlineStatus): "doing" | "todo" | null {
+  if (status === "todo") return "doing";
+  if (status === "doing") return "todo";
+  return null;
+}
+
+export function checkState(status: OutlineStatus): "unchecked" | "mixed" | "checked" {
+  if (status === "done") return "checked";
+  if (status === "doing") return "mixed";
+  return "unchecked";
+}
+
 export function keyIntent(event: KeyEventLike, mode: OutlineMode): OutlineIntent | null {
   const mod = event.ctrlKey || event.metaKey;
   const { key, altKey, shiftKey } = event;
@@ -228,6 +241,7 @@ export function keyIntent(event: KeyEventLike, mode: OutlineMode): OutlineIntent
   if (key === "k") return "prev";
   if (key === "o") return "open";
   if (key === "m") return "tomorrow";
+  if (key === "s") return "toggle-doing";
   if (key === "Delete" || key === "Backspace") return "unschedule";
   return null;
 }

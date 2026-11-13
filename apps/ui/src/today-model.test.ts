@@ -199,6 +199,7 @@ describe("backlogKeyIntent", () => {
     assert.equal(backlogKeyIntent(key("t")), "today");
     assert.equal(backlogKeyIntent(key("M")), "tomorrow");
     assert.equal(backlogKeyIntent(key("d")), "done");
+    assert.equal(backlogKeyIntent(key("s")), "doing");
     assert.equal(backlogKeyIntent(key("Enter")), "open");
     assert.equal(backlogKeyIntent(key("ArrowDown")), "next");
     assert.equal(backlogKeyIntent(key("k")), "prev");
@@ -206,6 +207,7 @@ describe("backlogKeyIntent", () => {
 
   it("ignores modified keys and unknown keys", () => {
     assert.equal(backlogKeyIntent(key("t", { ctrlKey: true })), null);
+    assert.equal(backlogKeyIntent(key("s", { ctrlKey: true })), null);
     assert.equal(backlogKeyIntent(key("Enter", { shiftKey: true })), null);
     assert.equal(backlogKeyIntent(key("x")), null);
   });

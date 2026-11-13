@@ -2763,7 +2763,7 @@ function focusItems(doc: ParsedDoc, range: FocusRange, projects: BoardProject[])
   return items;
 }
 
-function placeInFocus(doc: ParsedDoc, settings: DelegationSettings, block: DocLine[], projectId: string, projects: BoardProject[]): number {
+function placeInFocus(doc: ParsedDoc, settings: DelegationSettings, block: DocLine[], projectId: string, projects: BoardProject[], keepPlaceholders: boolean): number {
   const texts = textsOf(doc);
   const range = focusRange(texts, settings);
   if (!range) {
@@ -2778,6 +2778,10 @@ function placeInFocus(doc: ParsedDoc, settings: DelegationSettings, block: DocLi
   if (contentIndexes.every((index) => isPlaceholderLine(texts[index] ?? ""))) {
     const at = contentIndexes[0] as number;
     const lastPlaceholder = contentIndexes[contentIndexes.length - 1] as number;
+    if (keepPlaceholders) {
+      doc.lines.splice(lastPlaceholder + 1, 0, ...block);
+      return lastPlaceholder + 1;
+    }
     doc.lines.splice(at, lastPlaceholder - at + 1, ...block);
     return at;
   }
@@ -2830,7 +2834,7 @@ export function addTaskToDaily(settings: DelegationSettings, input: AddToDailyIn
   const line = `- [${CHECKBOX_MARK[checkboxForStatus(task.status)]}] ${label} - ${task.title}`;
   const children = topLevel ? subtaskDailyLines(task.subtasks, 1) : [];
   const doc = openDoc(daily.content);
-  const at = placeInFocus(doc, settings, [line, ...children].map(docLine), project.id, loaded.projects);
+  const at = placeInFocus(doc, settings, [line, ...children].map(docLine), project.id, loaded.projects, mirrorsFocus(settings) && date >= localDate());
   writeDaily(settings, date, renderDoc(doc), daily.updatedAt ?? undefined);
   return { date, line: at, raw: line, subtasks: children.length };
 }
@@ -2865,8 +2869,20 @@ function recurredItemMarks(entries: FocusEntry[], task: BoardTask): DailyMark[] 
   return entries.filter((entry) => entry.recurred && entry.match.task?.id === task.id).map((entry) => ({ line: entry.line, checkbox: entry.checkbox, wanted: "done" }));
 }
 
+export function mirrorsFocus(settings: DelegationSettings): boolean {
+  return settings.features.daily && settings.features.tasks && (settings.daily.focusSource ?? "scheduled") === "scheduled";
+}
+
+export type DailyLineFilter = (scan: FocusScan, content: string) => ReadonlySet<number>;
+
+export class AmbiguousDailyLineError extends Error {
+  constructor() {
+    super("the daily line is ambiguous: the task has more than one line or the line is duplicated");
+  }
+}
+
 function syncTodayAfterTaskWrite(settings: DelegationSettings, task: BoardTask, recurred: boolean): boolean {
-  if (!settings.features.daily || !settings.features.tasks) return false;
+  if (!settings.features.daily || !settings.features.tasks || mirrorsFocus(settings)) return false;
   try {
     const root = requireBoardRoot(settings);
     const date = localDate();
@@ -2889,7 +2905,7 @@ export function writeBoardTaskSynced(settings: DelegationSettings, input: BoardW
   return { ...result, dailySynced: marksSynced || mirrored };
 }
 
-export function syncTaskToDaily(settings: DelegationSettings, input: SyncDailyInput): SyncDailyResult {
+export function syncTaskToDaily(settings: DelegationSettings, input: SyncDailyInput, filter?: DailyLineFilter): SyncDailyResult {
   const root = requireBothFeatures(settings);
   const date = input.date ?? localDate();
   requireDailyDate(date);
@@ -2900,7 +2916,10 @@ export function syncTaskToDaily(settings: DelegationSettings, input: SyncDailyIn
   const { loaded, tasks } = collectBoard(root, settings.tasks);
   const scan = scanDaily(settings, date, daily.content, loaded.projects, tasks);
   if (!scan.links.some((link) => link.task.id === task.id)) throw new NotFoundError("the task is not in the daily");
-  return { date, updated: writeDailyMarks(settings, daily, linksOfTask(scan.links, task, true).map(syncedMark)) };
+  const allowed = filter ? filter(scan, daily.content) : null;
+  const links = linksOfTask(scan.links, task, true).filter((link) => allowed === null || allowed.has(link.line));
+  if (allowed !== null && !links.some((link) => link.task.id === task.id)) throw new AmbiguousDailyLineError();
+  return { date, updated: writeDailyMarks(settings, daily, links.map(syncedMark)) };
 }
 
 export interface DailyStatusChange {
@@ -2966,7 +2985,7 @@ function dailyStatusChanges(settings: DelegationSettings, date: string, before: 
 }
 
 function syncsDaily(settings: DelegationSettings, date: string): boolean {
-  return settings.features.daily && settings.features.tasks && date === localDate();
+  return settings.features.daily && settings.features.tasks && !mirrorsFocus(settings) && date === localDate();
 }
 
 export function dailySyncBaseline(settings: DelegationSettings, date: string): string | null {
@@ -2997,10 +3016,12 @@ export function syncTasksFromDaily(settings: DelegationSettings, date: string, b
   return applied;
 }
 
-function entryStatusChanges(entry: FocusEntry): DailyStatusChange[] {
+function entryStatusChanges(entry: FocusEntry, allowed: ReadonlySet<number> | null): DailyStatusChange[] {
   if (entry.held || !entry.match.task) return [];
   const lines: { task: BoardTask; checkbox: BoardCheckbox }[] = [
-    ...(entry.recurring ? [] : entry.children.flatMap((child) => (child.task ? [{ task: child.task, checkbox: child.checkbox }] : []))),
+    ...(entry.recurring
+      ? []
+      : entry.children.flatMap((child) => (child.task && (allowed === null || allowed.has(child.line)) ? [{ task: child.task, checkbox: child.checkbox }] : []))),
     { task: entry.match.task, checkbox: entry.checkbox },
   ];
   const seen = new Set<string>();
@@ -3014,7 +3035,7 @@ function entryStatusChanges(entry: FocusEntry): DailyStatusChange[] {
   return changes;
 }
 
-export function syncTaskFromDaily(settings: DelegationSettings, input: SyncFromDailyInput): SyncFromDailyResult {
+export function syncTaskFromDaily(settings: DelegationSettings, input: SyncFromDailyInput, filter?: DailyLineFilter): SyncFromDailyResult {
   const root = requireBothFeatures(settings);
   const date = input.date ?? localDate();
   requireDailyDate(date);
@@ -3026,10 +3047,12 @@ export function syncTaskFromDaily(settings: DelegationSettings, input: SyncFromD
   const entry = scan.entries.find((candidate) => candidate.line === input.line);
   if (!entry) throw new NotFoundError("no focus item at that line of the daily");
   if (!entry.match.task) throw new NotFoundError("the daily item links to no task");
+  const allowed = filter ? filter(scan, daily.content) : null;
+  if (allowed !== null && !allowed.has(entry.line)) throw new AmbiguousDailyLineError();
   const failed: SyncFailure[] = [];
   const errors: unknown[] = [];
   let updated = 0;
-  for (const change of entryStatusChanges(entry)) {
+  for (const change of entryStatusChanges(entry, allowed)) {
     try {
       applyStatusChange(settings, change);
       updated += 1;

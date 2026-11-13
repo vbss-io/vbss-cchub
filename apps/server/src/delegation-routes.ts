@@ -41,7 +41,6 @@ import {
   generateDaily,
   isValidDailyDate,
   listDiaryDates,
-  organizeDailyFocus,
   parseTaskLines,
   readDaily,
   readFrontmatterKey,
@@ -59,9 +58,9 @@ import {
   addBoardNote,
   addTaskToDaily,
   AlreadyInDailyError,
+  AmbiguousDailyLineError,
   BOARD_STATUSES,
   createBoardTask,
-  dailySyncBaseline,
   composeBoardFor,
   dailyTaskLinks,
   deleteBoardNote,
@@ -73,13 +72,11 @@ import {
   reparentBoardTask,
   TaskConflictError,
   sweepDoneTasks,
-  syncTaskFromDaily,
-  syncTasksFromDaily,
-  syncTaskToDaily,
   watchTasksBoard,
   writeBoardTaskSynced,
   type BoardStatus,
 } from "./tasks-board.js";
+import { closeDailyTicks, organizeFocusChecked, saveDailyFromClient, syncTaskFromDailyChecked, syncTaskToDailyChecked } from "./today.js";
 import { flushTrail, trailStatus } from "./trail.js";
 import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus, WorktreeError } from "./worktrees.js";
 import { portRangeOf } from "./task-ports.js";
@@ -823,7 +820,7 @@ export function delegationRouter(): Router {
       res.status(409).json({ error: err.message, current: err.current });
       return;
     }
-    if (err instanceof AlreadyInDailyError) {
+    if (err instanceof AlreadyInDailyError || err instanceof AmbiguousDailyLineError) {
       res.status(409).json({ error: err.message });
       return;
     }
@@ -1031,7 +1028,7 @@ export function delegationRouter(): Router {
     const body = (req.body ?? {}) as Record<string, unknown>;
     try {
       const target = boardTarget(body);
-      res.json(syncTaskToDaily(getSettings(), { ...target, date: asString(body.date) }));
+      res.json(syncTaskToDailyChecked(getSettings(), { ...target, date: asString(body.date) }));
     } catch (err) {
       sendBoardError(res, err);
     }
@@ -1043,7 +1040,7 @@ export function delegationRouter(): Router {
       if (typeof body.line !== "number" || !Number.isInteger(body.line) || body.line < 0) {
         throw new BadRequestError("line must be a non-negative integer");
       }
-      res.json(syncTaskFromDaily(getSettings(), { line: body.line, date: asString(body.date) }));
+      res.json(syncTaskFromDailyChecked(getSettings(), { line: body.line, date: asString(body.date) }));
     } catch (err) {
       sendBoardError(res, err);
     }
@@ -1133,11 +1130,7 @@ export function delegationRouter(): Router {
       writeId = body.writeId;
     }
     try {
-      const settings = getSettings();
-      const baseline = dailySyncBaseline(settings, req.params.date);
-      const written = writeDaily(settings, req.params.date, body.content, baseUpdatedAt, writeId, "client");
-      if (baseline !== null) syncTasksFromDaily(settings, req.params.date, baseline, body.content);
-      res.json(written);
+      res.json(saveDailyFromClient(getSettings(), req.params.date, body.content, baseUpdatedAt, writeId));
     } catch (err) {
       if (err instanceof DailyConflictError) {
         res.status(409).json({ error: err.message, content: err.content, updatedAt: err.updatedAt });
@@ -1156,7 +1149,7 @@ export function delegationRouter(): Router {
     const baseUpdatedAt = typeof body.baseUpdatedAt === "number" ? body.baseUpdatedAt : undefined;
     try {
       const settings = getSettings();
-      res.json(organizeDailyFocus(settings, req.params.date, composeBoardFor(settings), baseUpdatedAt));
+      res.json(organizeFocusChecked(settings, req.params.date, composeBoardFor(settings), baseUpdatedAt));
     } catch (err) {
       if (err instanceof DailyConflictError) {
         res.status(409).json({ error: err.message, content: err.content, updatedAt: err.updatedAt });
@@ -1261,8 +1254,7 @@ export function delegationRouter(): Router {
       let content = existing.content;
       for (const task of tasks) content = setTaskChecked(content, task.line, task.checked);
       content = setFrontmatterKey(content, settings.daily.closedKey, req.params.date);
-      const written = writeDaily(settings, yesterday, content);
-      syncTasksFromDaily(settings, yesterday, existing.content, content);
+      const written = closeDailyTicks(settings, yesterday, existing.content, content);
       res.json({ date: yesterday, updatedAt: written.updatedAt, closed: true });
     } catch (err) {
       sendError(res, err);

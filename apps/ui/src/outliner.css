@@ -119,6 +119,10 @@
   cursor: pointer;
 }
 
+.outliner__check[aria-checked="mixed"] {
+  accent-color: var(--go);
+}
+
 .outliner__check--ghost {
   border: 1px dashed var(--border-2);
   border-radius: 4px;

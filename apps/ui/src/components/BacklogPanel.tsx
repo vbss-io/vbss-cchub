@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent,
 import "../today.css";
 import { BOARD_STATUS_LABEL, dueTone, formatDayMonth, projectOptions, subtaskProgress } from "../board-model";
 import type { BoardProject, BoardTask } from "../delegation";
+import { doingTarget } from "../outliner-model";
 import {
   BACKLOG_STATUSES,
   BACKLOG_STATUS_LABEL,
@@ -26,6 +27,7 @@ interface BacklogPanelProps {
   busyIds: ReadonlySet<string>;
   onSchedule: (task: BoardTask, date: string) => void;
   onDone: (task: BoardTask) => void;
+  onDoing: (task: BoardTask) => void;
   onOpen: (task: BoardTask) => void;
   onDragActive: (active: boolean) => void;
   nextDate: string;
@@ -33,7 +35,7 @@ interface BacklogPanelProps {
 
 const priorityTone = (priority: number): number => Math.min(priority, 3);
 
-export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, today, busyIds, onSchedule, onDone, onOpen, onDragActive, nextDate }: BacklogPanelProps) {
+export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, today, busyIds, onSchedule, onDone, onDoing, onOpen, onDragActive, nextDate }: BacklogPanelProps) {
   const [filters, setFilters] = useState<BacklogFilters>(DEFAULT_BACKLOG_FILTERS);
   const [activeId, setActiveId] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLElement>());
@@ -93,7 +95,10 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
     restoreFocus.current = true;
     if (intent === "today") onSchedule(task, date);
     else if (intent === "tomorrow") onSchedule(task, nextDate);
-    else onDone(task);
+    else if (intent === "doing") {
+      if (doingTarget(task.status) === null) restoreFocus.current = false;
+      else onDoing(task);
+    } else onDone(task);
   };
 
   const onDragStart = (event: ReactDragEvent<HTMLElement>, task: BoardTask) => {
@@ -207,6 +212,7 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
                   onDragStart={(event) => onDragStart(event, task)}
                   onDragEnd={() => onDragActive(false)}
                 >
+                  {task.status === "doing" && <span className="statusmark statusmark--doing" role="img" aria-label="In progress" title="In progress" />}
                   <button type="button" className="backlog__title" tabIndex={-1} onClick={() => onOpen(task)}>
                     {task.title}
                   </button>
@@ -228,7 +234,7 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
           </div>
         ))}
       </div>
-      {total > 0 && <p className="backlog__keys">T today - M tomorrow - D done - Enter open - drag to Focus</p>}
+      {total > 0 && <p className="backlog__keys">T today - M tomorrow - S start - D done - Enter open - drag to Focus</p>}
     </section>
   );
 }

@@ -6,6 +6,8 @@ import {
   canIndent,
   canMove,
   canOutdent,
+  checkState,
+  doingTarget,
   findNode,
   flattenNodes,
   flattenVisible,
@@ -34,6 +36,7 @@ export interface FocusOutlinerProps {
   onOutdent: (node: OutlineNode) => Promise<void>;
   onMove: (node: OutlineNode, dir: "up" | "down") => Promise<void>;
   onToggleDone: (node: OutlineNode) => Promise<void>;
+  onToggleDoing?: (node: OutlineNode) => Promise<void>;
   onAddNote: (node: OutlineNode, text: string) => Promise<void>;
   onOpen: (node: OutlineNode) => void;
   onTomorrow: (node: OutlineNode) => Promise<void>;
@@ -130,6 +133,7 @@ export function FocusOutliner({
   onOutdent,
   onMove,
   onToggleDone,
+  onToggleDoing,
   onAddNote,
   onOpen,
   onTomorrow,
@@ -317,6 +321,11 @@ export function FocusOutliner({
         await run(node.id, () => onToggleDone(node));
         focusRow(node.id);
         return;
+      case "toggle-doing":
+        setMenuId(null);
+        if (onToggleDoing !== undefined && doingTarget(node.status) !== null) await run(node.id, () => onToggleDoing(node));
+        focusRow(node.id);
+        return;
       case "tomorrow":
         setMenuId(null);
         await run(node.id, () => onTomorrow(node));
@@ -370,6 +379,7 @@ export function FocusOutliner({
     if (intent === null) return;
     if (intent === "indent" && !canIndent(groups, node)) return;
     if (intent === "outdent" && !canOutdent(node)) return;
+    if (intent === "toggle-doing" && (onToggleDoing === undefined || doingTarget(node.status) === null)) return;
     event.preventDefault();
     void perform(intent, node, false);
   };
@@ -441,6 +451,16 @@ export function FocusOutliner({
   };
 
   const menuActions = (node: OutlineNode): MenuAction[] => [
+    ...(onToggleDoing === undefined
+      ? []
+      : [
+          {
+            key: "toggle-doing",
+            label: node.status === "doing" ? "Back to to-do" : "Start",
+            intent: "toggle-doing" as const,
+            disabled: doingTarget(node.status) === null,
+          },
+        ]),
     { key: "tomorrow", label: "Tomorrow", intent: "tomorrow", disabled: false },
     { key: "unschedule", label: "Remove from today", intent: "unschedule", disabled: false },
     { key: "add-note", label: "Add note", intent: "add-note", disabled: false },
@@ -495,6 +515,8 @@ export function FocusOutliner({
     const error = errors[node.id];
     const note = noteDraft !== null && noteDraft.id === node.id ? noteDraft : null;
     const done = node.status === "done";
+    const state = checkState(node.status);
+    const checkLabel = done ? `Reopen ${node.title}` : state === "mixed" ? `Complete ${node.title} (in progress)` : `Complete ${node.title}`;
     return (
       <div
         key={node.id}
@@ -520,10 +542,14 @@ export function FocusOutliner({
           <input
             type="checkbox"
             className="outliner__check"
+            ref={(element) => {
+              if (element !== null) element.indeterminate = state === "mixed";
+            }}
             checked={done}
             disabled={rowBusy}
             tabIndex={-1}
-            aria-label={done ? `Reopen ${node.title}` : `Complete ${node.title}`}
+            aria-checked={state === "mixed" ? "mixed" : done}
+            aria-label={checkLabel}
             onChange={() => void perform("toggle-done", node, isEditing)}
           />
           {isEditing ? (

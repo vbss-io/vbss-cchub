@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { DailyStreamEvent, TasksBoardStreamEvent } from "../api";
 import { BoardTaskPicker } from "../components/BoardTaskPicker";
 import { DailyTasksCheck } from "../components/DailyTasksCheck";
@@ -48,6 +49,7 @@ interface Props {
   subscribeDaily: (listener: (event: DailyStreamEvent) => void) => () => void;
   subscribeBoard: (listener: (event: TasksBoardStreamEvent) => void) => () => void;
   embedded?: boolean;
+  modeSlot?: HTMLElement | null;
   date?: string;
   onEntryChange?: (info: DailyEntryInfo) => void;
 }
@@ -485,7 +487,7 @@ function DailyWizard(props: DailyWizardProps) {
   );
 }
 
-export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily, subscribeBoard, embedded = false, date: externalDate, onEntryChange }: Props) {
+export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily, subscribeBoard, embedded = false, modeSlot, date: externalDate, onEntryChange }: Props) {
   const [overview, setOverview] = useState<DailyOverview | null>(null);
   const [overviewFailed, setOverviewFailed] = useState<"stale-hub" | "error" | null>(null);
   const [date, setDate] = useState<string | null>(null);
@@ -1048,7 +1050,8 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
 
   return (
     <div className={embedded ? "view view--embedded" : "view"}>
-      {embedded && (
+      {embedded && modeSlot !== undefined && modeSlot !== null && createPortal(<>{modePills}{runningChip}</>, modeSlot)}
+      {embedded && modeSlot === undefined && (
         <div className="daily__toolbar">
           {modePills}
           <span className="spacer" />

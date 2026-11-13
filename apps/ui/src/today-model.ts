@@ -23,7 +23,7 @@ export interface BacklogFilters {
 
 export const DEFAULT_BACKLOG_FILTERS: BacklogFilters = { search: "", projectId: null, statuses: ["todo", "doing", "blocked"] };
 
-export type BacklogIntent = "today" | "tomorrow" | "done" | "open" | "next" | "prev";
+export type BacklogIntent = "today" | "tomorrow" | "done" | "doing" | "open" | "next" | "prev";
 
 export interface QuickAdd {
   title: string;
@@ -164,6 +164,9 @@ export function backlogKeyIntent(event: KeyEventLike): BacklogIntent | null {
     case "d":
     case "D":
       return "done";
+    case "s":
+    case "S":
+      return "doing";
     case "Enter":
       return "open";
     case "ArrowDown":

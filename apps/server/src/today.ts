@@ -6,6 +6,7 @@ import {
   findHeadingIndex,
   isPlaceholderLine,
   isValidDailyDate,
+  organizeDailyFocus,
   readDaily,
   renderFocusLines,
   renderTemplate,
@@ -16,6 +17,8 @@ import {
   type ComposeFocusItem,
   type DailyReadResult,
   type DailyWriteOrigin,
+  type DailyWriteResult,
+  type OrganizeDailyFocusResult,
 } from "./daily.js";
 import { BadRequestError, NotFoundError } from "./delegation-launch.js";
 import { getSetting, getSettings, getTodayBaseline, saveTodayBaseline, setSetting } from "./delegation-store.js";
@@ -23,15 +26,18 @@ import type { DelegationSettings, FocusSource } from "./delegation-types.js";
 import { localDate } from "./second-brain.js";
 import {
   applyStatusChange,
+  BOARD_STATUSES,
   checkboxForStatus,
   collectBoard,
   composeBoardFrom,
   createBoardTask,
+  dailySyncBaseline,
   docLine,
   effectiveProjectOrder,
   flattenTasks,
   focusRange,
   joinReason,
+  mirrorsFocus,
   normalizeText,
   openDoc,
   renderDoc,
@@ -39,6 +45,9 @@ import {
   scanDaily,
   setBoardHooks,
   statusFromCheckbox,
+  syncTaskFromDaily,
+  syncTasksFromDaily,
+  syncTaskToDaily,
   taskNeedle,
   writeBoardTask,
   type BoardCheckbox,
@@ -48,6 +57,10 @@ import {
   type DocLine,
   type FocusScan,
   type ParsedDoc,
+  type SyncDailyInput,
+  type SyncDailyResult,
+  type SyncFromDailyInput,
+  type SyncFromDailyResult,
 } from "./tasks-board.js";
 
 export interface TodayProject {
@@ -181,6 +194,7 @@ const BQUOTE_RE = /^\s{0,3}>\s?/;
 const SCHEDULED_DATE_RE = /\u23F3\uFE0F?\s*(\d{4}-\d{2}-\d{2})/g;
 const PROMOTE_ARROW = "\u2192";
 const SUBTASK_INDENT = "  ";
+const WORD_RE = /[\p{L}\p{N}]{3,}/gu;
 const KEY_SEPARATOR = "\u0000";
 const CAPTURE_MAX = 2000;
 const SEEN_LIMIT = 400;
@@ -198,7 +212,7 @@ export function focusSourceOf(settings: DelegationSettings): FocusSource {
 }
 
 function isScheduledMode(settings: DelegationSettings): boolean {
-  return focusSourceOf(settings) === "scheduled" && settings.features.daily && settings.features.tasks;
+  return mirrorsFocus(settings);
 }
 
 function isCurrentOrFuture(date: string): boolean {
@@ -298,16 +312,6 @@ function lineKeys(texts: string[]): string[] {
   });
 }
 
-function checkboxesByKey(texts: string[]): Map<string, BoardCheckbox> {
-  const keys = lineKeys(texts);
-  const out = new Map<string, BoardCheckbox>();
-  texts.forEach((text, index) => {
-    const checkbox = checkboxOfLine(text);
-    if (checkbox !== null) out.set(keys[index] as string, checkbox);
-  });
-  return out;
-}
-
 function keepsEveryLine(before: string, after: string): boolean {
   const next = splitLines(after).map(unmarkedText);
   let at = 0;
@@ -334,6 +338,11 @@ interface MarkMemo {
   checkbox: BoardCheckbox;
   task: string;
   id: string;
+  title?: string;
+  line?: number;
+  parent?: string;
+  index?: number;
+  loose?: boolean;
 }
 
 interface SeenTask {
@@ -345,6 +354,8 @@ interface StoredOutOfSync {
   line: string;
   task: string;
   checkbox: BoardCheckbox;
+  title?: string;
+  status?: BoardStatus;
 }
 
 interface StoredDuplicate {
@@ -358,6 +369,7 @@ interface BaselineState {
   focus: SeenTask[];
   outOfSync: StoredOutOfSync[];
   duplicates: StoredDuplicate[];
+  known: string[];
 }
 
 interface Baseline {
@@ -373,6 +385,24 @@ function isCheckbox(value: unknown): value is BoardCheckbox {
   return value === "todo" || value === "doing" || value === "done";
 }
 
+function isStatus(value: unknown): value is BoardStatus {
+  return typeof value === "string" && (BOARD_STATUSES as readonly string[]).includes(value);
+}
+
+function memoExtras(memo: Record<string, unknown>): Partial<MarkMemo> {
+  return {
+    ...(typeof memo.title === "string" ? { title: memo.title } : {}),
+    ...(typeof memo.line === "number" ? { line: memo.line } : {}),
+    ...(typeof memo.parent === "string" ? { parent: memo.parent } : {}),
+    ...(typeof memo.index === "number" ? { index: memo.index } : {}),
+    ...(memo.loose === true ? { loose: true } : {}),
+  };
+}
+
+function parseStrings(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item: unknown): item is string => typeof item === "string") : [];
+}
+
 function parseState(raw: string): BaselineState | null {
   let value: unknown;
   try {
@@ -385,18 +415,33 @@ function parseState(raw: string): BaselineState | null {
   if (isRecord(value.marks)) {
     for (const [key, memo] of Object.entries(value.marks)) {
       if (isRecord(memo) && isCheckbox(memo.checkbox) && typeof memo.task === "string" && typeof memo.id === "string") {
-        marks[key] = { checkbox: memo.checkbox, task: memo.task, id: memo.id };
+        marks[key] = { checkbox: memo.checkbox, task: memo.task, id: memo.id, ...memoExtras(memo) };
       }
     }
   }
-  return { marks, seen: parseSeen(value.seen), focus: parseSeen(value.focus), outOfSync: parseOutOfSync(value.outOfSync), duplicates: parseDuplicates(value.duplicates) };
+  return {
+    marks,
+    seen: parseSeen(value.seen),
+    focus: parseSeen(value.focus),
+    outOfSync: parseOutOfSync(value.outOfSync),
+    duplicates: parseDuplicates(value.duplicates),
+    known: parseStrings(value.known),
+  };
 }
 
 function parseOutOfSync(value: unknown): StoredOutOfSync[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item: unknown) =>
     isRecord(item) && typeof item.line === "string" && typeof item.task === "string" && isCheckbox(item.checkbox)
-      ? [{ line: item.line, task: item.task, checkbox: item.checkbox }]
+      ? [
+          {
+            line: item.line,
+            task: item.task,
+            checkbox: item.checkbox,
+            ...(typeof item.title === "string" ? { title: item.title } : {}),
+            ...(isStatus(item.status) ? { status: item.status } : {}),
+          },
+        ]
       : [],
   );
 }
@@ -462,13 +507,65 @@ function linkedLinesOf(scan: FocusScan): LinkedLine[] {
 
 const isSameTask = (memo: MarkMemo, task: BoardTask): boolean => memo.task === fingerprint(task) || memo.id === task.id;
 
-function memoMarks(content: string, scan: FocusScan): Record<string, MarkMemo> {
+interface Lineage {
+  parents: Map<string, BoardTask | null>;
+  siblings: Map<string, number>;
+}
+
+function lineageOf(data: BoardData): Lineage {
+  const siblings = new Map<string, number>();
+  const tops = new Map<string, number>();
+  const visit = (task: BoardTask, index: number): void => {
+    siblings.set(task.id, index);
+    task.subtasks.forEach((subtask, at) => visit(subtask, at));
+  };
+  for (const task of data.tasks) {
+    const index = tops.get(task.projectId) ?? 0;
+    tops.set(task.projectId, index + 1);
+    visit(task, index);
+  }
+  return { parents: parentMap(data.tasks), siblings };
+}
+
+function parentPrint(task: BoardTask, lineage: Lineage): string {
+  const parent = lineage.parents.get(task.id) ?? null;
+  return parent === null ? "" : fingerprint(parent);
+}
+
+function memoFor(task: BoardTask, checkbox: BoardCheckbox, lineage: Lineage, loose = false): MarkMemo {
+  return {
+    checkbox,
+    task: fingerprint(task),
+    id: task.id,
+    title: task.title,
+    line: task.line,
+    parent: parentPrint(task, lineage),
+    index: lineage.siblings.get(task.id) ?? 0,
+    ...(loose ? { loose: true } : {}),
+  };
+}
+
+function inScope(task: BoardTask, date: string, lineage: Lineage): boolean {
+  for (let current: BoardTask | null = task; current !== null; current = lineage.parents.get(current.id) ?? null) {
+    if (current.scheduled === date || inFocus(current, date)) return true;
+  }
+  return false;
+}
+
+const projectOfPrint = (print: string): string => print.split(KEY_SEPARATOR)[0] as string;
+
+function knownPrints(data: BoardData, marks: Record<string, MarkMemo>): string[] {
+  const projects = new Set(Object.values(marks).map((memo) => projectOfPrint(memo.task)));
+  return [...new Set(flattenTasks(data.tasks).filter((task) => projects.has(task.projectId)).map(fingerprint))];
+}
+
+function memoMarks(content: string, scan: FocusScan, date: string, lineage: Lineage): Record<string, MarkMemo> {
   const keys = lineKeys(splitLines(content));
   const marks: Record<string, MarkMemo> = {};
   for (const link of linkedLinesOf(scan)) {
     const key = keys[link.line];
-    if (key === undefined || link.effective === null) continue;
-    marks[key] = { checkbox: link.effective, task: fingerprint(link.task), id: link.task.id };
+    if (key === undefined || link.effective === null || !inScope(link.task, date, lineage)) continue;
+    marks[key] = memoFor(link.task, link.effective, lineage);
   }
   return marks;
 }
@@ -506,12 +603,14 @@ function focusMemory(focus: TodayEntry[]): SeenTask[] {
 
 function adoptBaseline(settings: DelegationSettings, date: string, path: string, content: string, data: BoardData): Baseline {
   const scan = scanDaily(settings, date, content, data.projects, data.tasks);
+  const marks = memoMarks(content, scan, date, lineageOf(data));
   const state: BaselineState = {
-    marks: memoMarks(content, scan),
+    marks,
     seen: mergeSeen([], linkedTasks(scan)),
     focus: focusMemory(computeFocus(settings, data, date)),
     outOfSync: [],
     duplicates: [],
+    known: knownPrints(data, marks),
   };
   const baseline: Baseline = { content, state };
   storeBaseline(date, path, baseline);
@@ -983,11 +1082,14 @@ function openLinesOf(scan: FocusScan): Map<number, OpenLine> {
 
 interface SyncLink extends LinkedLine {
   base: number | undefined;
+  tracked: boolean;
+  remembered: boolean;
 }
 
 interface PendingOutOfSync {
   line: number;
-  task: BoardTask;
+  task: BoardTask | null;
+  memo: MarkMemo | null;
   checkbox: BoardCheckbox;
 }
 
@@ -996,30 +1098,75 @@ interface TickPlan {
   baseKeys: string[];
   links: SyncLink[];
   continued: Map<number, BoardTask>;
+  carried: Map<number, MarkMemo>;
   outOfSync: PendingOutOfSync[];
   copies: Set<string>;
+}
+
+interface Identity {
+  task: BoardTask | null;
+  memo: MarkMemo | null;
+}
+
+interface ResolveContext {
+  data: BoardData;
+  lineage: Lineage;
+  prints: PrintIndex;
+  known: ReadonlySet<string>;
+  claimed: ReadonlySet<string>;
+}
+
+function resolveMemo(memo: MarkMemo, context: ResolveContext): BoardTask | null {
+  const found = taskOfPrint(context.prints, memo.task);
+  if (found !== null) return found;
+  if (memo.line === undefined || memo.parent === undefined || memo.index === undefined || context.known.size === 0) return null;
+  const projectId = projectOfPrint(memo.task);
+  const candidates = flattenTasks(context.data.tasks).filter(
+    (task) =>
+      task.projectId === projectId &&
+      !context.known.has(fingerprint(task)) &&
+      !context.claimed.has(task.id) &&
+      parentPrint(task, context.lineage) === memo.parent &&
+      (task.line === memo.line || context.lineage.siblings.get(task.id) === memo.index),
+  );
+  return candidates.length === 1 ? (candidates[0] as BoardTask) : null;
+}
+
+function coversTitle(needle: string, title: string): boolean {
+  const words = new Set(normalizeText(title).match(WORD_RE) ?? []);
+  if (words.size === 0) return false;
+  const have = new Set(needle.match(WORD_RE) ?? []);
+  return [...words].every((word) => have.has(word));
 }
 
 function planTicks(settings: DelegationSettings, date: string, baseline: Baseline, texts: string[], scan: FocusScan, data: BoardData): TickPlan {
   const baseTexts = splitLines(baseline.content);
   const baseKeys = lineKeys(baseTexts);
-  const prints = printIndex(data);
+  const lineage = lineageOf(data);
+  const context: ResolveContext = {
+    data,
+    lineage,
+    prints: printIndex(data),
+    known: new Set(baseline.state.known),
+    claimed: new Set(scan.links.map((link) => link.task.id)),
+  };
   const baseScan = scanDaily(settings, date, baseline.content, data.projects, data.tasks);
   const baseLinked = new Map(
     linkedLinesOf(baseScan)
       .filter((link) => link.userSynced)
       .map((link) => [link.line, link.task]),
   );
-  const baseTaskAt = (index: number): BoardTask | null => {
+  const memoAt = (index: number): MarkMemo | null => baseline.state.marks[baseKeys[index] as string] ?? null;
+  const identityAt = (index: number): Identity | null => {
+    const memo = memoAt(index);
     const linked = baseLinked.get(index);
-    if (linked) return linked;
-    const memo = baseline.state.marks[baseKeys[index] as string];
-    return memo === undefined ? null : taskOfPrint(prints, memo.task);
+    if (linked) return { task: linked, memo };
+    return memo === null ? null : { task: resolveMemo(memo, context), memo };
   };
   const pairs = alignLines(baseTexts, texts);
   const scanLinks = new Map(linkedLinesOf(scan).map((link) => [link.line, link]));
   const open = openLinesOf(scan);
-  const plan: TickPlan = { baseTexts, baseKeys, links: [], continued: new Map(), outOfSync: [], copies: new Set() };
+  const plan: TickPlan = { baseTexts, baseKeys, links: [], continued: new Map(), carried: new Map(), outOfSync: [], copies: new Set() };
   texts.forEach((text, line) => {
     const base = pairs.get(line);
     const baseText = base === undefined ? undefined : (baseTexts[base] as string);
@@ -1028,35 +1175,54 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
     const ticked = baseText !== undefined && checkbox !== null && checkboxOfLine(baseText) !== checkbox;
     const link = scanLinks.get(line);
     if (link) {
+      const memo = base === undefined ? null : memoAt(base);
+      const scoped = inScope(link.task, date, lineage);
+      const remembered = memo !== null && isSameTask(memo, link.task);
+      const tracked = scoped || remembered;
+      if (remembered && !scoped) plan.continued.set(line, link.task);
       if (base === undefined || same) {
-        plan.links.push({ ...link, base });
+        plan.links.push({ ...link, base, tracked, remembered });
         return;
       }
-      const before = baseTaskAt(base);
-      if (before !== null && before.id === link.task.id) {
-        plan.links.push({ ...link, base });
+      const before = identityAt(base);
+      if (before !== null && before.task !== null && before.task.id === link.task.id) {
+        plan.links.push({ ...link, base, tracked, remembered: remembered || before.memo !== null });
         return;
       }
-      plan.links.push({ ...link, base: undefined });
-      if (before === null && ticked && link.userSynced && link.effective !== null && link.effective !== checkbox) plan.outOfSync.push({ line, task: link.task, checkbox: checkbox as BoardCheckbox });
+      plan.links.push({ ...link, base: undefined, tracked, remembered: false });
+      if (ticked && tracked && link.userSynced && link.effective !== null && link.effective !== checkbox) {
+        plan.outOfSync.push({ line, task: link.task, memo: null, checkbox: checkbox as BoardCheckbox });
+      }
       return;
     }
     const openLine = open.get(line);
     if (openLine === undefined || base === undefined || checkbox === null) return;
-    const before = baseTaskAt(base);
-    if (before === null || before.repeat !== null) return;
-    const sameProject = openLine.projectId === null || openLine.projectId === before.projectId;
-    if (sameProject && (same || taskNeedle(openLine.text, settings.tasks).startsWith(normalizeText(before.title)))) {
-      plan.links.push({ line, checkbox, task: before, effective: projectCheckbox(before), userSynced: true, base });
-      plan.continued.set(line, before);
+    const before = identityAt(base);
+    if (before === null) return;
+    if (before.task === null) {
+      if (before.memo === null) return;
+      plan.carried.set(line, before.memo);
+      if (ticked) plan.outOfSync.push({ line, task: null, memo: before.memo, checkbox });
       return;
     }
-    if (ticked && !same) plan.outOfSync.push({ line, task: before, checkbox });
+    const task = before.task;
+    if (task.repeat !== null || (before.memo === null && !inScope(task, date, lineage))) return;
+    const sameProject = openLine.projectId === null || openLine.projectId === task.projectId;
+    const needle = taskNeedle(openLine.text, settings.tasks);
+    const loose = before.memo?.loose === true;
+    const plausible = sameProject && (same ? !loose : needle.startsWith(normalizeText(task.title)) || coversTitle(needle, task.title));
+    if (plausible) {
+      plan.links.push({ line, checkbox, task, effective: projectCheckbox(task), userSynced: true, base, tracked: true, remembered: before.memo !== null });
+      plan.continued.set(line, task);
+      return;
+    }
+    plan.carried.set(line, memoFor(task, projectCheckbox(task) ?? before.memo?.checkbox ?? checkbox, lineage, true));
+    if (ticked) plan.outOfSync.push({ line, task, memo: null, checkbox });
   });
   const linkedBases = new Set<string>();
   for (const link of plan.links) linkedBases.add(unmarkedText(texts[link.line] as string));
   baseTexts.forEach((text, index) => {
-    if (baseTaskAt(index) !== null) linkedBases.add(unmarkedText(text));
+    if (identityAt(index) !== null) linkedBases.add(unmarkedText(text));
   });
   for (const base of changedCopies(baseTexts, texts)) if (linkedBases.has(base)) plan.copies.add(base);
   return plan;
@@ -1068,7 +1234,7 @@ function isCopied(plan: TickPlan, texts: string[], link: SyncLink): boolean {
 }
 
 function syncableLinks(plan: TickPlan, texts: string[]): SyncLink[] {
-  return plan.links.filter((link) => link.task.scheduled !== null && !isCopied(plan, texts, link));
+  return plan.links.filter((link) => link.tracked && !isCopied(plan, texts, link));
 }
 
 function nextOutOfSync(stored: StoredOutOfSync[], found: StoredOutOfSync[], texts: string[], prints: PrintIndex): StoredOutOfSync[] {
@@ -1081,6 +1247,7 @@ function nextOutOfSync(stored: StoredOutOfSync[], found: StoredOutOfSync[], text
     seen.add(key);
     const task = taskOfPrint(prints, item.task);
     if (task !== null && projectCheckbox(task) === item.checkbox) continue;
+    if (task === null && item.title === undefined) continue;
     out.push(item);
   }
   return out;
@@ -1089,14 +1256,26 @@ function nextOutOfSync(stored: StoredOutOfSync[], found: StoredOutOfSync[], text
 function reportOutOfSync(items: StoredOutOfSync[], prints: PrintIndex): TodayOutOfSync[] {
   return items.flatMap((item) => {
     const task = taskOfPrint(prints, item.task);
-    const effective = task === null ? null : projectCheckbox(task);
-    if (task === null || effective === null || effective === item.checkbox) return [];
+    if (task === null) {
+      if (item.title === undefined) return [];
+      return [{ line: item.line, taskTitle: item.title, projectId: projectOfPrint(item.task), dailyCheckbox: item.checkbox, projectStatus: item.status ?? "todo" }];
+    }
+    if (projectCheckbox(task) === item.checkbox) return [];
     return [{ line: item.line, taskTitle: task.title, projectId: task.projectId, dailyCheckbox: item.checkbox, projectStatus: task.status }];
   });
 }
 
+function storedOutOfSync(line: string, task: BoardTask | null, memo: MarkMemo | null, checkbox: BoardCheckbox): StoredOutOfSync | null {
+  if (task !== null) return { line, task: fingerprint(task), checkbox, title: task.title, status: task.status };
+  if (memo === null) return null;
+  return { line, task: memo.task, checkbox, title: memo.title ?? memo.task.split(KEY_SEPARATOR)[1] ?? "", status: memo.checkbox };
+}
+
 function storedFound(plan: TickPlan, texts: string[]): StoredOutOfSync[] {
-  return plan.outOfSync.map((item) => ({ line: texts[item.line] as string, task: fingerprint(item.task), checkbox: item.checkbox }));
+  return plan.outOfSync.flatMap((item) => {
+    const stored = storedOutOfSync(texts[item.line] as string, item.task, item.memo, item.checkbox);
+    return stored === null ? [] : [stored];
+  });
 }
 
 function nextDuplicates(stored: StoredDuplicate[], copies: Set<string>, texts: string[]): StoredDuplicate[] {
@@ -1163,16 +1342,24 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
     let scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
     let plan = planTicks(settings, date, baseline, texts, scan, data);
     const oldCheckbox = (link: SyncLink): BoardCheckbox | null => (link.base === undefined ? null : checkboxOfLine(plan.baseTexts[link.base] as string));
-    const memoOf = (link: SyncLink): MarkMemo | undefined => (link.base === undefined ? undefined : baseline.state.marks[plan.baseKeys[link.base] as string]);
+    const baseMemo = (link: SyncLink): MarkMemo | undefined => (link.base === undefined ? undefined : baseline.state.marks[plan.baseKeys[link.base] as string]);
     const touched = new Set<number>();
     const ticks = new Map<string, UserTick>();
+    const unsynced: StoredOutOfSync[] = [];
+    const report = (line: number, task: BoardTask, checkbox: BoardCheckbox): void => {
+      const stored = storedOutOfSync(texts[line] as string, task, null, checkbox);
+      if (stored !== null) unsynced.push(stored);
+    };
     for (const link of syncableLinks(plan, texts)) {
       const old = oldCheckbox(link);
       if (old === null || old === link.checkbox || !link.userSynced) continue;
       touched.add(link.line);
-      const memo = memoOf(link);
-      const projectMoved = memo !== undefined && isSameTask(memo, link.task) && link.effective !== null && link.effective !== memo.checkbox;
-      if (projectMoved && link.effective !== link.checkbox) continue;
+      const memo = baseMemo(link);
+      const projectMoved = memo !== undefined && link.remembered && link.effective !== null && link.effective !== memo.checkbox;
+      if (projectMoved && link.effective !== link.checkbox) {
+        report(link.line, link.task, link.checkbox);
+        continue;
+      }
       const tick = ticks.get(link.task.id) ?? { task: link.task, targets: new Set<BoardCheckbox>(), lines: [] };
       tick.targets.add(link.checkbox);
       tick.lines.push({ line: link.line, checkbox: old, key: plan.baseKeys[link.base as number] as string });
@@ -1189,7 +1376,10 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
         continue;
       }
       const status = statusFromCheckbox(tick.task.status, target);
-      if (status === null) continue;
+      if (status === null) {
+        if (!SYNCED_STATUSES.has(tick.task.status)) for (const item of tick.lines) report(item.line, tick.task, target);
+        continue;
+      }
       try {
         applyStatusChange(settings, { task: tick.task, status });
         applied += 1;
@@ -1213,9 +1403,9 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
     for (const link of syncableLinks(plan, texts)) {
       if (touched.has(link.line) || link.effective === null) continue;
       const old = oldCheckbox(link);
-      const memo = memoOf(link);
+      const memo = baseMemo(link);
       if (old === null || memo === undefined || old !== link.checkbox) continue;
-      if (!isSameTask(memo, link.task) || link.effective === memo.checkbox || link.effective === link.checkbox) continue;
+      if (!link.remembered || link.effective === memo.checkbox || link.effective === link.checkbox) continue;
       const line = originals[link.line];
       if (line) line.text = withCheckbox(line.text, link.effective);
     }
@@ -1234,19 +1424,27 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
         mirrorWriting = false;
       }
     }
+    const lineage = lineageOf(data);
     const finalScan = scanDaily(settings, date, next, data.projects, data.tasks);
     const finalTexts = splitLines(next);
-    const marks = memoMarks(next, finalScan);
+    const marks = memoMarks(next, finalScan, date, lineage);
     const finalKeys = lineKeys(finalTexts);
     const prints = printIndex(data);
     const positions = new Map(doc.lines.map((line, index) => [line, index]));
-    for (const [index, task] of plan.continued) {
+    const finalKeyOf = (index: number): string | undefined => {
       const position = positions.get(originals[index] as DocLine);
+      return position === undefined ? undefined : finalKeys[position];
+    };
+    for (const [index, task] of plan.continued) {
+      const finalKey = finalKeyOf(index);
       const fresh = taskOfPrint(prints, fingerprint(task));
       const effective = fresh === null ? null : projectCheckbox(fresh);
-      if (position === undefined || fresh === null || effective === null) continue;
-      const finalKey = finalKeys[position] as string;
-      if (marks[finalKey] === undefined) marks[finalKey] = { checkbox: effective, task: fingerprint(fresh), id: fresh.id };
+      if (finalKey === undefined || fresh === null || effective === null) continue;
+      if (marks[finalKey] === undefined) marks[finalKey] = memoFor(fresh, effective, lineage);
+    }
+    for (const [index, memo] of plan.carried) {
+      const finalKey = finalKeyOf(index);
+      if (finalKey !== undefined && marks[finalKey] === undefined) marks[finalKey] = memo;
     }
     const baseDoc: ParsedDoc = {
       ...doc,
@@ -1266,8 +1464,9 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
         marks,
         seen: mergeSeen(baseline.state.seen, [...linkedTasks(finalScan), ...insertion.inserted, ...insertion.renamed]),
         focus: focusMemory(computeFocus(settings, data, date)),
-        outOfSync: nextOutOfSync(baseline.state.outOfSync, storedFound(plan, texts), finalTexts, prints),
+        outOfSync: nextOutOfSync(baseline.state.outOfSync, [...storedFound(plan, texts), ...unsynced], finalTexts, prints),
         duplicates: nextDuplicates(baseline.state.duplicates, plan.copies, finalTexts),
+        known: knownPrints(data, marks),
       },
     });
     return { changed, skipped: null, applied };
@@ -1324,28 +1523,71 @@ export function queueDailyDiskChange(date: string): void {
   if (isScheduledMode(getSettings())) scheduleMirror(date, "disk");
 }
 
-function transferHubMarks(date: string, path: string, previous: string, content: string): void {
-  const baseline = loadBaseline(date, path);
-  if (!baseline) return;
-  const before = checkboxesByKey(splitLines(previous));
-  const moved = new Map<string, BoardCheckbox>();
-  for (const [key, checkbox] of checkboxesByKey(splitLines(content))) {
-    const old = before.get(key);
-    if (old !== undefined && old !== checkbox) moved.set(key, checkbox);
+interface RebasedLine {
+  text: string;
+  memo: MarkMemo | null;
+}
+
+function hubMemo(memo: MarkMemo | null, before: BoardCheckbox | null, after: BoardCheckbox | null): MarkMemo | null {
+  if (memo === null || before === after) return memo;
+  return after === null ? null : { ...memo, checkbox: after };
+}
+
+function rebasedLines(baseline: Baseline, previous: string, content: string): RebasedLine[] {
+  const base = splitLines(baseline.content);
+  const baseKeys = lineKeys(base);
+  const prev = splitLines(previous);
+  const next = splitLines(content);
+  const memoAt = (index: number): MarkMemo | null => baseline.state.marks[baseKeys[index] as string] ?? null;
+  if (baseline.content === previous) {
+    const prevKeys = lineKeys(prev);
+    const prevIndex = new Map(prevKeys.map((key, index) => [key, index]));
+    return lineKeys(next).map((key, index) => {
+      const text = next[index] as string;
+      const at = prevIndex.get(key);
+      if (at === undefined) return { text, memo: null };
+      return { text, memo: hubMemo(memoAt(at), checkboxOfLine(prev[at] as string), checkboxOfLine(text)) };
+    });
   }
-  if (moved.size === 0) return;
-  const doc = openDoc(baseline.content);
-  const marks = { ...baseline.state.marks };
-  let touched = false;
-  lineKeys(splitLines(baseline.content)).forEach((key, index) => {
-    const checkbox = moved.get(key);
-    const line = doc.lines[index];
-    if (checkbox === undefined || !line) return;
-    line.text = withCheckbox(line.text, checkbox);
-    delete marks[key];
-    touched = true;
+  const prevOfNext = alignLines(prev, next);
+  const baseOfPrev = alignLines(base, prev);
+  const prevOfBase = new Map([...baseOfPrev].map(([p, b]) => [b, p]));
+  const out: RebasedLine[] = [];
+  let cursor = 0;
+  const emitBase = (limit: number): void => {
+    for (; cursor < limit; cursor += 1) {
+      const paired = prevOfBase.get(cursor);
+      if (paired === undefined) out.push({ text: base[cursor] as string, memo: memoAt(cursor) });
+    }
+  };
+  next.forEach((text, index) => {
+    const p = prevOfNext.get(index);
+    if (p === undefined) {
+      out.push({ text, memo: null });
+      return;
+    }
+    const b = baseOfPrev.get(p);
+    if (b === undefined || b < cursor) return;
+    emitBase(b);
+    const before = checkboxOfLine(prev[p] as string);
+    const after = checkboxOfLine(text);
+    const baseText = base[b] as string;
+    out.push({ text: before !== after && after !== null ? withCheckbox(baseText, after) : baseText, memo: hubMemo(memoAt(b), before, after) });
+    cursor = b + 1;
   });
-  if (touched) storeBaseline(date, path, { content: renderDoc(doc), state: { ...baseline.state, marks } });
+  emitBase(base.length);
+  return out;
+}
+
+function rebaseBaseline(baseline: Baseline, previous: string, content: string): Baseline {
+  const lines = rebasedLines(baseline, previous, content);
+  const keys = lineKeys(lines.map((line) => line.text));
+  const marks: Record<string, MarkMemo> = {};
+  lines.forEach((line, index) => {
+    if (line.memo !== null) marks[keys[index] as string] = line.memo;
+  });
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
+  return { content: lines.map((line) => line.text).join(eol), state: { ...baseline.state, marks } };
 }
 
 function onDailyWritten(settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin, previous: string | null, unseen = false): void {
@@ -1354,11 +1596,13 @@ function onDailyWritten(settings: DelegationSettings, date: string, content: str
     scheduleMirror(date, "client");
     return;
   }
+  if (mirrorWriting) return;
   const path = dailyFile(settings, date);
   if (path === null) return;
   if (previous !== null) {
-    transferHubMarks(date, path, previous, content);
-    if (unseen && !mirrorWriting) scheduleMirror(date, "board");
+    const baseline = loadBaseline(date, path);
+    if (baseline !== null) storeBaseline(date, path, rebaseBaseline(baseline, previous, content));
+    if (unseen) scheduleMirror(date, "board");
     return;
   }
   const data = loadBoardData(settings);
@@ -1407,6 +1651,66 @@ export function installTodayHooks(): void {
     diskChanged: (content: string) => queueScheduledDates(content),
     taskWritten: (settings: DelegationSettings) => isScheduledMode(settings) && flushMirrors(settings),
   });
+}
+
+export function usesMirror(settings: DelegationSettings, date: string): boolean {
+  return isScheduledMode(settings) && isCurrentOrFuture(date);
+}
+
+export function saveDailyFromClient(settings: DelegationSettings, date: string, content: string, baseUpdatedAt?: number, writeId?: string | null): DailyWriteResult {
+  const legacy = usesMirror(settings, date) ? null : dailySyncBaseline(settings, date);
+  const written = writeDaily(settings, date, content, baseUpdatedAt, writeId, "client");
+  if (legacy !== null) syncTasksFromDaily(settings, date, legacy, content);
+  return written;
+}
+
+export function closeDailyTicks(settings: DelegationSettings, date: string, before: string, after: string): DailyWriteResult {
+  if (usesMirror(settings, date)) return writeDaily(settings, date, after, undefined, null, "client");
+  const written = writeDaily(settings, date, after);
+  syncTasksFromDaily(settings, date, before, after);
+  return written;
+}
+
+function unambiguousLines(date: string, path: string, scan: FocusScan, content: string): ReadonlySet<number> {
+  const texts = splitLines(content);
+  const counts = checkboxLineCounts(texts);
+  const duplicated = new Set((loadBaseline(date, path)?.state.duplicates ?? []).map((item) => item.text));
+  const perTask = presenceOf(scan).lines;
+  const allowed = new Set<number>();
+  for (const link of scan.links) {
+    const text = unmarkedText(texts[link.line] as string);
+    if ((counts.get(text)?.length ?? 0) !== 1 || duplicated.has(text) || (perTask.get(link.task.id)?.length ?? 0) !== 1) continue;
+    allowed.add(link.line);
+  }
+  return allowed;
+}
+
+function guardedFilter(settings: DelegationSettings, date: string): (scan: FocusScan, content: string) => ReadonlySet<number> {
+  const path = dailyFile(settings, date) ?? "";
+  return (scan, content) => unambiguousLines(date, path, scan, content);
+}
+
+export function syncTaskToDailyChecked(settings: DelegationSettings, input: SyncDailyInput): SyncDailyResult {
+  const date = input.date ?? localDate();
+  if (!usesMirror(settings, date)) return syncTaskToDaily(settings, input);
+  runMirror(settings, date, { source: "api" });
+  const result = syncTaskToDaily(settings, input, guardedFilter(settings, date));
+  if (result.updated > 0) runMirror(settings, date, { source: "api" });
+  return result;
+}
+
+export function syncTaskFromDailyChecked(settings: DelegationSettings, input: SyncFromDailyInput): SyncFromDailyResult {
+  const date = input.date ?? localDate();
+  if (!usesMirror(settings, date)) return syncTaskFromDaily(settings, input);
+  runMirror(settings, date, { source: "api" });
+  const result = syncTaskFromDaily(settings, input, guardedFilter(settings, date));
+  if (result.updated > 0) runMirror(settings, date, { source: "api" });
+  return result;
+}
+
+export function organizeFocusChecked(settings: DelegationSettings, date: string, board: ComposeBoard | null, baseUpdatedAt?: number): OrganizeDailyFocusResult {
+  if (usesMirror(settings, date)) runMirror(settings, date, { source: "api" });
+  return organizeDailyFocus(settings, date, board, baseUpdatedAt);
 }
 
 export function runStartupMirror(settings: DelegationSettings = getSettings()): MirrorResult | null {
@@ -1646,9 +1950,7 @@ function appendBullet(settings: DelegationSettings, date: string, heading: strin
     const content: number[] = [];
     for (let index = range.heading + 1; index < range.end; index += 1) if (!isBlankText(texts[index])) content.push(index);
     if (content.length > 0 && content.every((index) => isPlaceholderLine(texts[index] as string))) {
-      const first = content[0] as number;
-      const last = content[content.length - 1] as number;
-      doc.lines.splice(first, last - first + 1, line);
+      doc.lines.splice(content[0] as number, 1, line);
     } else if (content.length > 0) {
       doc.lines.splice((content[content.length - 1] as number) + 1, 0, line);
     } else {

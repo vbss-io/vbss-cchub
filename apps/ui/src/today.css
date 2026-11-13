@@ -22,11 +22,34 @@
   white-space: nowrap;
 }
 
+.today__bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
 .today__tabs {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.today__sep {
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  background: var(--border-2);
+}
+
+.today__modes {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 
 .today__note {
@@ -146,12 +169,23 @@
   margin-left: auto;
 }
 
-.today__carried-title {
+.today__carried-main {
   display: flex;
   flex: 1 1 200px;
   flex-direction: column;
   align-items: flex-start;
   gap: 1px;
+  min-width: 0;
+}
+
+.today__carried-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.today__carried-title {
   min-width: 0;
   text-align: left;
   font-size: 14px;
@@ -163,6 +197,30 @@
   font-size: 11px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  text-decoration: none;
+  cursor: default;
+}
+
+.statusmark {
+  position: relative;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--go);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--go) 22%, transparent);
+}
+
+.statusmark--doing::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 50%;
+  height: 2px;
+  margin-top: -1px;
+  border-radius: 1px;
+  background: var(--go);
 }
 
 .today__quick {
