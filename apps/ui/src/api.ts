@@ -29,7 +29,8 @@ const base = envUrl ?? `http://${host}:4317`;
 export const hubBase = base;
 
 export type { HooksStatus, WslHookStatus } from "./types";
-import type { DelegationSettings, ShareRequestRecord, TunnelStatus } from "./delegation";
+import type { DelegationSettings, ShareRequestRecord, TunnelStatus, UiPrefs } from "./delegation";
+import { normalizeUiPrefs } from "./plugins/ui-prefs";
 import type { NotifEventKind } from "./notifications";
 
 export type ShareRequestEvent = ShareRequestRecord;
@@ -185,6 +186,7 @@ export interface HubEvents {
   onSettings?: (settings: DelegationSettings) => void;
   onLimits?: () => void;
   onUsage?: () => void;
+  onUiPrefs?: (prefs: UiPrefs) => void;
 }
 
 export interface TrailStreamEvent {
@@ -253,6 +255,7 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("settings", (event) => handlers.onSettings?.(data<DelegationSettings>(event)));
   source.addEventListener("limits", () => handlers.onLimits?.());
   source.addEventListener("usage", () => handlers.onUsage?.());
+  source.addEventListener("ui-prefs", (event) => handlers.onUiPrefs?.(normalizeUiPrefs(data<unknown>(event))));
   return () => source.close();
 }
 

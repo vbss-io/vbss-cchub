@@ -28,8 +28,13 @@ import type {
   WidgetSettings,
   LimitsSettings,
   UsageSettings,
+  UiLayoutPrefs,
+  UiPrefs,
+  UiPrefsPatch,
+  UiSidebarPrefs,
 } from "./delegation-types.js";
 import {
+  PLUGIN_FEATURE_KEYS,
   FOCUS_SOURCES,
   LIMITS_REFRESH_DEFAULT,
   LIMITS_REFRESH_MAX,
@@ -379,6 +384,12 @@ export function getSettings(): DelegationSettings {
       usage: stored.get("features.usage") === "1",
       limits: stored.get("features.limits") === "1",
       tasks: stored.get("features.tasks") === "1",
+      flow: stored.get("features.flow") === "1",
+      delegated: stored.get("features.delegated") === "1",
+      workspaces: stored.get("features.workspaces") === "1",
+      reports: stored.get("features.reports") === "1",
+      share: stored.get("features.share") === "1",
+      widget: stored.get("features.widget") === "1",
     },
     daily: {
       dir: stored.get("daily.dir") ?? null,
@@ -451,6 +462,85 @@ export function getSetting(key: string): string | null {
 
 export function setSetting(key: string, value: string | null): void {
   upsertSettingStmt.run(key, value);
+}
+
+const PLUGINS_MIGRATED_KEY = "plugins.migrated";
+
+export function migratePluginFlags(): boolean {
+  const apply = db.transaction((): boolean => {
+    if (getSetting(PLUGINS_MIGRATED_KEY) !== null) return false;
+    const ownKeys = [PLUGINS_MIGRATED_KEY, ...PLUGIN_FEATURE_KEYS.map((key) => `features.${key}`)];
+    const hasSession = db.prepare(`SELECT 1 FROM sessions LIMIT 1`).get() !== undefined;
+    const settingRows = db.prepare(`SELECT key FROM hub_settings`).all() as { key: string }[];
+    const hadData = hasSession || settingRows.some((row) => !ownKeys.includes(row.key));
+    if (hadData) {
+      for (const key of PLUGIN_FEATURE_KEYS) upsertSettingStmt.run(`features.${key}`, "1");
+    }
+    upsertSettingStmt.run(PLUGINS_MIGRATED_KEY, "1");
+    return hadData;
+  });
+  return apply();
+}
+
+const UI_SIDEBAR_KEY = "ui.sidebar";
+const UI_LAYOUT_PREFIX = "ui.layout.";
+
+function parseSidebar(raw: string | undefined | null): UiSidebarPrefs | null {
+  if (raw == null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const { order, pinned } = parsed as { order?: unknown; pinned?: unknown };
+    const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+    return isStrings(order) && isStrings(pinned) ? { order, pinned } : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseWidths(raw: string | null): Record<string, number> | null {
+  if (raw == null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const widths: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === "number" && Number.isFinite(value)) widths[key] = value;
+    }
+    return widths;
+  } catch {
+    return null;
+  }
+}
+
+export function getUiPrefs(): UiPrefs {
+  const rows = db.prepare(`SELECT key, value FROM hub_settings WHERE key = ? OR key LIKE ?`).all(UI_SIDEBAR_KEY, `${UI_LAYOUT_PREFIX}%`) as { key: string; value: string | null }[];
+  const layout: UiLayoutPrefs = {};
+  let sidebar: UiSidebarPrefs | null = null;
+  for (const row of rows) {
+    if (row.key === UI_SIDEBAR_KEY) {
+      sidebar = parseSidebar(row.value);
+      continue;
+    }
+    const widths = parseWidths(row.value);
+    if (widths !== null) layout[row.key.slice(UI_LAYOUT_PREFIX.length)] = widths;
+  }
+  return { sidebar, layout };
+}
+
+export function updateUiPrefs(patch: UiPrefsPatch): UiPrefs {
+  const apply = db.transaction(() => {
+    if (patch.sidebar === null) db.prepare(`DELETE FROM hub_settings WHERE key = ?`).run(UI_SIDEBAR_KEY);
+    else if (patch.sidebar !== undefined) upsertSettingStmt.run(UI_SIDEBAR_KEY, JSON.stringify({ order: patch.sidebar.order, pinned: patch.sidebar.pinned }));
+    if (patch.layout !== undefined) {
+      for (const [screen, widths] of Object.entries(patch.layout)) {
+        const current = parseWidths(getSetting(`${UI_LAYOUT_PREFIX}${screen}`)) ?? {};
+        upsertSettingStmt.run(`${UI_LAYOUT_PREFIX}${screen}`, JSON.stringify({ ...current, ...widths }));
+      }
+    }
+  });
+  apply();
+  return getUiPrefs();
 }
 
 db.exec(`
@@ -538,6 +628,10 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     if (patch.features?.usage !== undefined) upsertSettingStmt.run("features.usage", patch.features.usage ? "1" : "0");
     if (patch.features?.limits !== undefined) upsertSettingStmt.run("features.limits", patch.features.limits ? "1" : "0");
     if (patch.features?.tasks !== undefined) upsertSettingStmt.run("features.tasks", patch.features.tasks ? "1" : "0");
+    for (const key of PLUGIN_FEATURE_KEYS) {
+      const flag = patch.features?.[key];
+      if (flag !== undefined) upsertSettingStmt.run(`features.${key}`, flag ? "1" : "0");
+    }
     if (patch.daily?.dir !== undefined) upsertSettingStmt.run("daily.dir", patch.daily.dir);
     if (patch.daily?.template !== undefined) upsertSettingStmt.run("daily.template", patch.daily.template);
     if (patch.daily?.prompt !== undefined) upsertSettingStmt.run("daily.prompt", patch.daily.prompt);

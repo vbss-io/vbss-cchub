@@ -100,7 +100,7 @@ describe("hub surface", () => {
       autonomy: "full",
       ownerName: userInfo().username,
       runTimeoutMinutes: 60,
-      features: { daily: false, trail: false, usage: false, limits: false, tasks: false },
+      features: { daily: false, trail: false, usage: false, limits: false, tasks: false, flow: false, delegated: false, workspaces: false, reports: false, share: false, widget: false },
       tasks: { root: null, section: "Open loops", prefixes: { blocked: ["BLOCK", "BLOCKED"], hold: ["HOLD"], archived: ["ARCHIVED"] }, separator: " - ", exclude: ["_*"], workspaceKey: "workspace", parentKey: "parent", delegatePrompt: null, markDoingOnDelegate: true, reasonSeparator: " - ", doneSection: "", doneStamp: " ✅ {{date}}", priorityTag: "p", priorityLevels: 4 },
       daily: { dir: null, template: null, prompt: null, runner: "claude", headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" }, closedKey: "closed", wikilinks: false, projectOrder: [] },
       trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true },
@@ -171,7 +171,7 @@ describe("hub surface", () => {
     assert.deepEqual(body.widget, { edge: "left", rings: { claude: true, codex: false }, panel: "usage", autostart: true });
     assert.deepEqual(body.limits, { claude: false, codex: false, codexLive: false, refreshMinutes: 10 });
     assert.deepEqual(body.usage, { days: 14 });
-    assert.deepEqual(body.features, { daily: false, trail: false, usage: true, limits: true, tasks: false });
+    assert.deepEqual(body.features, { daily: false, trail: false, usage: true, limits: true, tasks: false, flow: false, delegated: false, workspaces: false, reports: false, share: false, widget: false });
 
     const merged = await put({ widget: { rings: { codex: true } } });
     assert.deepEqual((merged.json as { widget: unknown }).widget, { edge: "left", rings: { claude: true, codex: true }, panel: "usage", autostart: true });

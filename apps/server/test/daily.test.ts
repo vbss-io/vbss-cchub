@@ -45,7 +45,7 @@ function fixtureSettings(root: string, overrides: Partial<DelegationSettings> = 
     autonomy: "full",
     ownerName: "tester",
     runTimeoutMinutes: 60,
-    features: { daily: true, trail: false, usage: false, limits: false, tasks: false },
+    features: { daily: true, trail: false, usage: false, limits: false, tasks: false, flow: false, delegated: false, workspaces: false, reports: false, share: false, widget: false },
     tasks: { root: null, section: "Open loops", prefixes: { blocked: ["BLOCK", "BLOCKED"], hold: ["HOLD"], archived: ["ARCHIVED"] }, separator: " - ", exclude: ["_*"], workspaceKey: "workspace", parentKey: "parent", delegatePrompt: null, markDoingOnDelegate: true, reasonSeparator: " - ", doneSection: "", doneStamp: " ✅ {{date}}", priorityTag: "p", priorityLevels: 4 },
     daily: defaultDaily,
     trail: { dir: null, detail: "light", model: "haiku", prompt: null, hubEvents: true },
@@ -139,7 +139,7 @@ tags: [diario]
 describe("daily settings", () => {
   it("defaults features.daily off and merges nested daily patches", () => {
     const defaults = store.getSettings();
-    assert.deepEqual(defaults.features, { daily: false, trail: false, usage: false, limits: false, tasks: false });
+    assert.deepEqual(defaults.features, { daily: false, trail: false, usage: false, limits: false, tasks: false, flow: false, delegated: false, workspaces: false, reports: false, share: false, widget: false });
     assert.deepEqual(defaults.daily, defaultDaily);
 
     const afterFeature = store.updateSettings({ features: { daily: true } });

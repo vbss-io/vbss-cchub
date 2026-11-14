@@ -1,5 +1,6 @@
 import { hubBase } from "./api";
 import { usageResponseState } from "./usage-format";
+import { emptyUiPrefs, normalizeUiPrefs } from "./plugins/ui-prefs";
 
 const base = `${hubBase}/delegation`;
 
@@ -126,6 +127,20 @@ export interface TasksFeatureSettings {
   priorityLevels: number;
 }
 
+export interface HubFeatures {
+  daily: boolean;
+  trail: boolean;
+  usage: boolean;
+  limits: boolean;
+  tasks: boolean;
+  flow?: boolean;
+  delegated?: boolean;
+  workspaces?: boolean;
+  reports?: boolean;
+  share?: boolean;
+  widget?: boolean;
+}
+
 export interface DelegationSettings {
   workspacesRoot: string | null;
   editorCommand: string;
@@ -133,7 +148,7 @@ export interface DelegationSettings {
   autonomy: Autonomy;
   ownerName: string;
   runTimeoutMinutes: number;
-  features: { daily: boolean; trail: boolean; usage: boolean; limits: boolean; tasks: boolean };
+  features: HubFeatures;
   daily: DailySettings;
   tasks: TasksFeatureSettings;
   trail: TrailSettings;
@@ -266,6 +281,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     const message = (json as { error?: string } | null)?.error ?? `request failed (${res.status})`;
     if (res.status === 404 && path === "/settings") throw new DelegationDisabledError(message);
     if (res.status === 404 && path === "/backups") throw new BackupsUnavailableError(message);
+    if (res.status === 404 && path === "/ui-prefs") throw new UiPrefsUnavailableError(message);
     if (res.status === 404 && !isJson && path.startsWith("/today/")) throw new TodayUnavailableError("Today is not available on this hub. Update the hub to use it.");
     throw new Error(message);
   }
@@ -471,6 +487,36 @@ export const rescanUsage = (): Promise<{ files: number }> => call("POST", "/usag
 export const getSettings = (): Promise<DelegationSettings> => call("GET", "/settings");
 
 export const updateSettings = (patch: SettingsPatch): Promise<DelegationSettings> => call("PUT", "/settings", patch);
+
+export interface SidebarPrefs {
+  order: string[];
+  pinned: string[];
+}
+
+export type UiLayoutPrefs = Record<string, Record<string, number>>;
+
+export interface UiPrefs {
+  sidebar: SidebarPrefs | null;
+  layout: UiLayoutPrefs;
+}
+
+export interface UiPrefsPatch {
+  sidebar?: SidebarPrefs | null;
+  layout?: UiLayoutPrefs;
+}
+
+export class UiPrefsUnavailableError extends Error {}
+
+export async function getUiPrefs(): Promise<UiPrefs> {
+  try {
+    return normalizeUiPrefs(await call<unknown>("GET", "/ui-prefs"));
+  } catch (err) {
+    if (err instanceof UiPrefsUnavailableError) return emptyUiPrefs();
+    throw err;
+  }
+}
+
+export const putUiPrefs = async (patch: UiPrefsPatch): Promise<UiPrefs> => normalizeUiPrefs(await call<unknown>("PUT", "/ui-prefs", patch));
 
 export type BackupReason = "upgrade" | "daily" | "manual" | "pre-restore";
 

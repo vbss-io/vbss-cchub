@@ -252,7 +252,7 @@ export function delegationRouter(): Router {
     const featuresBody = body.features as Record<string, unknown> | undefined;
     if (featuresBody && typeof featuresBody === "object") {
       const featuresPatch: NonNullable<UpdateSettingsInput["features"]> = {};
-      for (const key of ["daily", "trail", "usage", "limits", "tasks"] as const) {
+      for (const key of ["daily", "trail", "usage", "limits", "tasks", "flow", "delegated", "workspaces", "reports", "share", "widget"] as const) {
         if (!(key in featuresBody)) continue;
         const flag = featuresBody[key];
         if (typeof flag !== "boolean") {

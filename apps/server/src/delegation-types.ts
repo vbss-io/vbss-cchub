@@ -86,6 +86,38 @@ export interface DelegationFeatures {
   usage: boolean;
   limits: boolean;
   tasks: boolean;
+  flow: boolean;
+  delegated: boolean;
+  workspaces: boolean;
+  reports: boolean;
+  share: boolean;
+  widget: boolean;
+}
+
+export const PLUGIN_FEATURE_KEYS = ["flow", "delegated", "workspaces", "reports", "share", "widget"] as const;
+
+export const UI_KEY_RE = /^[a-z][a-z0-9-]{0,31}$/;
+export const UI_WIDTH_KEY_RE = /^[a-zA-Z][a-zA-Z0-9_-]{0,31}$/;
+export const UI_SIDEBAR_MAX_ITEMS = 40;
+export const UI_LAYOUT_MAX_WIDTH = 4000;
+export const UI_LAYOUT_MAX_KEYS = 10;
+export const UI_LAYOUT_MAX_SCREENS = 40;
+
+export interface UiSidebarPrefs {
+  order: string[];
+  pinned: string[];
+}
+
+export type UiLayoutPrefs = Record<string, Record<string, number>>;
+
+export interface UiPrefs {
+  sidebar: UiSidebarPrefs | null;
+  layout: UiLayoutPrefs;
+}
+
+export interface UiPrefsPatch {
+  sidebar?: UiSidebarPrefs | null;
+  layout?: UiLayoutPrefs;
 }
 
 export const WIDGET_EDGES = ["left", "right", "top"] as const;

@@ -8,12 +8,15 @@ import { CommandPalette } from "./components/CommandPalette";
 import { SessionDrawer } from "./components/SessionDrawer";
 import { StatusBar } from "./components/StatusBar";
 import { WhatsNew } from "./components/WhatsNew";
-import { addCapture, configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
-import { IconBoard, IconChevron, IconClose, IconFlow, IconMore, IconReports, IconSearch, IconSessions, IconSettings, IconShare, IconTasks, IconUsage, IconWorkspaces } from "./icons";
+import { addCapture, configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getUiPrefs, putUiPrefs, UiPrefsUnavailableError, type UiPrefs, type UiPrefsPatch, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
+import { IconChevron, IconClose, IconMore, IconSearch, IconSettings } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { unlockAudio } from "./notify";
 import { buildCaptureItems, buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, CAPTURE_PREFILL } from "./palette-items";
-import { START_DAY_EVENT } from "./today-model";
+import { enabledViews, isPluginEnabled, isViewEnabled, parseView, pluginCommandActions, sidebarModel, viewItem } from "./plugins/registry";
+import type { View } from "./plugins/types";
+import { applyUiPrefsPatch, emptyUiPrefs } from "./plugins/ui-prefs";
+import { UiPrefsProvider, type UiPrefsContextValue } from "./ui-prefs-context";
 import { localDayKey } from "./timeline-model";
 import { useHotkeys } from "./use-hotkeys";
 import { HubOfflineBanner } from "./components/HubOfflineBanner";
@@ -34,18 +37,6 @@ import { WorkspacesView } from "./views/WorkspacesView";
 import { canToggleWidget, toggleWidgetWindow } from "./widget-toggle";
 import { workspaceOf } from "./wsmatch";
 
-type View = "sessions" | "daily" | "board" | "usage" | "flow" | "tasks" | "workspaces" | "reports" | "share" | "settings";
-
-function IconDaily({ size = 20 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3" y="5" width="18" height="15" rx="2" />
-      <path d="M3 9h18M8 3v4M16 3v4" />
-      <path d="m8.5 14 2 2 4-4" />
-    </svg>
-  );
-}
-
 interface ToastAction {
   label: string;
   run: () => void;
@@ -56,21 +47,8 @@ interface Route {
   param: string | null;
 }
 
-const VIEWS: { key: View; label: string; icon: ReactElement; subtitle: string }[] = [
-  { key: "sessions", label: "Sessions", icon: <IconSessions />, subtitle: "Every Claude Code session on this machine, plus Codex threads" },
-  { key: "daily", label: "Today", icon: <IconDaily />, subtitle: "Your day: focus, backlog, meetings and captures" },
-  { key: "board", label: "Tasks", icon: <IconBoard />, subtitle: "Tasks from your second brain as a board: filter by project, move them, hand one to an agent" },
-  { key: "usage", label: "Usage", icon: <IconUsage />, subtitle: "What burns your tokens on this machine, and how much of your plan is left" },
-  { key: "flow", label: "Flow", icon: <IconFlow />, subtitle: "Workspaces, sessions, subagents and delegated tasks as a live map" },
-  { key: "tasks", label: "Delegated", icon: <IconTasks />, subtitle: "Work handed to the hub by agents: follow, steer, cancel" },
-  { key: "workspaces", label: "Workspaces", icon: <IconWorkspaces />, subtitle: "The same registry your wk alias uses" },
-  { key: "reports", label: "Reports", icon: <IconReports />, subtitle: "What agents reported back" },
-  { key: "share", label: "Share", icon: <IconShare />, subtitle: "Links so other people and their assistants can ask your Claude, on the LAN or through ngrok" },
-  { key: "settings", label: "Settings", icon: <IconSettings />, subtitle: "Paths, hooks, connections, notifications, groups" },
-];
+const SETTINGS_HEAD = { label: "Settings", subtitle: "Paths, hooks, connections, notifications, groups" };
 
-const NAV_FIXED: View[] = ["sessions", "daily", "board", "flow"];
-const NAV_MORE: View[] = ["tasks", "usage", "workspaces", "reports", "share"];
 const LIMITS_REFRESH_MS = 300_000;
 
 const NOTIF_VERSION = 3;
@@ -104,7 +82,7 @@ function loadNotif(): NotifSettings {
 
 function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
-  const view = VIEWS.find((item) => item.key === parts[0])?.key ?? "sessions";
+  const view = parseView(parts[0]) ?? "sessions";
   return { view, param: parts[1] ?? null };
 }
 
@@ -270,6 +248,9 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteSeed, setPaletteSeed] = useState({ key: 0, query: "" });
   const [paletteBoard, setPaletteBoard] = useState<BoardPayload | null>(null);
+  const [uiPrefs, setUiPrefs] = useState<UiPrefs>(emptyUiPrefs);
+  const uiPrefsSeq = useRef(0);
+  const uiPrefsPending = useRef(0);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -359,6 +340,16 @@ export function App() {
   }, [loadHub]);
   const connection = useHubConnection(refreshAfterOutage);
 
+  const loadUiPrefs = useCallback(() => {
+    if (isMock) return;
+    const seq = uiPrefsSeq.current;
+    void getUiPrefs()
+      .then((next) => {
+        if (seq === uiPrefsSeq.current) setUiPrefs(next);
+      })
+      .catch(() => undefined);
+  }, []);
+
   const loadConnect = useCallback(async () => {
     try {
       setConnect(await getConnect());
@@ -377,7 +368,8 @@ export function App() {
       .then(setHooksState)
       .catch(() => setHooksState({ installed: false, events: [] }));
     void loadHub();
-  }, [loadHub]);
+    loadUiPrefs();
+  }, [loadHub, loadUiPrefs]);
 
   useEffect(() => {
     if (isMock) return;
@@ -475,6 +467,7 @@ export function App() {
         connection.streamOpen();
         loadCore();
         void loadHub();
+        loadUiPrefs();
         void loadConnect();
         void getHooks()
           .then((next) => {
@@ -565,6 +558,9 @@ export function App() {
       onLimits: () => {
         for (const listener of usageListeners.current) listener("limits");
       },
+      onUiPrefs: (next) => {
+        if (mounted && uiPrefsPending.current === 0) setUiPrefs(next);
+      },
     });
     return () => {
       mounted = false;
@@ -649,6 +645,27 @@ export function App() {
   const ok = useCallback((text: string) => pushToast("ok", text), [pushToast]);
   const fail = useCallback((text: string) => pushToast("error", text), [pushToast]);
 
+  const updateUiPrefs = useCallback(
+    async (patch: UiPrefsPatch) => {
+      setUiPrefs((previous) => applyUiPrefsPatch(previous, patch));
+      if (isMock) return;
+      const seq = (uiPrefsSeq.current += 1);
+      uiPrefsPending.current += 1;
+      try {
+        const next = await putUiPrefs(patch);
+        if (seq === uiPrefsSeq.current) setUiPrefs(next);
+      } catch (err) {
+        if (err instanceof UiPrefsUnavailableError) return;
+        fail(err instanceof Error ? err.message : "could not save the layout");
+        if (seq === uiPrefsSeq.current) loadUiPrefs();
+      } finally {
+        uiPrefsPending.current -= 1;
+      }
+    },
+    [fail, loadUiPrefs],
+  );
+  const uiPrefsValue = useMemo<UiPrefsContextValue>(() => ({ uiPrefs, updateUiPrefs }), [uiPrefs, updateUiPrefs]);
+
   const saveSettings = async (patch: SettingsPatch) => {
     try {
       setSettings(await updateSettings(patch));
@@ -694,13 +711,13 @@ export function App() {
     void reorderGroups(ids);
   };
 
-  const dailyEnabled = settings?.features.daily === true;
-  const usageEnabled = settings?.features.usage === true;
-  const limitsEnabled = settings?.features.limits === true;
-  const boardEnabled = settings?.features.tasks === true;
-  const effectiveView: View =
-    (route.view === "daily" && !dailyEnabled) || (route.view === "board" && !boardEnabled) || (route.view === "usage" && !usageEnabled) ? "sessions" : route.view;
-  const current = VIEWS.find((item) => item.key === effectiveView) ?? VIEWS[0]!;
+  const features = settings?.features ?? null;
+  const dailyEnabled = isPluginEnabled("today", features);
+  const usageEnabled = isPluginEnabled("usage", features);
+  const limitsEnabled = isPluginEnabled("limits", features);
+  const boardEnabled = isPluginEnabled("tasks", features);
+  const effectiveView: View = isViewEnabled(route.view, features) ? route.view : "sessions";
+  const current = viewItem(effectiveView) ?? SETTINGS_HEAD;
   const drawerSession = drawer ? (sessions[drawer] ?? null) : null;
   const codexDrawerThread = codexDrawer ? (codexSessions.find((thread) => thread.id === codexDrawer) ?? null) : null;
   const headRef = useRef<HTMLElement | null>(null);
@@ -740,13 +757,13 @@ export function App() {
   }, [limitsEnabled, subscribeUsage]);
 
   const sharePanel = route.view === "share" && route.param != null;
-  const featureOn = (key: View): boolean => (key !== "daily" || dailyEnabled) && (key !== "board" || boardEnabled) && (key !== "usage" || usageEnabled);
-  const navViews = (keys: View[]) => keys.filter(featureOn).flatMap((key) => VIEWS.filter((item) => item.key === key));
-  const moreItems = navViews(NAV_MORE).map((item) => ({
+  const sidebar = useMemo(() => sidebarModel(features, uiPrefs.sidebar), [features, uiPrefs.sidebar]);
+  const badgeOf = (key: View): number => (key === "sessions" ? attention : key === "tasks" ? hubRunning + hubAttention : 0);
+  const moreItems = sidebar.more.map((item) => ({
     key: item.key,
     label: item.label,
     icon: item.icon,
-    badge: item.key === "tasks" ? hubRunning + hubAttention : 0,
+    badge: badgeOf(item.key),
   }));
 
   const viewRef = useRef<View>(effectiveView);
@@ -789,10 +806,10 @@ export function App() {
 
   useHotkeys([
     { combo: "ctrl+k", allowInInputs: true, handler: () => setPaletteOpen((open) => !open) },
-    { combo: "ctrl+1", handler: () => featureOn("sessions") && navigate("sessions") },
-    { combo: "ctrl+2", handler: () => featureOn("daily") && navigate("daily") },
-    { combo: "ctrl+3", handler: () => featureOn("board") && navigate("board") },
-    { combo: "ctrl+4", handler: () => featureOn("flow") && navigate("flow") },
+    { combo: "ctrl+1", handler: () => isViewEnabled("sessions", features) && navigate("sessions") },
+    { combo: "ctrl+2", handler: () => isViewEnabled("daily", features) && navigate("daily") },
+    { combo: "ctrl+3", handler: () => isViewEnabled("board", features) && navigate("board") },
+    { combo: "ctrl+4", handler: () => isViewEnabled("flow", features) && navigate("flow") },
     { combo: "ctrl+,", handler: () => navigate("settings") },
   ]);
 
@@ -867,25 +884,20 @@ export function App() {
 
   const paletteItems = useMemo(() => {
     if (!paletteOpen) return [];
-    const views = VIEWS.map((item) => ({ key: item.key, label: item.label, subtitle: item.subtitle, enabled: featureOn(item.key) }));
+    const views = [
+      ...enabledViews(features).map((item) => ({ key: item.key, label: item.label, subtitle: item.subtitle, enabled: true })),
+      { key: "settings", label: SETTINGS_HEAD.label, subtitle: SETTINGS_HEAD.subtitle, enabled: true },
+    ];
+    const toggleWidget = canToggleWidget()
+      ? () => void toggleWidgetWindow().catch((err: unknown) => fail(err instanceof Error ? err.message : "could not toggle the widget"))
+      : null;
     const items = [
       ...buildCommandItems({
-        ...(boardEnabled ? { newTask: () => goThenDispatch("board", "cchub:board-new-task") } : {}),
-        ...(dailyEnabled
-          ? {
-              startDay: () => goThenDispatch("daily", START_DAY_EVENT),
-              planToday: () => goThenDispatch("daily", "cchub:daily-plan-today"),
-              refreshDaily: () => goThenDispatch("daily", "cchub:daily-refresh"),
-              startCapture,
-            }
-          : {}),
+        ...pluginCommandActions(features, { dispatch: goThenDispatch, startCapture, toggleWidget }),
         backupNow: () => void backupNow(),
         toggleTheme: () => setTheme((previous) => (previous === "midnight" ? "dracula" : "midnight")),
         themeHint: theme === "midnight" ? "Switch to Dracula" : "Switch to Midnight",
         installHooks: () => navigate("settings", "hooks"),
-        ...(canToggleWidget()
-          ? { toggleWidget: () => void toggleWidgetWindow().catch((err: unknown) => fail(err instanceof Error ? err.message : "could not toggle the widget")) }
-          : {}),
       }),
       ...buildViewItems(views, (view, param) => navigate(view as View, param)),
       ...buildSessionItems(Object.values(sessions), codexSessions, workspaces, {
@@ -905,315 +917,320 @@ export function App() {
       ...(boardEnabled && paletteBoard ? buildTaskItems(paletteBoard.tasks, paletteBoard.projects, (id) => navigate("board", encodeURIComponent(id))) : []),
     ];
     return items;
-  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, dailyEnabled, usageEnabled, theme, tick, navigate, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, startCapture, openSession, openCodex, fail]);
+  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, features, theme, tick, navigate, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, startCapture, openSession, openCodex, fail]);
 
   return (
-    <div className={`shell ${drawerSession || codexDrawerThread || sharePanel ? "shell--panel" : ""}`}>
-      {connection.offline && !isMock && <HubOfflineBanner />}
-      <nav className="nav" aria-label="Main">
-        <div className="nav__brand">
-          <BrandMark size={30} />
-          <span className="nav__wm">
-            <Wordmark />
-            <span className="nav__slogan">Run many. Forget none.</span>
-          </span>
-        </div>
-        <div className="nav__search-slot">
-          <button type="button" className="nav__search" onClick={() => setPaletteOpen(true)} aria-label="Search" aria-keyshortcuts="Control+K" title="Search (Ctrl K)">
-            <IconSearch size={16} />
-            <span className="nav__search-label">Search</span>
-            <kbd className="nav__search-key">Ctrl K</kbd>
-          </button>
-        </div>
-        <ul className="nav__list">
-          {navViews(NAV_FIXED).map((item) => (
-            <li key={item.key}>
-              <a
-                className={`nav__item ${effectiveView === item.key ? "nav__item--on" : ""}`}
-                href={`#/${item.key}`}
-                title={item.label}
-                aria-current={effectiveView === item.key ? "page" : undefined}
-              >
-                <span className="nav__icon">{item.icon}</span>
-                <span className="nav__label">{item.label}</span>
-                {item.key === "sessions" && attention > 0 && <span className="nav__badge nav__badge--attn">{attention}</span>}
-              </a>
-            </li>
-          ))}
-          <NavMore items={moreItems} activeKey={effectiveView} />
-        </ul>
-        <div className="nav__foot">
-          <a
-            className={`nav__item nav__item--foot ${effectiveView === "settings" ? "nav__item--on" : ""}`}
-            href="#/settings"
-            title="Settings"
-            aria-current={effectiveView === "settings" ? "page" : undefined}
-          >
-            <span className="nav__icon">
-              <IconSettings />
+    <UiPrefsProvider value={uiPrefsValue}>
+      <div className={`shell ${drawerSession || codexDrawerThread || sharePanel ? "shell--panel" : ""}`}>
+        {connection.offline && !isMock && <HubOfflineBanner />}
+        <nav className="nav" aria-label="Main">
+          <div className="nav__brand">
+            <BrandMark size={30} />
+            <span className="nav__wm">
+              <Wordmark />
+              <span className="nav__slogan">Run many. Forget none.</span>
             </span>
-            <span className="nav__label">Settings</span>
-          </a>
-          <button
-            className={`version ${seenVersion !== __APP_VERSION__ ? "version--new" : ""}`}
-            onClick={() => {
-              localStorage.setItem("hub.seenVersion", __APP_VERSION__);
-              setSeenVersion(__APP_VERSION__);
-              setShowWhatsNew(true);
-            }}
-            title="What's new"
-          >
-            v{__APP_VERSION__}
-          </button>
-        </div>
-      </nav>
-
-      <div className="main">
-        <header className="head" ref={headRef}>
-          <div className="head__title">
-            <h1>{current.label}</h1>
-            <p className="head__sub">{current.subtitle}</p>
           </div>
-        </header>
+          <div className="nav__search-slot">
+            <button type="button" className="nav__search" onClick={() => setPaletteOpen(true)} aria-label="Search" aria-keyshortcuts="Control+K" title="Search (Ctrl K)">
+              <IconSearch size={16} />
+              <span className="nav__search-label">Search</span>
+              <kbd className="nav__search-key">Ctrl K</kbd>
+            </button>
+          </div>
+          <ul className="nav__list">
+            {sidebar.pinned.map((item) => {
+              const badge = badgeOf(item.key);
+              return (
+                <li key={item.key}>
+                  <a
+                    className={`nav__item ${effectiveView === item.key ? "nav__item--on" : ""}`}
+                    href={`#/${item.key}`}
+                    title={item.label}
+                    aria-current={effectiveView === item.key ? "page" : undefined}
+                  >
+                    <span className="nav__icon">{item.icon}</span>
+                    <span className="nav__label">{item.label}</span>
+                    {badge > 0 && <span className={item.key === "sessions" ? "nav__badge nav__badge--attn" : "nav__badge"}>{badge}</span>}
+                  </a>
+                </li>
+              );
+            })}
+            {moreItems.length > 0 && <NavMore items={moreItems} activeKey={effectiveView} />}
+          </ul>
+          <div className="nav__foot">
+            <a
+              className={`nav__item nav__item--foot ${effectiveView === "settings" ? "nav__item--on" : ""}`}
+              href="#/settings"
+              title="Settings"
+              aria-current={effectiveView === "settings" ? "page" : undefined}
+            >
+              <span className="nav__icon">
+                <IconSettings />
+              </span>
+              <span className="nav__label">Settings</span>
+            </a>
+            <button
+              className={`version ${seenVersion !== __APP_VERSION__ ? "version--new" : ""}`}
+              onClick={() => {
+                localStorage.setItem("hub.seenVersion", __APP_VERSION__);
+                setSeenVersion(__APP_VERSION__);
+                setShowWhatsNew(true);
+              }}
+              title="What's new"
+            >
+              v{__APP_VERSION__}
+            </button>
+          </div>
+        </nav>
 
-        <div className="content">
-          {effectiveView === "sessions" && (
-            <SessionsView
-              sessions={sessions}
-              claims={claims}
-              groups={groups}
-              workspaces={workspaces}
-              codexSessions={codexSessions}
-              codexAppRunning={runtimes?.codexApp.running ?? false}
-              tick={tick}
-              onOpen={openSession}
-              onFocus={(id) => void focusSession(id)}
-              onArchive={(id) => void archiveSession(id)}
-              onDelete={(id) => void deleteSession(id)}
-              onRename={(id, title) => void renameSession(id, title)}
-              onFavorite={(id, favorite) => {
-                setSessions((prev) => {
-                  const before = prev[id];
-                  if (!before) return prev;
-                  return { ...prev, [id]: { ...before, favoriteAt: favorite ? Date.now() : null } };
-                });
-                void setSessionFavorite(id, favorite);
-              }}
-              onOpenCodex={openCodex}
-              onRenameCodex={(id, title) => void renameCodexThread(id, title)}
-              onArchiveCodex={(id) => void archiveCodexThread(id)}
-              onUnarchiveCodex={(id) => void unarchiveCodexThread(id)}
-              onDeleteCodex={(id) => void deleteCodexThread(id)}
-            />
-          )}
-          {effectiveView === "daily" && dailyEnabled && (
-            <TodayView
-              settings={settings}
-              workspaces={workspaces}
-              onOpenSession={openSession}
-              onOpenTask={(id) => navigate("tasks", id)}
-              subscribeDaily={subscribeDaily}
-              subscribeBoard={subscribeBoard}
-              onDelegated={(taskId, title) => pushToast("ok", `Delegated "${title}".`, { label: "Open task", run: () => navigate("tasks", taskId) })}
-              onNotice={ok}
-              onError={fail}
-            />
-          )}
-          {effectiveView === "board" && boardEnabled && (
-            <BoardView
-              workspaces={workspaces}
-              settings={settings}
-              subscribeBoard={subscribeBoard}
-              subscribeDaily={subscribeDaily}
-              onOpenSettings={() => navigate("settings", "features")}
-              openTaskId={route.param}
-              onOpenTaskHandled={consumeBoardParam}
-              onDelegated={(taskId, title) => pushToast("ok", `Delegated "${title}".`, { label: "Open task", run: () => navigate("tasks", taskId) })}
-              onNotice={ok}
-              onError={fail}
-            />
-          )}
-          {effectiveView === "usage" && usageEnabled && (
-            <UsageView settings={settings} sessions={sessions} onOpenSession={openSession} subscribeUsage={subscribeUsage} />
-          )}
-          {effectiveView === "flow" && (
-            <FlowView
-              sessions={sessions}
-              codexSessions={codexSessions}
-              tasks={tasks}
-              workspaces={workspaces}
-              groups={groups}
-              onOpenSession={openSession}
-              onOpenTask={(id) => navigate("tasks", id)}
-              onOpenCodex={openCodex}
-              onFocus={(id) => void focusSession(id)}
-              onOpenWorkspace={(name) => void openWorkspace(name)}
-            />
-          )}
-          {effectiveView === "tasks" && (
-            <TasksView
-              tasks={tasks}
-              sessions={sessions}
-              enabled={hubEnabled}
-              selectedId={route.param}
-              tick={hubTick}
-              onSelect={(id) => navigate("tasks", id)}
-              onOpenSession={openSession}
-              subscribeRunEvents={subscribeRunEvents}
-              onRefresh={loadHub}
-              onOpenSettings={() => navigate("settings", "connect")}
-              onError={fail}
-            />
-          )}
-          {effectiveView === "workspaces" && (
-            <WorkspacesView
-              workspaces={workspaces}
-              settings={settings}
-              enabled={hubEnabled}
-              focusName={route.param}
-              onChanged={loadHub}
-              onOpenSettings={() => navigate("settings", "paths")}
-              onNotice={ok}
-              onError={fail}
-            />
-          )}
-          {effectiveView === "reports" && <ReportsView reports={reports} enabled={hubEnabled} onOpenTask={(id) => navigate("tasks", id)} />}
-          {effectiveView === "share" && (
-            <ShareView
-              enabled={hubEnabled}
-              workspaces={workspaces}
-              sessions={sessions}
-              param={route.param}
-              tick={shareTick}
-              tunnel={tunnel}
-              onTunnelChanged={setTunnel}
-              subscribeShareStream={subscribeShareStream}
-              onOpenSettings={() => navigate("settings", "sharing")}
-              onOpenTask={(id) => navigate("tasks", id)}
-              onNotice={ok}
-              onError={fail}
-              panelHost={slotEl}
-            />
-          )}
-          {effectiveView === "settings" && (
-            <SettingsView
-              enabled={hubEnabled}
-              hubUrl={hubBase}
-              version={__APP_VERSION__}
-              section={(route.param as SettingsSection | null) ?? null}
-              settings={settings}
-              connect={connect}
-              hooks={hooks}
-              hooksBusy={hooksBusy}
-              notif={notifSettings}
-              groups={groups}
-              onToggleHooks={() => void toggleHooks()}
-              onSaveSettings={saveSettings}
-              onShell={shell}
-              onMcp={mcp}
-              autostart={autostart}
-              onAutostart={async (enabled) => {
-                try {
-                  const status = await setAutostart(enabled);
-                  setAutostartState(status);
-                  if (status.error) fail(status.error);
-                  else ok(enabled ? "The hub will start with Windows." : "Autostart removed.");
-                } catch (err) {
-                  fail(err instanceof Error ? err.message : "could not change autostart");
-                }
-              }}
-              theme={theme}
-              onTheme={setTheme}
-              tunnel={tunnel}
-              onTunnelSettings={async (patch) => {
-                try {
-                  setTunnel(await updateTunnelSettings(patch));
-                  ok("ngrok settings saved");
-                } catch (err) {
-                  fail(err instanceof Error ? err.message : "could not save");
-                }
-              }}
-              onNotif={setNotifSettings}
-              onWhatsNew={() => setShowWhatsNew(true)}
-              onCreateGroup={(name, match) => void createGroup(name, match)}
-              onUpdateGroup={(id, fields) => void updateGroup(id, fields)}
-              onDeleteGroup={(id) => void deleteGroup(id)}
-              onMoveGroup={moveGroup}
+        <div className="main">
+          <header className="head" ref={headRef}>
+            <div className="head__title">
+              <h1>{current.label}</h1>
+              <p className="head__sub">{current.subtitle}</p>
+            </div>
+          </header>
+
+          <div className="content">
+            {effectiveView === "sessions" && (
+              <SessionsView
+                sessions={sessions}
+                claims={claims}
+                groups={groups}
+                workspaces={workspaces}
+                codexSessions={codexSessions}
+                codexAppRunning={runtimes?.codexApp.running ?? false}
+                tick={tick}
+                onOpen={openSession}
+                onFocus={(id) => void focusSession(id)}
+                onArchive={(id) => void archiveSession(id)}
+                onDelete={(id) => void deleteSession(id)}
+                onRename={(id, title) => void renameSession(id, title)}
+                onFavorite={(id, favorite) => {
+                  setSessions((prev) => {
+                    const before = prev[id];
+                    if (!before) return prev;
+                    return { ...prev, [id]: { ...before, favoriteAt: favorite ? Date.now() : null } };
+                  });
+                  void setSessionFavorite(id, favorite);
+                }}
+                onOpenCodex={openCodex}
+                onRenameCodex={(id, title) => void renameCodexThread(id, title)}
+                onArchiveCodex={(id) => void archiveCodexThread(id)}
+                onUnarchiveCodex={(id) => void unarchiveCodexThread(id)}
+                onDeleteCodex={(id) => void deleteCodexThread(id)}
+              />
+            )}
+            {effectiveView === "daily" && dailyEnabled && (
+              <TodayView
+                settings={settings}
+                workspaces={workspaces}
+                onOpenSession={openSession}
+                onOpenTask={(id) => navigate("tasks", id)}
+                subscribeDaily={subscribeDaily}
+                subscribeBoard={subscribeBoard}
+                onDelegated={(taskId, title) => pushToast("ok", `Delegated "${title}".`, { label: "Open task", run: () => navigate("tasks", taskId) })}
+                onNotice={ok}
+                onError={fail}
+              />
+            )}
+            {effectiveView === "board" && boardEnabled && (
+              <BoardView
+                workspaces={workspaces}
+                settings={settings}
+                subscribeBoard={subscribeBoard}
+                subscribeDaily={subscribeDaily}
+                onOpenSettings={() => navigate("settings", "features")}
+                openTaskId={route.param}
+                onOpenTaskHandled={consumeBoardParam}
+                onDelegated={(taskId, title) => pushToast("ok", `Delegated "${title}".`, { label: "Open task", run: () => navigate("tasks", taskId) })}
+                onNotice={ok}
+                onError={fail}
+              />
+            )}
+            {effectiveView === "usage" && usageEnabled && (
+              <UsageView settings={settings} sessions={sessions} onOpenSession={openSession} subscribeUsage={subscribeUsage} />
+            )}
+            {effectiveView === "flow" && (
+              <FlowView
+                sessions={sessions}
+                codexSessions={codexSessions}
+                tasks={tasks}
+                workspaces={workspaces}
+                groups={groups}
+                onOpenSession={openSession}
+                onOpenTask={(id) => navigate("tasks", id)}
+                onOpenCodex={openCodex}
+                onFocus={(id) => void focusSession(id)}
+                onOpenWorkspace={(name) => void openWorkspace(name)}
+              />
+            )}
+            {effectiveView === "tasks" && (
+              <TasksView
+                tasks={tasks}
+                sessions={sessions}
+                enabled={hubEnabled}
+                selectedId={route.param}
+                tick={hubTick}
+                onSelect={(id) => navigate("tasks", id)}
+                onOpenSession={openSession}
+                subscribeRunEvents={subscribeRunEvents}
+                onRefresh={loadHub}
+                onOpenSettings={() => navigate("settings", "connect")}
+                onError={fail}
+              />
+            )}
+            {effectiveView === "workspaces" && (
+              <WorkspacesView
+                workspaces={workspaces}
+                settings={settings}
+                enabled={hubEnabled}
+                focusName={route.param}
+                onChanged={loadHub}
+                onOpenSettings={() => navigate("settings", "paths")}
+                onNotice={ok}
+                onError={fail}
+              />
+            )}
+            {effectiveView === "reports" && <ReportsView reports={reports} enabled={hubEnabled} onOpenTask={(id) => navigate("tasks", id)} />}
+            {effectiveView === "share" && (
+              <ShareView
+                enabled={hubEnabled}
+                workspaces={workspaces}
+                sessions={sessions}
+                param={route.param}
+                tick={shareTick}
+                tunnel={tunnel}
+                onTunnelChanged={setTunnel}
+                subscribeShareStream={subscribeShareStream}
+                onOpenSettings={() => navigate("settings", "sharing")}
+                onOpenTask={(id) => navigate("tasks", id)}
+                onNotice={ok}
+                onError={fail}
+                panelHost={slotEl}
+              />
+            )}
+            {effectiveView === "settings" && (
+              <SettingsView
+                enabled={hubEnabled}
+                hubUrl={hubBase}
+                version={__APP_VERSION__}
+                section={(route.param as SettingsSection | null) ?? null}
+                settings={settings}
+                connect={connect}
+                hooks={hooks}
+                hooksBusy={hooksBusy}
+                notif={notifSettings}
+                groups={groups}
+                onToggleHooks={() => void toggleHooks()}
+                onSaveSettings={saveSettings}
+                onShell={shell}
+                onMcp={mcp}
+                autostart={autostart}
+                onAutostart={async (enabled) => {
+                  try {
+                    const status = await setAutostart(enabled);
+                    setAutostartState(status);
+                    if (status.error) fail(status.error);
+                    else ok(enabled ? "The hub will start with Windows." : "Autostart removed.");
+                  } catch (err) {
+                    fail(err instanceof Error ? err.message : "could not change autostart");
+                  }
+                }}
+                theme={theme}
+                onTheme={setTheme}
+                tunnel={tunnel}
+                onTunnelSettings={async (patch) => {
+                  try {
+                    setTunnel(await updateTunnelSettings(patch));
+                    ok("ngrok settings saved");
+                  } catch (err) {
+                    fail(err instanceof Error ? err.message : "could not save");
+                  }
+                }}
+                onNotif={setNotifSettings}
+                onWhatsNew={() => setShowWhatsNew(true)}
+                onCreateGroup={(name, match) => void createGroup(name, match)}
+                onUpdateGroup={(id, fields) => void updateGroup(id, fields)}
+                onDeleteGroup={(id) => void deleteGroup(id)}
+                onMoveGroup={moveGroup}
+              />
+            )}
+          </div>
+
+          {!isMock && (
+            <StatusBar
+              runtimes={runtimes}
+              claudeSessions={liveSessions.length}
+              codexSessions={codexSessions.filter((session) => session.status !== "ended").length}
+              hubRunning={hubRunning}
+              hubAttention={hubAttention}
+              onOpenHub={() => navigate("tasks")}
+              limits={limits}
+              limitsEnabled={limitsEnabled}
+              onOpenUsage={usageEnabled ? () => navigate("usage") : undefined}
             />
           )}
         </div>
 
-        {!isMock && (
-          <StatusBar
-            runtimes={runtimes}
-            claudeSessions={liveSessions.length}
-            codexSessions={codexSessions.filter((session) => session.status !== "ended").length}
-            hubRunning={hubRunning}
-            hubAttention={hubAttention}
-            onOpenHub={() => navigate("tasks")}
-            limits={limits}
-            limitsEnabled={limitsEnabled}
-            onOpenUsage={usageEnabled ? () => navigate("usage") : undefined}
+        <div className="shell__slot" ref={setSlotEl} />
+
+        {drawerSession && (
+          <SessionDrawer
+            session={drawerSession}
+            workspace={workspaceOf(workspaces, drawerSession.cwd)}
+            claims={claims.filter((claim) => claim.sessionId === drawerSession.sessionId)}
+            onReleaseClaim={(id) => void releaseClaim(id)}
+            onClose={() => setDrawer(null)}
+            onShare={(id) => {
+              setDrawer(null);
+              navigate("share", `new:${id}`);
+            }}
+            onOpenTask={(id) => {
+              setDrawer(null);
+              navigate("tasks", id);
+            }}
           />
         )}
-      </div>
+        {codexDrawerThread && (
+          <CodexDrawer
+            thread={codexDrawerThread}
+            workspace={workspaceOf(workspaces, codexDrawerThread.cwd)}
+            onClose={() => setCodexDrawer(null)}
+            onOpenTask={(id) => {
+              setCodexDrawer(null);
+              navigate("tasks", id);
+            }}
+          />
+        )}
+        {showWhatsNew && <WhatsNew onClose={() => setShowWhatsNew(false)} />}
+        <CommandPalette key={paletteSeed.key} open={paletteOpen} items={paletteItems} onClose={closePalette} initialQuery={paletteSeed.query} queryItems={captureQueryItems} />
 
-      <div className="shell__slot" ref={setSlotEl} />
-
-      {drawerSession && (
-        <SessionDrawer
-          session={drawerSession}
-          workspace={workspaceOf(workspaces, drawerSession.cwd)}
-          claims={claims.filter((claim) => claim.sessionId === drawerSession.sessionId)}
-          onReleaseClaim={(id) => void releaseClaim(id)}
-          onClose={() => setDrawer(null)}
-          onShare={(id) => {
-            setDrawer(null);
-            navigate("share", `new:${id}`);
-          }}
-          onOpenTask={(id) => {
-            setDrawer(null);
-            navigate("tasks", id);
-          }}
-        />
-      )}
-      {codexDrawerThread && (
-        <CodexDrawer
-          thread={codexDrawerThread}
-          workspace={workspaceOf(workspaces, codexDrawerThread.cwd)}
-          onClose={() => setCodexDrawer(null)}
-          onOpenTask={(id) => {
-            setCodexDrawer(null);
-            navigate("tasks", id);
-          }}
-        />
-      )}
-      {showWhatsNew && <WhatsNew onClose={() => setShowWhatsNew(false)} />}
-      <CommandPalette key={paletteSeed.key} open={paletteOpen} items={paletteItems} onClose={closePalette} initialQuery={paletteSeed.query} queryItems={captureQueryItems} />
-
-      {toasts.length > 0 && (
-        <div className="toasts" aria-live="polite">
-          {toasts.map((toast) => (
-            <div key={toast.id} className={`toast toast--${toast.kind}`} role="status">
-              <span className="toast__text">{toast.text}</span>
-              {toast.action && (
-                <button
-                  className="act"
-                  onClick={() => {
-                    toast.action?.run();
-                    dismissToast(toast.id);
-                  }}
-                >
-                  {toast.action.label}
+        {toasts.length > 0 && (
+          <div className="toasts" aria-live="polite">
+            {toasts.map((toast) => (
+              <div key={toast.id} className={`toast toast--${toast.kind}`} role="status">
+                <span className="toast__text">{toast.text}</span>
+                {toast.action && (
+                  <button
+                    className="act"
+                    onClick={() => {
+                      toast.action?.run();
+                      dismissToast(toast.id);
+                    }}
+                  >
+                    {toast.action.label}
+                  </button>
+                )}
+                <button className="toast__close" onClick={() => dismissToast(toast.id)} aria-label="Dismiss">
+                  <IconClose />
                 </button>
-              )}
-              <button className="toast__close" onClick={() => dismissToast(toast.id)} aria-label="Dismiss">
-                <IconClose />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </UiPrefsProvider>
   );
 }

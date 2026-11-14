@@ -79,7 +79,7 @@ function settingsFor(root: string): DelegationSettings {
     autonomy: "full",
     ownerName: "alex",
     runTimeoutMinutes: 60,
-    features: { daily: true, trail: false, usage: false, limits: false, tasks: true },
+    features: { daily: true, trail: false, usage: false, limits: false, tasks: true, flow: false, delegated: false, workspaces: false, reports: false, share: false, widget: false },
     tasks: {
       root: "projects",
       section: "Open loops",
