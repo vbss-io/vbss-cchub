@@ -280,6 +280,15 @@ export function App() {
     [goToHash],
   );
 
+  useEffect(() => {
+    const onGoto = (event: Event) => {
+      const hash = (event as CustomEvent<string>).detail;
+      if (typeof hash === "string" && hash.startsWith("#/")) goToHash(hash);
+    };
+    window.addEventListener("cchub:goto-hash", onGoto);
+    return () => window.removeEventListener("cchub:goto-hash", onGoto);
+  }, [goToHash]);
+
   const openSession = useCallback((id: string) => {
     setCodexDrawer(null);
     setDrawer(id);
@@ -667,6 +676,7 @@ export function App() {
       try {
         const next = await putUiPrefs(patch);
         if (seq === uiPrefsSeq.current) setUiPrefs(next);
+        setUiPrefsLoaded(true);
       } catch (err) {
         if (err instanceof UiPrefsUnavailableError) return;
         fail(err instanceof Error ? err.message : "could not save the layout");

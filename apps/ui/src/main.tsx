@@ -25,7 +25,7 @@ if (root) {
 if (!isWidget && !isToast && "__TAURI_INTERNALS__" in window) {
   void import("@tauri-apps/api/event").then(({ listen }) => {
     void listen<string>("hub:navigate", (event) => {
-      location.hash = event.payload;
+      window.dispatchEvent(new CustomEvent<string>("cchub:goto-hash", { detail: event.payload }));
     });
   });
 }
