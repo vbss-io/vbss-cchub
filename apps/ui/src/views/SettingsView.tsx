@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import "../settings.css";
 import type { HooksStatus } from "../api";
 import type { AutostartStatus, ConnectStatus, DelegationSettings, McpClient, SettingsPatch, ShellKind, TunnelStatus } from "../delegation";
-import { isPluginEnabled } from "../plugins/registry";
-import { resolveSettingsTab } from "../settings-model";
-import { settingsTabs } from "../settings-sections";
+import type { PluginId } from "../plugins/types";
+import { isPluginPageSection, resolveSettingsLocation } from "../settings-model";
+import { coreSettingsTabs } from "../settings-sections";
 import type { GroupRecord } from "../types";
 import { AboutTab } from "./settings/AboutTab";
 import { AppearanceTab, type ThemeName } from "./settings/AppearanceTab";
@@ -12,13 +12,8 @@ import { ConnectionsTab } from "./settings/ConnectionsTab";
 import { GeneralTab } from "./settings/GeneralTab";
 import { GroupsTab } from "./settings/GroupsTab";
 import { NotificationsTab, type NotifSettings } from "./settings/NotificationsTab";
+import { PluginPage } from "./settings/PluginPage";
 import { PluginsTab } from "./settings/PluginsTab";
-import { ShareTab } from "./settings/ShareTab";
-import { TasksTab } from "./settings/TasksTab";
-import { TodayTab } from "./settings/TodayTab";
-import { TrailTab } from "./settings/TrailTab";
-import { UsageTab } from "./settings/UsageTab";
-import { WidgetTab } from "./settings/WidgetTab";
 
 export type { NotifSettings, ThemeName };
 export type { SettingsSection } from "../settings-model";
@@ -55,14 +50,25 @@ interface Props {
 export function SettingsView(props: Props) {
   const { enabled, hubUrl, version, section, settings } = props;
   const features = settings?.features ?? null;
-  const tabs = useMemo(() => settingsTabs(features), [features]);
-  const active = resolveSettingsTab(section, tabs);
+  const tabs = useMemo(() => coreSettingsTabs(), []);
+  const location = resolveSettingsLocation(section, features);
+  const active = location.tab;
+  const loadingPage = enabled && settings === null && isPluginPageSection(section);
   const navRef = useRef<HTMLElement>(null);
+  const returnTo = useRef<PluginId | null>(null);
   const tabProps = { enabled, settings, onSaveSettings: props.onSaveSettings };
+  const onFocusRestored = useCallback(() => {
+    returnTo.current = null;
+  }, []);
 
   useEffect(() => {
     navRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "center" });
   }, [active]);
+
+  useEffect(() => {
+    if (location.pluginId !== null) returnTo.current = location.pluginId;
+    else if (active !== "plugins" && !loadingPage) returnTo.current = null;
+  }, [location.pluginId, active, loadingPage]);
 
   return (
     <div className="view view--settings">
@@ -74,16 +80,14 @@ export function SettingsView(props: Props) {
         ))}
       </nav>
 
-      <div className="settings-panel" data-tab={active}>
+      <div className="settings-panel" data-tab={location.page ? location.page.key : active}>
         {active === "general" && <GeneralTab {...tabProps} autostart={props.autostart} onAutostart={props.onAutostart} />}
         {active === "appearance" && <AppearanceTab settings={settings} theme={props.theme} onTheme={props.onTheme} />}
-        {active === "plugins" && <PluginsTab {...tabProps} />}
-        {active === "today" && <TodayTab {...tabProps} />}
-        {active === "tasks" && <TasksTab {...tabProps} />}
-        {active === "trail" && <TrailTab {...tabProps} />}
-        {active === "usage" && <UsageTab {...tabProps} usageOn={isPluginEnabled("usage", features)} limitsOn={isPluginEnabled("limits", features)} />}
-        {active === "widget" && <WidgetTab {...tabProps} />}
-        {active === "sharing" && <ShareTab {...tabProps} tunnel={props.tunnel} onTunnelSettings={props.onTunnelSettings} />}
+        {loadingPage && <p className="hint" role="status">Loading your plugin settings...</p>}
+        {!loadingPage && active === "plugins" && location.page === null && <PluginsTab {...tabProps} restoreFocus={returnTo.current} onFocusRestored={onFocusRestored} />}
+        {!loadingPage && location.page !== null && location.pluginId !== null && (
+          <PluginPage {...tabProps} page={location.page} pluginId={location.pluginId} features={features} tunnel={props.tunnel} onTunnelSettings={props.onTunnelSettings} />
+        )}
         {active === "connections" && (
           <ConnectionsTab
             enabled={enabled}

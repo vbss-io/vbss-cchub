@@ -90,7 +90,7 @@ describe("buildViewItems", () => {
     assert.deepEqual(ids(items).slice(0, 2), ["view:sessions", "view:settings"]);
     assert.deepEqual(
       ids(items).filter((id) => id.startsWith("settings:")),
-      ["settings:general", "settings:appearance", "settings:plugins", "settings:today", "settings:connections", "settings:notifications", "settings:groups", "settings:about"],
+      ["settings:general", "settings:appearance", "settings:plugins", "settings:plugin-today", "settings:connections", "settings:notifications", "settings:groups", "settings:about"],
     );
     assert.equal(items.every((entry) => entry.kind === "view"), true);
   });
@@ -105,13 +105,23 @@ describe("buildViewItems", () => {
 
   it("only offers plugin tabs of enabled plugins", () => {
     const off = ids(buildViewItems(views, () => undefined, settingsTabs({ daily: false, trail: false, usage: false, limits: false, tasks: false, share: false, widget: false })));
-    assert.equal(off.includes("settings:today"), false);
-    assert.equal(off.includes("settings:sharing"), false);
+    assert.equal(off.includes("settings:plugin-today"), false);
+    assert.equal(off.includes("settings:plugin-share"), false);
     const on = ids(buildViewItems(views, () => undefined, settingsTabs({ daily: true, trail: true, usage: true, limits: true, tasks: true })));
     assert.deepEqual(
       on.filter((id) => id.startsWith("settings:")).slice(3, 9),
-      ["settings:today", "settings:tasks", "settings:usage", "settings:sharing", "settings:trail", "settings:widget"],
+      ["settings:plugin-today", "settings:plugin-tasks", "settings:plugin-usage", "settings:plugin-share", "settings:plugin-trail", "settings:plugin-widget"],
     );
+  });
+
+  it("titles a plugin page Settings › <Plugin> and opens it through its plugin route", () => {
+    const calls: [string, string | null | undefined][] = [];
+    const items = buildViewItems(views, (view, param) => calls.push([view, param]), settingsTabs({ daily: true, trail: false, usage: false, limits: false, tasks: true, share: false, widget: false }));
+    const tasks = items.find((entry) => entry.id === "settings:plugin-tasks");
+    assert.equal(tasks?.title, "Settings › Tasks");
+    assert.equal(tasks?.keywords?.includes("board"), true);
+    tasks?.run();
+    assert.deepEqual(calls, [["settings", "plugin-tasks"]]);
   });
 
   it("navigates with the view key and the settings tab", () => {

@@ -1,21 +1,31 @@
 import type { SidebarPrefs } from "./delegation";
-import { PLUGINS, type SidebarModel } from "./plugins/registry";
-import type { HubPlugin, PluginViewKey } from "./plugins/types";
+import { isPluginEnabled, PLUGINS, pluginSettingsTabs, type SidebarModel } from "./plugins/registry";
+import type { FeatureFlags, HubPlugin, PluginId, PluginViewKey } from "./plugins/types";
 
 export interface SettingsTabEntry {
   key: string;
   label: string;
 }
 
+export interface SettingsPageEntry extends SettingsTabEntry {
+  pluginIds: PluginId[];
+}
+
+export interface SettingsLocation {
+  tab: string;
+  page: SettingsPageEntry | null;
+  pluginId: PluginId | null;
+}
+
 export type SettingsSection = string;
 
-const TABS_BEFORE_PLUGINS: SettingsTabEntry[] = [
+const TABS_BEFORE_PLUGIN_PAGES: SettingsTabEntry[] = [
   { key: "general", label: "General" },
   { key: "appearance", label: "Appearance" },
   { key: "plugins", label: "Plugins" },
 ];
 
-const TABS_AFTER_PLUGINS: SettingsTabEntry[] = [
+const TABS_AFTER_PLUGIN_PAGES: SettingsTabEntry[] = [
   { key: "connections", label: "Connections" },
   { key: "notifications", label: "Notifications" },
   { key: "groups", label: "Groups" },
@@ -24,44 +34,84 @@ const TABS_AFTER_PLUGINS: SettingsTabEntry[] = [
 
 export const DEFAULT_SETTINGS_TAB = "general";
 
+export const PLUGINS_TAB = "plugins";
+
+const PLUGIN_PAGE_PREFIX = "plugin-";
+
 export const LEGACY_SECTION_TAB: Readonly<Record<string, string>> = {
   support: "about",
   paths: "general",
   hooks: "connections",
   connect: "connections",
-  features: "plugins",
-  sharing: "sharing",
+  features: PLUGINS_TAB,
+};
+
+const LEGACY_PLUGIN_SECTION: Readonly<Record<string, PluginId>> = {
+  today: "today",
+  daily: "today",
+  tasks: "tasks",
+  usage: "usage",
+  limits: "limits",
+  sharing: "share",
+  share: "share",
+  trail: "trail",
+  widget: "widget",
 };
 
 export const SETTINGS_TAB_KEYWORDS: Readonly<Record<string, string[]>> = {
   general: ["paths", "autostart", "startup", "windows", "autonomy", "timeout", "editor", "workspaces root", "second brain", "vault"],
   appearance: ["theme", "dracula", "midnight", "sidebar", "navigation", "pinned", "more"],
   plugins: ["features", "plugins", "enable", "disable", "toggle", "flow", "delegated", "workspaces", "reports"],
-  today: ["daily", "diary", "template", "advanced"],
-  tasks: ["board", "projects folder", "priority", "prefixes", "advanced"],
-  trail: ["session trail", "summaries", "diary"],
-  usage: ["limits", "quota", "tokens"],
-  widget: ["tray", "overlay", "edge", "rings"],
-  sharing: ["share", "ngrok", "tunnel", "identity"],
+  "plugin-today": ["daily", "diary", "template", "advanced", "plugin"],
+  "plugin-tasks": ["board", "projects folder", "priority", "prefixes", "advanced", "plugin"],
+  "plugin-trail": ["session trail", "summaries", "diary", "plugin"],
+  "plugin-usage": ["limits", "quota", "tokens", "plugin"],
+  "plugin-limits": ["usage", "quota", "tokens", "plugin"],
+  "plugin-widget": ["tray", "overlay", "edge", "rings", "plugin"],
+  "plugin-share": ["share", "sharing", "ngrok", "tunnel", "identity", "plugin"],
   connections: ["hooks", "mcp", "shell", "alias", "wk", "claude code", "codex"],
   notifications: ["alerts", "toast", "sound"],
   groups: ["sessions", "workspace"],
   about: ["support", "version", "backups", "data", "whats new", "sponsor"],
 };
 
-export const buildSettingsTabs = (pluginTabs: readonly SettingsTabEntry[]): SettingsTabEntry[] => [
-  ...TABS_BEFORE_PLUGINS,
-  ...pluginTabs.map(({ key, label }) => ({ key, label })),
-  ...TABS_AFTER_PLUGINS,
+export const pluginPageKey = (id: PluginId): string => `${PLUGIN_PAGE_PREFIX}${id}`;
+
+export const hasPluginSettings = (plugin: HubPlugin): boolean => plugin.settingsTab !== undefined;
+
+export const pluginSettingsPages = (features: FeatureFlags): SettingsPageEntry[] =>
+  pluginSettingsTabs(features).flatMap((tab) => {
+    const [first] = tab.pluginIds;
+    return first === undefined ? [] : [{ key: pluginPageKey(first), label: tab.label, pluginIds: tab.pluginIds }];
+  });
+
+export const buildSettingsTabs = (pluginPages: readonly SettingsTabEntry[]): SettingsTabEntry[] => [
+  ...TABS_BEFORE_PLUGIN_PAGES,
+  ...pluginPages.map(({ key, label }) => ({ key, label })),
+  ...TABS_AFTER_PLUGIN_PAGES,
 ];
 
-const pluginTabKeys = (): Set<string> => new Set(PLUGINS.flatMap((plugin) => (plugin.settingsTab ? [plugin.settingsTab.key] : [])));
+export const coreSettingsTabs = (): SettingsTabEntry[] => buildSettingsTabs([]);
 
-export const resolveSettingsTab = (section: string | null | undefined, tabs: readonly SettingsTabEntry[]): string => {
-  if (!section) return DEFAULT_SETTINGS_TAB;
+const sectionPluginId = (section: string): PluginId | null => {
+  const id = section.startsWith(PLUGIN_PAGE_PREFIX) ? section.slice(PLUGIN_PAGE_PREFIX.length) : Object.hasOwn(LEGACY_PLUGIN_SECTION, section) ? LEGACY_PLUGIN_SECTION[section] : undefined;
+  return PLUGINS.find((plugin) => plugin.id === id && hasPluginSettings(plugin))?.id ?? null;
+};
+
+export const isPluginPageSection = (section: string | null | undefined): boolean => Boolean(section) && sectionPluginId(section ?? "") !== null;
+
+export const resolveSettingsLocation = (section: string | null | undefined, features: FeatureFlags): SettingsLocation => {
+  const list: SettingsLocation = { tab: PLUGINS_TAB, page: null, pluginId: null };
+  if (!section) return { ...list, tab: DEFAULT_SETTINGS_TAB };
+  const pluginId = sectionPluginId(section);
+  if (pluginId !== null) {
+    const page = isPluginEnabled(pluginId, features) ? pluginSettingsPages(features).find((candidate) => candidate.pluginIds.includes(pluginId)) : undefined;
+    return page ? { tab: PLUGINS_TAB, page, pluginId } : list;
+  }
+  if (section.startsWith(PLUGIN_PAGE_PREFIX)) return list;
   const mapped = Object.hasOwn(LEGACY_SECTION_TAB, section) ? (LEGACY_SECTION_TAB[section] ?? section) : section;
-  if (tabs.some((tab) => tab.key === mapped)) return mapped;
-  return pluginTabKeys().has(mapped) ? "plugins" : DEFAULT_SETTINGS_TAB;
+  const known = coreSettingsTabs().some((tab) => tab.key === mapped);
+  return { tab: known ? mapped : DEFAULT_SETTINGS_TAB, page: null, pluginId: null };
 };
 
 export const needsVault = (plugin: HubPlugin): boolean => plugin.id === "today" || plugin.id === "tasks" || plugin.id === "trail";

@@ -1,17 +1,20 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { HubFeatures } from "./delegation";
-import { defaultSidebarPrefs, isPluginEnabled, pluginById, pluginSettingsTabs, sidebarModel } from "./plugins/registry";
+import { defaultSidebarPrefs, isPluginEnabled, pluginById, sidebarModel } from "./plugins/registry";
 import type { PluginId } from "./plugins/types";
 import {
   buildSettingsTabs,
   canMoveRow,
   canSetPinned,
   commitSidebar,
+  coreSettingsTabs,
   dropRow,
+  isPluginPageSection,
   moveRow,
   pluginHints,
-  resolveSettingsTab,
+  pluginSettingsPages,
+  resolveSettingsLocation,
   sameRows,
   setRowPinned,
   sidebarRows,
@@ -29,30 +32,53 @@ const rowsOf = (spec: string): SidebarRow[] =>
 const spec = (rows: SidebarRow[]): string => rows.map((row) => `${row.key}${row.pinned ? "*" : ""}`).join(" ");
 
 describe("buildSettingsTabs", () => {
-  it("puts plugin tabs between Plugins and Connections", () => {
-    assert.deepEqual(keys(buildSettingsTabs(pluginSettingsTabs(allOn))), ["general", "appearance", "plugins", "today", "tasks", "usage", "sharing", "trail", "widget", "connections", "notifications", "groups", "about"]);
+  it("lists the core tabs and the plugin pages between Plugins and Connections for the palette", () => {
+    assert.deepEqual(keys(buildSettingsTabs(pluginSettingsPages(allOn))), [
+      "general",
+      "appearance",
+      "plugins",
+      "plugin-today",
+      "plugin-tasks",
+      "plugin-usage",
+      "plugin-share",
+      "plugin-trail",
+      "plugin-widget",
+      "connections",
+      "notifications",
+      "groups",
+      "about",
+    ]);
   });
 
-  it("shows only the core tabs when no plugin has settings", () => {
-    assert.deepEqual(keys(buildSettingsTabs(pluginSettingsTabs(coreOnly))), ["general", "appearance", "plugins", "connections", "notifications", "groups", "about"]);
+  it("has only the core tabs at the top level", () => {
+    assert.deepEqual(keys(coreSettingsTabs()), ["general", "appearance", "plugins", "connections", "notifications", "groups", "about"]);
+    assert.deepEqual(keys(buildSettingsTabs(pluginSettingsPages(coreOnly))), keys(coreSettingsTabs()));
   });
 
-  it("merges usage and limits into one Usage tab", () => {
-    const tabs = buildSettingsTabs(pluginSettingsTabs({ ...coreOnly, usage: true, limits: true }));
-    assert.equal(tabs.filter((tab) => tab.key === "usage").length, 1);
+  it("merges usage and limits into one Usage page", () => {
+    const pages = pluginSettingsPages({ ...coreOnly, usage: true, limits: true });
+    assert.deepEqual(pages.map((page) => [page.key, page.label, page.pluginIds]), [["plugin-usage", "Usage", ["usage", "limits"]]]);
+  });
+
+  it("keys the Usage page by Limits when only Limits is on", () => {
+    assert.deepEqual(keys(pluginSettingsPages({ ...coreOnly, limits: true })), ["plugin-limits"]);
   });
 });
 
-describe("resolveSettingsTab", () => {
-  const tabs = buildSettingsTabs(pluginSettingsTabs({ ...coreOnly, daily: true, share: true, widget: true }));
+describe("resolveSettingsLocation", () => {
+  const features = { ...coreOnly, daily: true, share: true, widget: true, usage: true, limits: true };
+  const at = (section: string | null | undefined, flags = features) => {
+    const location = resolveSettingsLocation(section, flags);
+    return [location.tab, location.page?.key ?? null, location.pluginId];
+  };
 
   it("defaults to General", () => {
-    assert.equal(resolveSettingsTab(null, tabs), "general");
-    assert.equal(resolveSettingsTab(undefined, tabs), "general");
-    assert.equal(resolveSettingsTab("", tabs), "general");
+    assert.deepEqual(at(null), ["general", null, null]);
+    assert.deepEqual(at(undefined), ["general", null, null]);
+    assert.deepEqual(at(""), ["general", null, null]);
   });
 
-  it("maps every old section key to its new tab", () => {
+  it("maps old core section keys to their tab", () => {
     const expected: Record<string, string> = {
       support: "about",
       general: "general",
@@ -60,27 +86,62 @@ describe("resolveSettingsTab", () => {
       paths: "general",
       hooks: "connections",
       connect: "connections",
-      sharing: "sharing",
       features: "plugins",
-      widget: "widget",
+      plugins: "plugins",
       notifications: "notifications",
       groups: "groups",
       about: "about",
+      connections: "connections",
     };
-    for (const [old, tab] of Object.entries(expected)) assert.equal(resolveSettingsTab(old, tabs), tab, old);
+    for (const [old, tab] of Object.entries(expected)) assert.deepEqual(at(old), [tab, null, null], old);
   });
 
-  it("lands a disabled plugin tab on Plugins and an unknown key on General", () => {
-    assert.equal(resolveSettingsTab("tasks", tabs), "plugins");
-    assert.equal(resolveSettingsTab("trail", tabs), "plugins");
-    assert.equal(resolveSettingsTab("nonsense", tabs), "general");
-    assert.equal(resolveSettingsTab("constructor", tabs), "general");
+  it("lands every old plugin deep link on its plugin page", () => {
+    assert.deepEqual(at("today"), ["plugins", "plugin-today", "today"]);
+    assert.deepEqual(at("daily"), ["plugins", "plugin-today", "today"]);
+    assert.deepEqual(at("sharing"), ["plugins", "plugin-share", "share"]);
+    assert.deepEqual(at("share"), ["plugins", "plugin-share", "share"]);
+    assert.deepEqual(at("widget"), ["plugins", "plugin-widget", "widget"]);
+    assert.deepEqual(at("usage"), ["plugins", "plugin-usage", "usage"]);
+    assert.deepEqual(at("limits"), ["plugins", "plugin-usage", "limits"]);
+    assert.deepEqual(at("tasks", { ...features, tasks: true }), ["plugins", "plugin-tasks", "tasks"]);
+    assert.deepEqual(at("trail", { ...features, trail: true }), ["plugins", "plugin-trail", "trail"]);
   });
 
-  it("keeps new tab keys", () => {
-    assert.equal(resolveSettingsTab("today", tabs), "today");
-    assert.equal(resolveSettingsTab("connections", tabs), "connections");
-    assert.equal(resolveSettingsTab("plugins", tabs), "plugins");
+  it("opens a plugin page by its single-segment key", () => {
+    assert.deepEqual(at("plugin-today"), ["plugins", "plugin-today", "today"]);
+    assert.deepEqual(at("plugin-limits"), ["plugins", "plugin-usage", "limits"]);
+    assert.deepEqual(at("plugin-share"), ["plugins", "plugin-share", "share"]);
+  });
+
+  it("lands a disabled plugin, or a plugin without settings, on the Plugins list", () => {
+    assert.deepEqual(at("tasks"), ["plugins", null, null]);
+    assert.deepEqual(at("plugin-trail"), ["plugins", null, null]);
+    assert.deepEqual(at("plugin-flow"), ["plugins", null, null]);
+    assert.deepEqual(at("plugin-nonsense"), ["plugins", null, null]);
+    assert.deepEqual(at("today", coreOnly), ["plugins", null, null]);
+  });
+
+  it("serves the Usage page for Limits alone and not for the disabled Usage plugin", () => {
+    const limitsOnly = { ...coreOnly, limits: true };
+    assert.deepEqual(at("plugin-limits", limitsOnly), ["plugins", "plugin-limits", "limits"]);
+    assert.deepEqual(at("plugin-usage", limitsOnly), ["plugins", null, null]);
+  });
+
+  it("lands an unknown key on General", () => {
+    assert.deepEqual(at("nonsense"), ["general", null, null]);
+    assert.deepEqual(at("constructor"), ["general", null, null]);
+    assert.deepEqual(at("__proto__"), ["general", null, null]);
+  });
+});
+
+describe("isPluginPageSection", () => {
+  it("recognises plugin keys and old plugin links only", () => {
+    assert.equal(isPluginPageSection("plugin-tasks"), true);
+    assert.equal(isPluginPageSection("sharing"), true);
+    assert.equal(isPluginPageSection("plugin-flow"), false);
+    assert.equal(isPluginPageSection("plugins"), false);
+    assert.equal(isPluginPageSection(null), false);
   });
 });
 
