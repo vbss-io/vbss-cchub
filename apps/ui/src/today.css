@@ -577,6 +577,12 @@
   cursor: grab;
 }
 
+@media (hover: hover) {
+  .backlog__row {
+    padding-right: 80px;
+  }
+}
+
 .backlog__row:hover {
   background: color-mix(in srgb, var(--panel-2) 70%, transparent);
 }
@@ -597,7 +603,7 @@
 }
 
 .backlog__title {
-  flex: 1 1 12rem;
+  flex: 1 1 6rem;
   min-width: 0;
   padding: 0;
   border: 0;

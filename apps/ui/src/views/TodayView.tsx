@@ -151,7 +151,7 @@ function readTab(): Tab {
   return stored === "note" ? "note" : "today";
 }
 
-const BACKLOG_WIDTH = { default: 360, min: 260, max: 640 } as const;
+const BACKLOG_WIDTH = { default: 360, min: 300, max: 640 } as const;
 
 function TodayColumns({ split, main, side }: { split: boolean; main: ReactNode; side: ReactNode }) {
   const [width, setWidth] = useLayoutSize("today", "backlog", BACKLOG_WIDTH.default);

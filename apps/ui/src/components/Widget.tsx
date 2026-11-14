@@ -51,7 +51,7 @@ interface WidgetConfig {
 }
 
 const DEFAULT_CONFIG: WidgetConfig = {
-  enabled: true,
+  enabled: false,
   edge: "right",
   rings: { claude: false, codex: false },
   panel: "sessions",
@@ -495,6 +495,7 @@ export function Widget() {
   useEffect(() => {
     if (isMock) {
       setSessions(Object.fromEntries(MOCK_SESSIONS.map((s) => [s.sessionId, s])));
+      setConfig({ ...DEFAULT_CONFIG, enabled: true });
       setLoaded(true);
       return;
     }
@@ -504,18 +505,19 @@ export function Widget() {
         if (mounted) setTasks(list);
       }).catch(() => undefined);
     };
+    let retry: number | undefined;
     const reloadConfig = () => {
+      window.clearTimeout(retry);
       void getSettings()
         .then((settings) => {
           if (!mounted) return;
           setConfig(configOf(settings));
           setLoaded(true);
         })
-        .catch(() => undefined);
+        .catch(() => {
+          if (mounted) retry = window.setTimeout(reloadConfig, 3000);
+        });
     };
-    const fallback = window.setTimeout(() => {
-      if (mounted) setLoaded(true);
-    }, 4000);
     void fetchSessions().then((list) => {
       if (mounted) setSessions(Object.fromEntries(list.map((s) => [s.sessionId, s])));
     }).catch(() => undefined);
@@ -531,13 +533,16 @@ export function Widget() {
           return next;
         }),
       onDelegation: reloadTasks,
-      onSettings: (settings) => setConfig(configOf(settings)),
+      onSettings: (settings) => {
+        setConfig(configOf(settings));
+        setLoaded(true);
+      },
       onLimits: () => setLimitsTick((value) => value + 1),
       onUsage: () => setUsageTick((value) => value + 1),
     });
     return () => {
       mounted = false;
-      window.clearTimeout(fallback);
+      window.clearTimeout(retry);
       unsubscribe();
     };
   }, []);

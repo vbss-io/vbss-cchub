@@ -13,9 +13,9 @@ interface PendingFocus {
 }
 
 export function SidebarSettings({ settings }: { settings: DelegationSettings | null }) {
-  const { uiPrefs, updateUiPrefs } = useUiPrefs();
+  const { uiPrefs, loaded: prefsLoaded, updateUiPrefs } = useUiPrefs();
   const features = settings?.features ?? null;
-  const loaded = settings !== null;
+  const loaded = settings !== null && prefsLoaded;
   const rows = useMemo(() => sidebarRows(sidebarModel(features, uiPrefs.sidebar)), [features, uiPrefs.sidebar]);
   const [dragKey, setDragKey] = useState<PluginViewKey | null>(null);
   const [overKey, setOverKey] = useState<PluginViewKey | null>(null);

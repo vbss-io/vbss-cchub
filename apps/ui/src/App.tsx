@@ -13,6 +13,7 @@ import { IconChevron, IconClose, IconMore, IconSearch, IconSettings } from "./ic
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { unlockAudio } from "./notify";
 import { buildCaptureItems, buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, CAPTURE_PREFILL } from "./palette-items";
+import { disabledTarget } from "./plugins/nav-guard";
 import { enabledViews, isPluginEnabled, isViewEnabled, parseView, pluginCommandActions, sidebarModel, viewItem } from "./plugins/registry";
 import type { View } from "./plugins/types";
 import { applyUiPrefsPatch, emptyUiPrefs } from "./plugins/ui-prefs";
@@ -250,6 +251,7 @@ export function App() {
   const [paletteSeed, setPaletteSeed] = useState({ key: 0, query: "" });
   const [paletteBoard, setPaletteBoard] = useState<BoardPayload | null>(null);
   const [uiPrefs, setUiPrefs] = useState<UiPrefs>(emptyUiPrefs);
+  const [uiPrefsLoaded, setUiPrefsLoaded] = useState(isMock);
   const uiPrefsSeq = useRef(0);
   const uiPrefsPending = useRef(0);
 
@@ -268,9 +270,15 @@ export function App() {
   const usageListeners = useRef(new Set<(event: UsageEvent) => void>());
   const taskStatusRef = useRef(new Map<string, TaskStatus>());
 
-  const navigate = useCallback((view: View, param?: string | null) => {
-    location.hash = param ? `#/${view}/${param}` : `#/${view}`;
+  const goToHash = useCallback((hash: string) => {
+    if (location.hash === hash) setRoute(parseRoute(hash));
+    else location.hash = hash;
   }, []);
+
+  const navigate = useCallback(
+    (view: View, param?: string | null) => goToHash(param ? `#/${view}/${param}` : `#/${view}`),
+    [goToHash],
+  );
 
   const openSession = useCallback((id: string) => {
     setCodexDrawer(null);
@@ -346,7 +354,9 @@ export function App() {
     const seq = uiPrefsSeq.current;
     void getUiPrefs()
       .then((next) => {
-        if (seq === uiPrefsSeq.current) setUiPrefs(next);
+        if (seq !== uiPrefsSeq.current) return;
+        setUiPrefs(next);
+        setUiPrefsLoaded(true);
       })
       .catch(() => undefined);
   }, []);
@@ -519,7 +529,7 @@ export function App() {
         for (const listener of runListeners.current) listener(event);
       },
       onNavigate: (hash) => {
-        location.hash = hash;
+        goToHash(hash);
         if (!("__TAURI_INTERNALS__" in window)) return;
         void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
           const current = getCurrentWindow();
@@ -560,14 +570,16 @@ export function App() {
         for (const listener of usageListeners.current) listener("limits");
       },
       onUiPrefs: (next) => {
-        if (mounted && uiPrefsPending.current === 0) setUiPrefs(next);
+        if (!mounted || uiPrefsPending.current !== 0) return;
+        setUiPrefs(next);
+        setUiPrefsLoaded(true);
       },
     });
     return () => {
       mounted = false;
       unsubscribe();
     };
-  }, []);
+  }, [goToHash]);
 
   useEffect(() => {
     if (!hubEnabled || isMock) return;
@@ -665,7 +677,7 @@ export function App() {
     },
     [fail, loadUiPrefs],
   );
-  const uiPrefsValue = useMemo<UiPrefsContextValue>(() => ({ uiPrefs, updateUiPrefs }), [uiPrefs, updateUiPrefs]);
+  const uiPrefsValue = useMemo<UiPrefsContextValue>(() => ({ uiPrefs, loaded: uiPrefsLoaded, updateUiPrefs }), [uiPrefs, uiPrefsLoaded, updateUiPrefs]);
 
   const saveSettings = async (patch: SettingsPatch) => {
     try {
@@ -721,6 +733,17 @@ export function App() {
   const announceDelegated = (taskId: string, title: string) =>
     pushToast("ok", `Delegated "${title}".`, delegatedEnabled ? { label: "Open task", run: () => navigate("tasks", taskId) } : undefined);
   const effectiveView: View = isViewEnabled(route.view, features) ? route.view : "sessions";
+  const featuresRef = useRef(features);
+  featuresRef.current = features;
+  const settingsLoaded = settings !== null;
+  const noticedRoute = useRef<Route | null>(null);
+  useEffect(() => {
+    if (!settingsLoaded || noticedRoute.current === route) return;
+    noticedRoute.current = route;
+    const name = disabledTarget(route.view, featuresRef.current);
+    if (name === null) return;
+    pushToast("error", `${name} is off.`, { label: "Turn on in Settings", run: () => navigate("settings", "plugins") });
+  }, [route, settingsLoaded, pushToast, navigate]);
   const current = viewItem(effectiveView) ?? SETTINGS_HEAD;
   const drawerSession = drawer ? (sessions[drawer] ?? null) : null;
   const codexDrawerThread = codexDrawer ? (codexSessions.find((thread) => thread.id === codexDrawer) ?? null) : null;
