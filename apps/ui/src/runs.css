@@ -282,3 +282,44 @@
     flex: 0 1 auto;
   }
 }
+
+.card-menu__item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.card-menu__item:disabled:hover {
+  background: transparent;
+}
+
+.card.card--tone-go {
+  border-left-color: var(--go);
+}
+
+.card.card--tone-pend {
+  border-left-color: var(--pend);
+}
+
+.card.card--tone-hold {
+  border-left-color: var(--hold);
+}
+
+.card.card--tone-unread {
+  border-left-color: var(--unread);
+}
+
+.card.card--tone-muted {
+  border-left-color: var(--ended);
+}
+
+.why.why--pend {
+  border-left-color: var(--pend);
+}
+
+.why.why--hold {
+  border-left-color: var(--hold);
+}
+
+.task-timing {
+  margin: 2px 0 0;
+}

@@ -6,6 +6,7 @@ export interface CardMenuItem {
   label: string;
   onSelect: () => void;
   danger?: boolean;
+  disabled?: boolean;
 }
 
 interface MenuAnchor {
@@ -45,7 +46,7 @@ export function CardMenu({ menu, items, label }: Props) {
   const { anchor, close } = menu;
 
   const focusItem = useCallback((index: number) => {
-    const nodes = popupRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
+    const nodes = popupRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)');
     if (!nodes || nodes.length === 0) return;
     nodes[(index + nodes.length) % nodes.length]?.focus();
   }, []);
@@ -88,7 +89,7 @@ export function CardMenu({ menu, items, label }: Props) {
 
   const onPopupKey = (event: KeyboardEvent<HTMLDivElement>) => {
     event.stopPropagation();
-    const nodes = Array.from(popupRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
+    const nodes = Array.from(popupRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []);
     const index = nodes.indexOf(document.activeElement as HTMLButtonElement);
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -127,6 +128,7 @@ export function CardMenu({ menu, items, label }: Props) {
 
   const select = (item: CardMenuItem) => (event: MouseEvent) => {
     event.stopPropagation();
+    if (item.disabled) return;
     close();
     item.onSelect();
   };
@@ -164,7 +166,7 @@ export function CardMenu({ menu, items, label }: Props) {
             }}
           >
             {items.map((item) => (
-              <button key={item.key} type="button" role="menuitem" tabIndex={-1} className={`card-menu__item ${item.danger ? "card-menu__item--danger" : ""}`} onClick={select(item)}>
+              <button key={item.key} type="button" role="menuitem" tabIndex={-1} disabled={item.disabled} className={`card-menu__item ${item.danger ? "card-menu__item--danger" : ""}`} onClick={select(item)}>
                 {item.label}
               </button>
             ))}

@@ -3,7 +3,8 @@ import type { TaskRecord } from "../delegation";
 import { taskArchivedAt, taskIsolation } from "../delegation-actions";
 import { IconClose, IconCode, IconCodex, IconExpand } from "../icons";
 import { Markdown } from "../markdown";
-import { taskInFlight, taskNeedsYou, taskPrimaryAction, worktreeMergeable } from "../runs-model";
+import { taskInFlight, taskNeedsYou, taskPrimaryAction, taskStatusTone, taskTiming, worktreeMergeable } from "../runs-model";
+import { relativeTime } from "../time";
 import type { CodexSessionRecord, RunEventMessage, SessionRecord } from "../types";
 import { useTaskDetail } from "../use-task-detail";
 import { DRAWER_WIDTH, useDrawerWidth } from "../use-layout-size";
@@ -11,7 +12,7 @@ import { ReportRow } from "../views/ReportsView";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 import { LiveLog, RunCard, WorktreePanel } from "./TaskDetailParts";
-import { TASK_STATUS_LABEL, taskOrigin, whyOf, worktreeLabel } from "./TaskCard";
+import { taskOrigin, taskStatusLabel, whyOf, worktreeLabel } from "./TaskCard";
 
 type Tab = "live" | "asked" | "runs" | "worktree" | "reports" | "details";
 
@@ -84,6 +85,8 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
   const reports = state.detail?.reports ?? [];
   const baseBranch = state.worktree?.baseBranch ?? task?.baseBranch ?? "base";
   const name = task?.title ?? "Task";
+  const tone = task ? taskStatusTone(task) : "muted";
+  const timing = task ? taskTiming(task, Date.now()) : null;
 
   const startContinue = () => {
     setComposing(true);
@@ -105,20 +108,20 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
 
   const menuItems: CardMenuItem[] = task
     ? [
-        ...(primary !== "continue" && !running && !archived ? [{ key: "continue", label: "Continue", onSelect: startContinue }] : []),
-        ...(primary !== "merge" && canMerge ? [{ key: "merge", label: `Merge into ${baseBranch}`, onSelect: mergeNow }] : []),
-        ...(why ? [{ key: "retry", label: why.retry === "autonomous" ? "Retry autonomous" : "Retry", onSelect: () => state.retry(why.retry) }] : []),
-        ...(why && why.retry === "autonomous" ? [{ key: "retry-plain", label: "Retry", onSelect: () => state.retry("plain") }] : []),
+        ...(primary !== "continue" && !running ? [{ key: "continue", label: "Continue", disabled: state.busy || composing, onSelect: startContinue }] : []),
+        ...(primary !== "merge" && canMerge ? [{ key: "merge", label: `Merge into ${baseBranch}`, disabled: state.busy, onSelect: mergeNow }] : []),
+        ...(why ? [{ key: "retry", label: why.retry === "autonomous" ? "Retry autonomous" : "Retry", disabled: state.busy, onSelect: () => state.retry(why.retry) }] : []),
+        ...(why && why.retry === "autonomous" ? [{ key: "retry-plain", label: "Retry", disabled: state.busy, onSelect: () => state.retry("plain") }] : []),
         ...(task.sessionId && sessions[task.sessionId] ? [{ key: "session", label: "Open session", onSelect: () => onOpenSession(task.sessionId ?? "") }] : []),
         ...(thread ? [{ key: "thread", label: "Open Codex thread", onSelect: () => onOpenCodex(thread.id) }] : []),
         ...(origin?.sessionId ? [{ key: "origin", label: "Open delegating session", onSelect: () => onOpenSession(origin.sessionId ?? "") }] : []),
         { key: "large", label: full ? "Back to the side panel" : "Open in a large view", onSelect: () => setFull((value) => !value) },
         ...(archived
-          ? [{ key: "unarchive", label: "Unarchive", onSelect: state.unarchive }]
+          ? [{ key: "unarchive", label: "Unarchive", disabled: state.busy, onSelect: state.unarchive }]
           : !running && state.archiveSupported
-            ? [{ key: "archive", label: "Archive", onSelect: state.archive }]
+            ? [{ key: "archive", label: "Archive", disabled: state.busy, onSelect: state.archive }]
             : []),
-        ...(isolated && state.worktree?.exists ? [{ key: "discard", label: "Discard worktree", danger: true, onSelect: askDiscard }] : []),
+        ...(isolated && state.worktree?.exists && !running ? [{ key: "discard", label: "Discard worktree", danger: true, disabled: state.busy, onSelect: askDiscard }] : []),
       ]
     : [];
 
@@ -145,7 +148,7 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
             </div>
             {task && (
               <div className="card__badges">
-                <span className={`tag tag--${task.status}`}>{TASK_STATUS_LABEL[task.status]}</span>
+                <span className={`tag tag--${tone}`} data-status={task.status}>{taskStatusLabel(task)}</span>
                 <span className={`client client--${task.runner === "codex" ? "codex" : "claude"}`} title={`${task.runner === "codex" ? "Codex" : "Claude"} runner`}>
                   {task.runner === "codex" ? <IconCodex /> : <IconCode />}
                   <span>{task.runner === "codex" ? "Codex" : "Claude"}</span>
@@ -153,6 +156,11 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
                 <span className="chip chip--ws">{workspace ?? task.workspace}{task.repo ? ` / ${task.repo}` : ""}</span>
                 {archived && <span className="tag tag--muted">archived</span>}
               </div>
+            )}
+            {timing && (
+              <p className="muted small task-timing">
+                started {relativeTime(timing.startedAt)} · {timing.duration} · {timing.runs}
+              </p>
             )}
           </div>
           <div className="drawer__actions">
@@ -179,7 +187,7 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
         </header>
 
         {why && task && taskNeedsYou(task.status) && (
-          <div className="why why--drawer">
+          <div className={`why why--drawer why--${tone}`}>
             <span className="why__headline">{why.headline}</span>
             {why.detail && <span className="why__detail">{why.detail}</span>}
           </div>
@@ -301,8 +309,12 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
                   "—"
                 )}
               </dd>
-              <dt>Created</dt>
+              <dt>Started</dt>
               <dd>{new Date(task.createdAt).toLocaleString()}</dd>
+              <dt>Duration</dt>
+              <dd>{timing?.duration ?? "—"}</dd>
+              <dt>Runs</dt>
+              <dd>{timing?.runs ?? "—"}</dd>
               <dt>Updated</dt>
               <dd>{new Date(task.updatedAt).toLocaleString()}</dd>
             </dl>

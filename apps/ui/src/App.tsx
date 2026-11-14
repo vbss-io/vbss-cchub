@@ -1318,6 +1318,7 @@ export function App() {
         {drawerSession && (
           <SessionDrawer
             session={drawerSession}
+            sessions={sessions}
             workspace={workspaceOf(workspaces, drawerSession.cwd)}
             claims={claims.filter((claim) => claim.sessionId === drawerSession.sessionId)}
             delegatedEnabled={delegatedEnabled}
@@ -1355,6 +1356,7 @@ export function App() {
         )}
         {taskDrawer && delegatedEnabled && (
           <TaskDrawer
+            key={taskDrawer}
             taskId={taskDrawer}
             tasks={tasks}
             sessions={sessions}

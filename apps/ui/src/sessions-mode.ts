@@ -12,7 +12,7 @@ export const sessionsModeRouteOf = (view: string, flowOn: boolean): SessionsMode
 
 export const navCurrentKey = (view: string, mode: SessionsMode, flowOn: boolean): string => (view === "sessions" && flowOn && mode === "map" ? "flow" : view);
 
-export const navClickMode = (key: string, flowOn: boolean): SessionsMode | null => (key === "sessions" ? "list" : key === "flow" && flowOn ? "map" : null);
+export const navClickMode = (key: string, flowOn: boolean): SessionsMode | null => (key === "sessions" || key === "tasks" ? "list" : key === "flow" && flowOn ? "map" : null);
 
 export interface MapScope {
   sessions: boolean;

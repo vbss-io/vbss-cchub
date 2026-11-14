@@ -56,3 +56,33 @@ export function codexMenuKeys({ hubTask, delegatedOn, archived }: { hubTask: boo
   keys.push(archived ? "unarchive" : "archive");
   return keys;
 }
+
+export interface SessionRelationsInput {
+  forkOf: string | null;
+  forkParentName: string | null;
+  helperOf: string | null;
+  helperParentName: string | null;
+  helpers: number;
+  helpersTotal: number;
+  peers: number;
+}
+
+export interface SessionRelations {
+  fork: string;
+  helpers: string;
+  peers: string;
+}
+
+const NONE = "—";
+
+export function sessionRelations({ forkOf, forkParentName, helperOf, helperParentName, helpers, helpersTotal, peers }: SessionRelationsInput): SessionRelations {
+  const helperParts = [
+    ...(helpersTotal > 0 ? [`${helpers} helper${helpers === 1 ? "" : "s"} folded in · ${helpersTotal} total`] : []),
+    ...(helperOf ? [`helper of ${helperParentName ?? helperOf.slice(0, 8)}`] : []),
+  ];
+  return {
+    fork: forkOf ? `fork of ${forkParentName ?? forkOf.slice(0, 8)}` : NONE,
+    helpers: helperParts.length > 0 ? helperParts.join(" · ") : NONE,
+    peers: peers > 0 ? `${peers} other live agent${peers === 1 ? "" : "s"} in this folder` : NONE,
+  };
+}

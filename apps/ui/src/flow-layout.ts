@@ -1,5 +1,6 @@
 import type { TaskRecord, WorkspaceRecord } from "./delegation";
 import type { AgentRecord, CodexSessionRecord, GroupRecord, SessionRecord, SessionStatus } from "./types";
+import { taskStatusTone } from "./runs-model";
 import { workspaceOf } from "./wsmatch";
 
 export type Orientation = "horizontal" | "vertical";
@@ -103,12 +104,7 @@ const sessionSubtitle = (session: SessionRecord): string => {
 
 const taskRunning = (task: TaskRecord): boolean => task.status === "running" || task.status === "pending";
 
-export const taskTone = (task: TaskRecord): FlowTone => {
-  if (taskRunning(task)) return "go";
-  if (task.status === "attention") return "pend";
-  if (task.status === "failed" || task.status === "interrupted") return "hold";
-  return "muted";
-};
+export const taskTone = (task: TaskRecord): FlowTone => taskStatusTone(task);
 
 const taskGroupTone = (tasks: TaskRecord[]): FlowTone => {
   if (tasks.some((task) => task.status === "attention")) return "pend";

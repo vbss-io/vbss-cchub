@@ -13,6 +13,7 @@ import { IconSearch } from "../icons";
 import { folderPeers } from "../peers";
 import {
   emptyFold,
+  filterForOrigin,
   foldTaskRuns,
   needsByGroup,
   normalizeOrigin,
@@ -25,6 +26,7 @@ import {
   taskNeedsYou,
   taskRunStatus,
   taskSummary,
+  withLiveCounts,
   type Origin,
   type OriginEntry,
 } from "../runs-model";
@@ -211,7 +213,11 @@ export function SessionsView({
   onError,
 }: Props) {
   const origin = normalizeOrigin(requestedOrigin, delegatedEnabled);
-  const [filter, setFilter] = useState<FilterKey>("all");
+  const [pickedFilter, setFilter] = useState<FilterKey>("all");
+  const filter = filterForOrigin(pickedFilter, origin);
+  useEffect(() => {
+    if (pickedFilter !== filter) setFilter(filter);
+  }, [pickedFilter, filter]);
   const [clientFilter, setClientFilter] = useState<ClientFilter>("all");
   const [sort, setSort] = useState<SortKey>("status");
   const [query, setQuery] = useState("");
@@ -258,12 +264,24 @@ export function SessionsView({
     const entries: OriginEntry[] = [];
     for (const session of Object.values(sessions)) entries.push({ origin: "claude", live: LIVE_BUCKETS.includes(bucketOf(session, "all")) });
     for (const thread of codexSessions) {
-      if (delegatedEnabled && fold.foldedThreads.has(thread.id)) continue;
-      entries.push({ origin: "codex", live: LIVE_BUCKETS.includes(codexBucketOf(thread)) });
+      entries.push({ origin: "codex", live: LIVE_BUCKETS.includes(codexBucketOf(thread)), folded: delegatedEnabled && fold.foldedThreads.has(thread.id) });
     }
     if (delegatedEnabled) for (const task of liveTasks) entries.push({ origin: "delegated", live: LIVE_BUCKETS.includes(taskBucket(task)) });
     return originCounts(entries);
   }, [sessions, codexSessions, liveTasks, delegatedEnabled, fold, tick]);
+
+  const clientLive = useMemo(() => {
+    const live: Partial<Record<ClientFilter, number>> = {};
+    for (const option of CLIENT_FILTERS) {
+      if (option.key === "all") continue;
+      const key = option.key;
+      live[key] =
+        key === "codex"
+          ? codexSessions.filter((thread) => LIVE_BUCKETS.includes(codexBucketOf(thread))).length
+          : Object.values(sessions).filter((session) => matchesClient(session, key) && LIVE_BUCKETS.includes(bucketOf(session, key))).length;
+    }
+    return live;
+  }, [sessions, codexSessions, tick]);
 
   const { counts, needs, favorites, list } = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -567,7 +585,7 @@ export function SessionsView({
             <input className="in" placeholder="search title, folder, message" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
           <RunsFilters
-            clients={clientOptions}
+            clients={withLiveCounts(clientOptions, clientLive)}
             client={effectiveClient}
             onClient={setClientFilter}
             sorts={SORTS}

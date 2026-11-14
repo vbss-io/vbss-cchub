@@ -11,9 +11,15 @@ import {
   originOptions,
   parseOrigin,
   partitionNeedsYou,
+  filterForOrigin,
+  humanizeDuration,
+  runStatusTone,
   runsRouteOf,
   taskBucket,
   taskPrimaryAction,
+  taskStatusTone,
+  taskTiming,
+  withLiveCounts,
   taskReadyToMerge,
   taskRunStatus,
   taskSummary,
@@ -228,5 +234,101 @@ describe("taskSummary", () => {
       now,
     );
     assert.deepEqual(summary, { running: 1, needYou: 2, doneToday: 1, failed: 1 });
+  });
+});
+
+describe("taskStatusTone", () => {
+  it("is cyan while running, yellow when it needs you, red on failure and grey when done", () => {
+    assert.equal(taskStatusTone(task("running")), "go");
+    assert.equal(taskStatusTone(task("pending")), "go");
+    assert.equal(taskStatusTone(task("attention")), "pend");
+    assert.equal(taskStatusTone(task("failed")), "hold");
+    assert.equal(taskStatusTone(task("interrupted")), "hold");
+    assert.equal(taskStatusTone(task("completed")), "muted");
+    assert.equal(taskStatusTone(task("cancelled")), "muted");
+  });
+
+  it("is violet for a finished worktree waiting to be merged, like an unread session", () => {
+    assert.equal(taskStatusTone(task("completed", { isolation: "worktree", worktreePath: "/w" })), "unread");
+    assert.equal(taskStatusTone(task("completed", { isolation: "worktree", worktreePath: "/w", mergedAt: 1 })), "muted");
+  });
+
+  it("is grey for any archived task", () => {
+    assert.equal(taskStatusTone(task("running", { archivedAt: 1 })), "muted");
+    assert.equal(taskStatusTone(task("failed", { archivedAt: 1 })), "muted");
+    assert.equal(taskStatusTone(task("completed", { isolation: "worktree", worktreePath: "/w", archivedAt: 1 })), "muted");
+  });
+
+  it("never uses the brand or amber colours", () => {
+    const statuses: TaskStatus[] = ["pending", "running", "attention", "completed", "failed", "interrupted", "cancelled"];
+    for (const status of statuses) assert.ok(["go", "pend", "hold", "unread", "muted"].includes(taskStatusTone(task(status))));
+  });
+});
+
+describe("runStatusTone", () => {
+  it("colours a single run by its status alone", () => {
+    assert.equal(runStatusTone("running"), "go");
+    assert.equal(runStatusTone("attention"), "pend");
+    assert.equal(runStatusTone("failed"), "hold");
+    assert.equal(runStatusTone("completed"), "muted");
+  });
+});
+
+describe("originCounts with folded entries", () => {
+  it("counts a folded Codex thread under Codex but not under All, where its task already stands for it", () => {
+    const counts = originCounts([
+      { origin: "codex", live: true },
+      { origin: "codex", live: true, folded: true },
+      { origin: "delegated", live: true },
+    ]);
+    assert.deepEqual(counts, { all: 2, claude: 0, codex: 2, delegated: 1 });
+  });
+});
+
+describe("filterForOrigin", () => {
+  it("falls back to All when Favorites is picked on an origin without Claude sessions", () => {
+    assert.equal(filterForOrigin("favorites", "codex"), "all");
+    assert.equal(filterForOrigin("favorites", "delegated"), "all");
+  });
+
+  it("keeps Favorites where Claude sessions show and keeps every other filter", () => {
+    assert.equal(filterForOrigin("favorites", "all"), "favorites");
+    assert.equal(filterForOrigin("favorites", "claude"), "favorites");
+    assert.equal(filterForOrigin("needs-you", "codex"), "needs-you");
+    assert.equal(filterForOrigin("archived", "delegated"), "archived");
+  });
+});
+
+describe("withLiveCounts", () => {
+  it("appends the live count to each option that has live items and leaves the rest bare", () => {
+    const options = [
+      { key: "all", label: "All clients" },
+      { key: "hub", label: "Hub runs (headless)" },
+      { key: "share", label: "Share forks" },
+      { key: "codex", label: "Codex threads" },
+    ] as const;
+    assert.deepEqual(
+      withLiveCounts(options, { hub: 2, share: 0, codex: 5 }).map((item) => item.label),
+      ["All clients", "Hub runs (headless) (2)", "Share forks", "Codex threads (5)"],
+    );
+  });
+});
+
+describe("taskTiming", () => {
+  const minute = 60_000;
+  it("reports when it started, how long it ran and how many runs it took", () => {
+    const timing = taskTiming({ status: "completed", createdAt: 0, updatedAt: 90 * minute, runsCount: 2 }, 100 * minute);
+    assert.deepEqual(timing, { startedAt: 0, duration: "1h 30m", runs: "2 runs" });
+  });
+
+  it("measures a running task up to now and says it is still running", () => {
+    const timing = taskTiming({ status: "running", createdAt: 0, updatedAt: minute, runsCount: 1 }, 5 * minute);
+    assert.deepEqual(timing, { startedAt: 0, duration: "running 5m", runs: "1 run" });
+  });
+
+  it("humanizes short and long spans", () => {
+    assert.equal(humanizeDuration(30_000), "under a minute");
+    assert.equal(humanizeDuration(2 * 60 * minute), "2h");
+    assert.equal(humanizeDuration(3 * 24 * 60 * minute), "3d");
   });
 });

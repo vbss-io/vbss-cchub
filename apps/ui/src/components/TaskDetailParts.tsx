@@ -1,20 +1,11 @@
 import { useEffect, useRef } from "react";
-import type { RunRecord, TaskStatus } from "../delegation";
+import type { RunRecord } from "../delegation";
 import type { WorktreeStatus } from "../delegation-actions";
 import { Markdown } from "../markdown";
+import { runStatusTone } from "../runs-model";
 import { relativeTime } from "../time";
 import type { LogLine } from "../use-task-detail";
 import { TASK_STATUS_LABEL } from "./TaskCard";
-
-const STATUS_TONE: Record<TaskStatus, string> = {
-  pending: "pend",
-  running: "pend",
-  attention: "pend",
-  completed: "go",
-  failed: "hold",
-  interrupted: "hold",
-  cancelled: "muted",
-};
 
 export function LiveLog({ lines, running }: { lines: LogLine[]; running: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -52,7 +43,7 @@ export function RunCard({ run }: { run: RunRecord }) {
         <span className="muted">
           #{run.seq} · {run.kind}
         </span>
-        <span className={`tag tag--${STATUS_TONE[run.status]} tag--${run.status}`}>{TASK_STATUS_LABEL[run.status]}</span>
+        <span className={`tag tag--${runStatusTone(run.status)}`} data-status={run.status}>{TASK_STATUS_LABEL[run.status]}</span>
         <span className="chip">{run.runner}</span>
         {run.effectiveModel && <span className="chip">{run.effectiveModel}</span>}
         {run.permissionMode && <span className="chip">{run.permissionMode}</span>}
@@ -131,7 +122,7 @@ export function WorktreePanel({ worktree, busy, running, canMerge, confirmDiscar
             <button className="act act--ghost" disabled={busy} onClick={() => onConfirmDiscard(false)}>
               Keep
             </button>
-            <button className="act act--danger" disabled={busy} onClick={onDiscard}>
+            <button className="act act--danger" disabled={busy || running} onClick={onDiscard}>
               Discard
             </button>
           </>

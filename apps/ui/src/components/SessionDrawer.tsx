@@ -5,6 +5,8 @@ import { IconClose, IconExpand, IconFocus } from "../icons";
 import { fetchSessionAsks, type SessionAsks } from "../api";
 import { relativeTime } from "../time";
 import type { SessionLive, SessionRecord, TranscriptEntry } from "../types";
+import { folderPeers } from "../peers";
+import { taskStatusTone } from "../runs-model";
 import { prettyModel } from "./SessionCard";
 import { Markdown } from "../markdown";
 import { listTasksByOrigin, type TaskRecord } from "../delegation";
@@ -14,11 +16,12 @@ import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 import { RunChip } from "./RunChips";
 import { Toggletip } from "./Toggletip";
-import { sessionMenuKeys, sessionPrimaryAction, sessionTabs, visibleTab, type SessionMenuKey, type SessionTab } from "../drawer-model";
+import { sessionMenuKeys, sessionPrimaryAction, sessionRelations, sessionTabs, visibleTab, type SessionMenuKey, type SessionTab } from "../drawer-model";
 import { shortFolder } from "../wsmatch";
 
 interface Props {
   session: SessionRecord;
+  sessions?: Record<string, SessionRecord>;
   workspace: string | null;
   claims?: ClaimRecord[];
   delegatedEnabled: boolean;
@@ -92,7 +95,9 @@ export function Timeline({ entries, empty, detail, onShowDetail, assistantLabel 
   );
 }
 
-export function SessionDrawer({ session, workspace, claims = [], delegatedEnabled, onReleaseClaim, onClose, onShare, onArchive, onOpenTask }: Props) {
+const shortName = (session: SessionRecord): string => session.customTitle ?? session.title ?? session.sessionId.slice(0, 8);
+
+export function SessionDrawer({ session, sessions = {}, workspace, claims = [], delegatedEnabled, onReleaseClaim, onClose, onShare, onArchive, onOpenTask }: Props) {
   const [pickedTab, setTab] = useState<SessionTab>("activity");
   const [live, setLive] = useState<SessionLive | null>(null);
   const liveAgents = live?.agents ?? [];
@@ -227,6 +232,19 @@ export function SessionDrawer({ session, workspace, claims = [], delegatedEnable
     large: { key: "large", label: full ? "Back to the side panel" : "Open in a large view", onSelect: () => setFull((value) => !value) },
     archive: { key: "archive", label: "Archive", onSelect: () => onArchive?.(current.sessionId) },
   };
+  const nameOf = (id: string | null | undefined): string | null => {
+    const found = id ? sessions[id] : undefined;
+    return found ? shortName(found) : null;
+  };
+  const relations = sessionRelations({
+    forkOf: current.forkOf ?? null,
+    forkParentName: nameOf(current.forkOf),
+    helperOf: current.helperOf ?? null,
+    helperParentName: nameOf(current.helperOf),
+    helpers: current.helpers ?? 0,
+    helpersTotal: current.helpersTotal ?? 0,
+    peers: folderPeers(current.cwd, Object.values(sessions), [], { sessionId: current.sessionId }),
+  });
   const menuItems = sessionMenuKeys({ canShare, archived: current.archivedAt != null || !onArchive }).map((key) => menuAction[key]);
 
   return (
@@ -362,7 +380,7 @@ export function SessionDrawer({ session, workspace, claims = [], delegatedEnable
               <section key={task.id} className={`agent agent--${task.status === "running" || task.status === "pending" ? "running" : "ended"} ${task.archivedAt != null ? "agent--archived" : ""}`}>
                 <header className="agent__head">
                   <span className="agent__type">{task.runner}</span>
-                  <span className={`tag tag--${task.status}`}>{TASK_STATUS_LABEL[task.status]}</span>
+                  <span className={`tag tag--${taskStatusTone(task)}`} data-status={task.status}>{TASK_STATUS_LABEL[task.status]}</span>
                   {task.archivedAt != null && <span className="tag tag--muted">archived</span>}
                   <time>{relativeTime(task.updatedAt)}</time>
                 </header>
@@ -406,6 +424,12 @@ export function SessionDrawer({ session, workspace, claims = [], delegatedEnable
             <dd>
               {current.forks ?? 0} total · {current.forksLive ?? 0} live · {current.remoteAsks ?? 0} asks
             </dd>
+            <dt>Fork of</dt>
+            <dd>{relations.fork}</dd>
+            <dt>Helpers</dt>
+            <dd>{relations.helpers}</dd>
+            <dt>Peers</dt>
+            <dd>{relations.peers}</dd>
             <dt>Subagents</dt>
             <dd>
               {current.agentsRunning ?? 0} running · {current.agentsTotal ?? 0} spawned

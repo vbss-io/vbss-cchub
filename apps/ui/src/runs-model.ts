@@ -1,5 +1,5 @@
 import type { TaskStatus } from "./delegation";
-import type { Bucket } from "./sessions-filter";
+import type { Bucket, FilterKey } from "./sessions-filter";
 import type { SessionStatus } from "./types";
 
 export type Origin = "all" | "claude" | "codex" | "delegated";
@@ -35,6 +35,19 @@ export interface TaskShape {
 export const taskReadyToMerge = (task: TaskShape): boolean =>
   task.status === "completed" && task.isolation === "worktree" && task.worktreePath !== null && task.mergedAt === null;
 
+export type TaskTone = "go" | "pend" | "hold" | "unread" | "muted";
+
+export function taskStatusTone(task: TaskShape): TaskTone {
+  if (task.archivedAt != null) return "muted";
+  if (taskInFlight(task.status)) return "go";
+  if (task.status === "attention") return "pend";
+  if (task.status === "failed" || task.status === "interrupted") return "hold";
+  return taskReadyToMerge(task) ? "unread" : "muted";
+}
+
+export const runStatusTone = (status: TaskStatus): TaskTone =>
+  taskStatusTone({ status, archivedAt: null, isolation: "shared", worktreePath: null, mergedAt: null });
+
 export function taskBucket(task: TaskShape): Bucket {
   if (task.archivedAt != null) return "archived";
   if (taskInFlight(task.status)) return "active";
@@ -50,6 +63,7 @@ export const taskRunStatus = (task: TaskShape): SessionStatus => BUCKET_STATUS[t
 export interface OriginEntry {
   origin: RunOrigin;
   live: boolean;
+  folded?: boolean;
 }
 
 export function originCounts(entries: readonly OriginEntry[]): Record<Origin, number> {
@@ -57,12 +71,25 @@ export function originCounts(entries: readonly OriginEntry[]): Record<Origin, nu
   for (const entry of entries) {
     if (!entry.live) continue;
     counts[entry.origin] += 1;
-    counts.all += 1;
+    if (!entry.folded) counts.all += 1;
   }
   return counts;
 }
 
 export const originIncludes = (selected: Origin, origin: RunOrigin): boolean => selected === "all" || selected === origin;
+
+export const filterForOrigin = (filter: FilterKey, origin: Origin): FilterKey => (filter === "favorites" && !originIncludes(origin, "claude") ? "all" : filter);
+
+export interface LabelledOption<K extends string> {
+  key: K;
+  label: string;
+}
+
+export const withLiveCounts = <K extends string>(options: readonly LabelledOption<K>[], counts: Partial<Record<K, number>>): LabelledOption<K>[] =>
+  options.map((option) => {
+    const count = counts[option.key] ?? 0;
+    return count > 0 ? { key: option.key, label: `${option.label} (${count})` } : { key: option.key, label: option.label };
+  });
 
 export interface TaskRunLink {
   id: string;
@@ -194,4 +221,33 @@ export function taskSummary(tasks: readonly { status: TaskStatus; updatedAt: num
     doneToday: live.filter((task) => task.status === "completed" && now - task.updatedAt < DAY_MS).length,
     failed: live.filter((task) => task.status === "failed").length,
   };
+}
+
+export function humanizeDuration(ms: number): string {
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "under a minute";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  if (hours < 24) return rest > 0 ? `${hours}h ${rest}m` : `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+export interface TaskTimingInput {
+  status: TaskStatus;
+  createdAt: number;
+  updatedAt: number;
+  runsCount: number;
+}
+
+export interface TaskTiming {
+  startedAt: number;
+  duration: string;
+  runs: string;
+}
+
+export function taskTiming(task: TaskTimingInput, now: number): TaskTiming {
+  const running = taskInFlight(task.status);
+  const label = humanizeDuration(Math.max(0, (running ? now : task.updatedAt) - task.createdAt));
+  return { startedAt: task.createdAt, duration: running ? `running ${label}` : label, runs: `${task.runsCount} run${task.runsCount === 1 ? "" : "s"}` };
 }

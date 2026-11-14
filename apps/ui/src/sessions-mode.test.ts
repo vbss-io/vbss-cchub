@@ -107,3 +107,10 @@ describe("sessionsSubtitle", () => {
     assert.match(sessionsSubtitle(false), /Codex/);
   });
 });
+
+describe("navClickMode for Delegated", () => {
+  it("opens List from the Delegated sidebar item, even from Map", () => {
+    assert.equal(navClickMode("tasks", true), "list");
+    assert.equal(navClickMode("tasks", false), "list");
+  });
+});

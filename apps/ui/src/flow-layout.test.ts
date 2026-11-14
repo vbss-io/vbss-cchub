@@ -331,6 +331,18 @@ test("task group without a live session takes the most urgent tone of its tasks"
   assert.equal(groupTone(["completed", "cancelled"]), "muted");
 });
 
+test("a finished worktree task waiting to merge is violet on the map, like in the list", () => {
+  const ready = { ...task("t-ready", "alpha", "a", "completed"), isolation: "worktree" as const, worktreePath: "/w/t-ready", mergedAt: null };
+  const graph = buildFlow(
+    input({
+      sessions: [session("a", "/repo/alpha", "active")],
+      workspaces: [workspace("alpha", "/repo/alpha")],
+      tasks: [ready],
+    }),
+  );
+  assert.equal(graph.nodes.find((n) => n.taskId === "t-ready")?.tone, "unread");
+});
+
 test("failed delegated task keeps the red tone", () => {
   const graph = buildFlow(
     input({

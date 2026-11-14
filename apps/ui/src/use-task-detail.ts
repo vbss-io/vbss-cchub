@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cancelTask, continueTask, getTask, getTaskEvents, type RunEventRecord, type TaskDetail } from "./delegation";
 import {
   archiveTask,
@@ -11,6 +11,7 @@ import {
   unarchiveTask,
   type WorktreeStatus,
 } from "./delegation-actions";
+import { createLatestGate } from "./request-gate";
 import type { RunEventMessage } from "./types";
 
 export type RetryMode = "autonomous" | "plain";
@@ -59,16 +60,17 @@ export function useTaskDetail(
   const [worktree, setWorktree] = useState<WorktreeStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const archiveSupported = useArchiveSupport();
+  const gate = useRef(createLatestGate());
 
   const loadDetail = useCallback(async (id: string) => {
+    const fresh = gate.current.begin(id);
     const [nextDetail, nextEvents] = await Promise.all([getTask(id), getTaskEvents(id)]);
+    if (!fresh()) return;
+    const nextWorktree = taskIsolation(nextDetail.task) === "worktree" ? await getTaskWorktree(id).catch(() => null) : null;
+    if (!fresh()) return;
     setDetail(nextDetail);
     setEvents(nextEvents);
-    if (taskIsolation(nextDetail.task) === "worktree") {
-      setWorktree(await getTaskWorktree(id).catch(() => null));
-    } else {
-      setWorktree(null);
-    }
+    setWorktree(nextWorktree);
     setLiveText(null);
   }, []);
 
@@ -83,11 +85,17 @@ export function useTaskDetail(
   }, [taskId, tick, loadDetail, onError]);
 
   useEffect(() => {
+    gate.current.show(taskId);
     setDetail(null);
     setEvents([]);
     setLiveText(null);
     setWorktree(null);
   }, [taskId]);
+
+  useEffect(() => {
+    const current = gate.current;
+    return () => current.close();
+  }, []);
 
   useEffect(
     () =>

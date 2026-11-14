@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { sessionRelations } from "./drawer-model";
 import { codexMenuKeys, codexPrimaryAction, sessionMenuKeys, sessionPrimaryAction, sessionTabs, visibleTab, type SessionTabInput } from "./drawer-model";
 
 const empty: SessionTabInput = { agentsTotal: 0, agentsRunning: 0, asks: 0, forks: 0, delegated: 0, delegatedOn: true };
@@ -79,5 +80,30 @@ describe("codexMenuKeys", () => {
     assert.deepEqual(codexMenuKeys({ hubTask: true, delegatedOn: true, archived: false }), ["task", "large", "archive"]);
     assert.deepEqual(codexMenuKeys({ hubTask: true, delegatedOn: false, archived: false }), ["large", "archive"]);
     assert.deepEqual(codexMenuKeys({ hubTask: false, delegatedOn: true, archived: true }), ["large", "unarchive"]);
+  });
+});
+
+describe("sessionRelations", () => {
+  const none = { forkOf: null, forkParentName: null, helperOf: null, helperParentName: null, helpers: 0, helpersTotal: 0, peers: 0 };
+
+  it("shows dashes when the session has no fork parent, helpers or peers", () => {
+    assert.deepEqual(sessionRelations(none), { fork: "—", helpers: "—", peers: "—" });
+  });
+
+  it("names the fork parent, the folded helpers and the live peers the card only hints at", () => {
+    assert.deepEqual(sessionRelations({ ...none, forkOf: "abcdef123456", forkParentName: "planner", helpers: 2, helpersTotal: 3, peers: 1 }), {
+      fork: "fork of planner",
+      helpers: "2 helpers folded in · 3 total",
+      peers: "1 other live agent in this folder",
+    });
+  });
+
+  it("falls back to the short id and says whose helper it is", () => {
+    assert.deepEqual(sessionRelations({ ...none, forkOf: "abcdef123456", helperOf: "99887766aabb", helpers: 1, helpersTotal: 1, peers: 3 }), {
+      fork: "fork of abcdef12",
+      helpers: "1 helper folded in · 1 total · helper of 99887766",
+      peers: "3 other live agents in this folder",
+    });
+    assert.equal(sessionRelations({ ...none, helperOf: "99887766aabb", helperParentName: "main" }).helpers, "helper of main");
   });
 });
