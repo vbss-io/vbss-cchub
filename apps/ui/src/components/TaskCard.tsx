@@ -117,7 +117,7 @@ export function TaskCard({ task, origin, runSession, selected, archiveSupported,
 
   return (
     <article
-      className={`card card--task card--tone-${tone} ${selected ? "card--sel" : ""} ${archived ? "card--archived" : ""} card--clickable`}
+      className={`card card--task card--tone-${tone} ${selected ? "card--sel" : ""} ${archived ? "card--archived" : ""} ${task.status === "cancelled" ? "card--task-cancelled" : ""} card--clickable`}
       onClick={() => onSelect(task.id)}
       aria-busy={busy}
       onContextMenu={(event) => {

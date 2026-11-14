@@ -320,6 +320,22 @@
   border-left-color: var(--hold);
 }
 
+.why.why--go {
+  border-left-color: var(--go);
+}
+
+.why.why--unread {
+  border-left-color: var(--unread);
+}
+
+.why.why--muted {
+  border-left-color: var(--ended);
+}
+
+.card.card--sel {
+  border-color: var(--brand);
+}
+
 .task-timing {
   margin: 2px 0 0;
 }
