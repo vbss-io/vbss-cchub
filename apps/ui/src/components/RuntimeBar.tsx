@@ -7,6 +7,7 @@ interface Props {
   codexSessions: number;
   hubRunning: number;
   hubAttention: number;
+  delegatedOn?: boolean;
   onOpenHub?: () => void;
 }
 
@@ -38,8 +39,8 @@ export function RuntimeChip({ label, on, detail, onClick, tone }: ChipProps) {
   );
 }
 
-export function RuntimeBar({ runtimes, claudeSessions, codexSessions, hubRunning, hubAttention, onOpenHub }: Props) {
-  const input = { runtimes, claudeSessions, codexSessions, hubRunning, hubAttention };
+export function RuntimeBar({ runtimes, claudeSessions, codexSessions, hubRunning, hubAttention, delegatedOn, onOpenHub }: Props) {
+  const input = { runtimes, claudeSessions, codexSessions, hubRunning, hubAttention, delegatedOn };
   const chips = visibleRuntimeChips(input);
   return (
     <div className="runtimes" aria-label="Runtimes on this machine">

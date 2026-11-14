@@ -297,6 +297,40 @@ test("idle sessions: unread is violet finished, seen is neutral, waiting and act
   assert.ok(!graph.nodes.some((n) => n.kind === "session" && n.tone === "hold"));
 });
 
+test("delegated task tones follow the colour rule: running cyan, needs you yellow, failed red, rest grey", () => {
+  const statuses: TaskRecord["status"][] = ["running", "pending", "attention", "failed", "interrupted", "completed", "cancelled"];
+  const graph = buildFlow(
+    input({
+      sessions: [session("a", "/repo/alpha", "active")],
+      workspaces: [workspace("alpha", "/repo/alpha")],
+      tasks: statuses.map((status) => task(`t-${status}`, "alpha", "a", status)),
+    }),
+  );
+  const toneOf = (status: string) => graph.nodes.find((n) => n.taskId === `t-${status}`)?.tone;
+  assert.equal(toneOf("running"), "go");
+  assert.equal(toneOf("pending"), "go");
+  assert.equal(toneOf("attention"), "pend");
+  assert.equal(toneOf("failed"), "hold");
+  assert.equal(toneOf("interrupted"), "hold");
+  assert.equal(toneOf("completed"), "muted");
+  assert.equal(toneOf("cancelled"), "muted");
+});
+
+test("task group without a live session takes the most urgent tone of its tasks", () => {
+  const groupTone = (statuses: TaskRecord["status"][]) =>
+    buildFlow(
+      input({
+        sessions: [session("a", "/repo/alpha", "active")],
+        workspaces: [workspace("alpha", "/repo/alpha")],
+        tasks: statuses.map((status, index) => task(`g${index}`, "alpha", "ghost", status)),
+      }),
+    ).nodes.find((n) => n.kind === "taskgroup")?.tone;
+  assert.equal(groupTone(["running", "completed"]), "go");
+  assert.equal(groupTone(["running", "attention"]), "pend");
+  assert.equal(groupTone(["completed", "failed"]), "hold");
+  assert.equal(groupTone(["completed", "cancelled"]), "muted");
+});
+
 test("failed delegated task keeps the red tone", () => {
   const graph = buildFlow(
     input({

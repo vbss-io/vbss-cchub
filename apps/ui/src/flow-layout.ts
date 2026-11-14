@@ -103,11 +103,18 @@ const sessionSubtitle = (session: SessionRecord): string => {
 
 const taskRunning = (task: TaskRecord): boolean => task.status === "running" || task.status === "pending";
 
-const taskTone = (task: TaskRecord): FlowTone => {
-  if (taskRunning(task)) return "pend";
-  if (task.status === "completed") return "go";
-  if (task.status === "cancelled") return "muted";
-  return "hold";
+export const taskTone = (task: TaskRecord): FlowTone => {
+  if (taskRunning(task)) return "go";
+  if (task.status === "attention") return "pend";
+  if (task.status === "failed" || task.status === "interrupted") return "hold";
+  return "muted";
+};
+
+const taskGroupTone = (tasks: TaskRecord[]): FlowTone => {
+  if (tasks.some((task) => task.status === "attention")) return "pend";
+  if (tasks.some(taskRunning)) return "go";
+  if (tasks.some((task) => task.status === "failed" || task.status === "interrupted")) return "hold";
+  return "muted";
 };
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
@@ -319,7 +326,7 @@ export function buildFlow(input: FlowInput): FlowGraph {
         ...base("taskgroup", groupId, wsId, lane.key),
         title: "delegated",
         subtitle: `no live session · ${lane.looseTasks.length}`,
-        tone: anyRunning ? "pend" : "muted",
+        tone: taskGroupTone(lane.looseTasks),
         running: anyRunning,
         dim: laneDim,
       });

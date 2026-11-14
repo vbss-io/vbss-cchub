@@ -20,6 +20,7 @@ interface Props {
   codexSessions: number;
   hubRunning: number;
   hubAttention: number;
+  delegatedOn?: boolean;
   onOpenHub?: () => void;
   limits: LimitsSnapshot | null;
   limitsEnabled: boolean;
@@ -47,7 +48,7 @@ export function limitsDetail(windows: LimitWindows): string {
   return `5h ${windows.fiveHour}% · 7d ${windows.sevenDay}%`;
 }
 
-export function StatusBar({ runtimes, claudeSessions, codexSessions, hubRunning, hubAttention, onOpenHub, limits, limitsEnabled, onOpenUsage }: Props) {
+export function StatusBar({ runtimes, claudeSessions, codexSessions, hubRunning, hubAttention, delegatedOn, onOpenHub, limits, limitsEnabled, onOpenUsage }: Props) {
   const providers = limitsEnabled ? providerLimits(limits) : [];
   return (
     <footer className="statusbar" aria-label="Status">
@@ -57,6 +58,7 @@ export function StatusBar({ runtimes, claudeSessions, codexSessions, hubRunning,
         codexSessions={codexSessions}
         hubRunning={hubRunning}
         hubAttention={hubAttention}
+        delegatedOn={delegatedOn}
         onOpenHub={onOpenHub}
       />
       {providers.length > 0 && (

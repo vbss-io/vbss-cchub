@@ -71,9 +71,10 @@ const SHORT_CLIENT: Record<string, string> = {
 const shortClient = (label: string): string => SHORT_CLIENT[label] ?? label;
 
 const LEGEND_TONES: { tone: string; label: string }[] = [
-  { tone: "go", label: "active" },
-  { tone: "pend", label: "waiting" },
+  { tone: "go", label: "running" },
+  { tone: "pend", label: "needs you" },
   { tone: "unread", label: "finished, unread" },
+  { tone: "hold", label: "failed" },
   { tone: "seen", label: "idle" },
   { tone: "muted", label: "ended" },
 ];

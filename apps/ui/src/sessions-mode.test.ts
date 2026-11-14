@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mapScope, mapSummaryLine, parseSessionsMode, resolveSessionsMode, sessionsModeRouteOf, sessionsSubtitle } from "./sessions-mode";
+import { mapScope, mapSummaryLine, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, sessionsModeRouteOf, sessionsSubtitle } from "./sessions-mode";
 
 describe("parseSessionsMode", () => {
   it("reads map and falls back to list for anything else", () => {
@@ -37,6 +37,38 @@ describe("sessionsModeRouteOf", () => {
     assert.equal(sessionsModeRouteOf("sessions", true), null);
     assert.equal(sessionsModeRouteOf("tasks", true), null);
     assert.equal(sessionsModeRouteOf("board", false), null);
+  });
+});
+
+describe("navCurrentKey", () => {
+  it("makes Flow the current item while Sessions is in Map mode and Flow is on", () => {
+    assert.equal(navCurrentKey("sessions", "map", true), "flow");
+  });
+
+  it("keeps Sessions current in List mode", () => {
+    assert.equal(navCurrentKey("sessions", "list", true), "sessions");
+  });
+
+  it("keeps Sessions current when Flow is off, whatever the remembered mode", () => {
+    assert.equal(navCurrentKey("sessions", "map", false), "sessions");
+  });
+
+  it("never touches other views", () => {
+    assert.equal(navCurrentKey("board", "map", true), "board");
+    assert.equal(navCurrentKey("settings", "map", true), "settings");
+  });
+});
+
+describe("navClickMode", () => {
+  it("opens List from Sessions and Map from Flow", () => {
+    assert.equal(navClickMode("sessions", true), "list");
+    assert.equal(navClickMode("sessions", false), "list");
+    assert.equal(navClickMode("flow", true), "map");
+  });
+
+  it("leaves Flow to the disabled-view fallback when the plugin is off and ignores other items", () => {
+    assert.equal(navClickMode("flow", false), null);
+    assert.equal(navClickMode("board", true), null);
   });
 });
 

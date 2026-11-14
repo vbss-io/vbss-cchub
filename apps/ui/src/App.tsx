@@ -9,7 +9,7 @@ import { SessionDrawer } from "./components/SessionDrawer";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { needsYouOnTop, parseOrigin, runsRouteOf, type Origin } from "./runs-model";
 import { SessionsModeSwitch } from "./components/SessionsModeSwitch";
-import { mapScope, parseSessionsMode, resolveSessionsMode, SESSIONS_MODE_KEY, sessionsModeRouteOf, sessionsSubtitle, type SessionsMode } from "./sessions-mode";
+import { mapScope, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, SESSIONS_MODE_KEY, sessionsModeRouteOf, sessionsSubtitle, type SessionsMode } from "./sessions-mode";
 import { StatusBar } from "./components/StatusBar";
 import { WhatsNew } from "./components/WhatsNew";
 import { addCapture, configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getUiPrefs, putUiPrefs, UiPrefsUnavailableError, type UiPrefs, type UiPrefsPatch, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
@@ -138,7 +138,7 @@ interface NavMoreItem {
   badge: number;
 }
 
-function NavMore({ items, activeKey }: { items: NavMoreItem[]; activeKey: View }) {
+function NavMore({ items, activeKey, onPick }: { items: NavMoreItem[]; activeKey: string; onPick: (key: View) => void }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLLIElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -243,7 +243,10 @@ function NavMore({ items, activeKey }: { items: NavMoreItem[]; activeKey: View }
                 className={`nav__item nav__item--sub ${activeKey === item.key ? "nav__item--on" : ""}`}
                 href={`#/${item.key}`}
                 aria-current={activeKey === item.key ? "page" : undefined}
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  onPick(item.key);
+                  setOpen(false);
+                }}
               >
                 <span className="nav__icon">{item.icon}</span>
                 <span className="nav__label">{item.label}</span>
@@ -859,6 +862,11 @@ export function App() {
   const sharePanel = route.view === "share" && route.param != null;
   const sidebar = useMemo(() => sidebarModel(features, uiPrefs.sidebar), [features, uiPrefs.sidebar]);
   const badgeOf = (key: View): number => (key === "sessions" ? attention : key === "tasks" ? hubRunning + hubAttention : 0);
+  const navCurrent = navCurrentKey(effectiveView, runsMode, flowEnabled);
+  const pickNav = (key: View): void => {
+    const mode = navClickMode(key, flowEnabled);
+    if (mode) setSessionsMode(mode);
+  };
   const moreItems = sidebar.more.map((item) => ({
     key: item.key,
     label: item.label,
@@ -1066,10 +1074,11 @@ export function App() {
               return (
                 <li key={item.key}>
                   <a
-                    className={`nav__item ${effectiveView === item.key ? "nav__item--on" : ""}`}
+                    className={`nav__item ${navCurrent === item.key ? "nav__item--on" : ""}`}
                     href={`#/${item.key}`}
                     title={item.label}
-                    aria-current={effectiveView === item.key ? "page" : undefined}
+                    aria-current={navCurrent === item.key ? "page" : undefined}
+                    onClick={() => pickNav(item.key)}
                   >
                     <span className="nav__icon">{item.icon}</span>
                     <span className="nav__label">{item.label}</span>
@@ -1078,7 +1087,7 @@ export function App() {
                 </li>
               );
             })}
-            {moreItems.length > 0 && <NavMore items={moreItems} activeKey={effectiveView} />}
+            {moreItems.length > 0 && <NavMore items={moreItems} activeKey={navCurrent} onPick={pickNav} />}
           </ul>
           <div className="nav__foot">
             <a
@@ -1295,6 +1304,7 @@ export function App() {
               codexSessions={codexSessions.filter((session) => session.status !== "ended").length}
               hubRunning={hubRunning}
               hubAttention={hubAttention}
+              delegatedOn={delegatedEnabled}
               onOpenHub={delegatedEnabled ? () => navigate("tasks") : undefined}
               limits={limits}
               limitsEnabled={limitsEnabled}

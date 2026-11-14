@@ -62,6 +62,13 @@ describe("visibleRuntimeChips", () => {
     assert.deepEqual(keys(input({ hubAttention: 1 })), ["delegated"]);
   });
 
+  it("never shows the Delegated chip when the Delegated plugin is off", () => {
+    const value = input({ hubRunning: 2, hubAttention: 1, delegatedOn: false });
+    assert.deepEqual(keys(value), []);
+    assert.equal(showNoAgents(value), true);
+    assert.deepEqual(keys({ ...value, delegatedOn: true }), ["delegated"]);
+  });
+
   it("keeps a scanning placeholder until the first snapshot arrives", () => {
     const value = input({ runtimes: null });
     assert.deepEqual(keys(value), ["claudeCode"]);

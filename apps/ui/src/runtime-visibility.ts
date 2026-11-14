@@ -15,6 +15,7 @@ export interface RuntimeVisibilityInput {
   codexSessions: number;
   hubRunning: number;
   hubAttention: number;
+  delegatedOn?: boolean;
 }
 
 export const NO_AGENTS_LABEL = "No agents running";
@@ -22,7 +23,7 @@ export const NO_AGENTS_LABEL = "No agents running";
 const plural = (count: number, word: string): string => `${count} ${word}${count === 1 ? "" : "es"}`;
 
 export function visibleRuntimeChips(input: RuntimeVisibilityInput): RuntimeChipSpec[] {
-  const { runtimes, claudeSessions, codexSessions, hubRunning, hubAttention } = input;
+  const { runtimes, claudeSessions, codexSessions, hubRunning, hubAttention, delegatedOn = true } = input;
   const chips: RuntimeChipSpec[] = [];
   if (!runtimes) {
     chips.push({ key: "claudeCode", label: "Claude Code", on: claudeSessions > 0, detail: "scanning…" });
@@ -33,7 +34,7 @@ export function visibleRuntimeChips(input: RuntimeVisibilityInput): RuntimeChipS
   if (runtimes?.codexApp.running) chips.push({ key: "codexApp", label: "Codex app", on: true, detail: `open · ${codexSessions} threads` });
   const codexCli = runtimes?.codexCli.count ?? 0;
   if (codexCli > 0) chips.push({ key: "codexCli", label: "Codex CLI", on: true, detail: `${codexCli} running` });
-  if (hubRunning + hubAttention > 0) {
+  if (delegatedOn && hubRunning + hubAttention > 0) {
     chips.push({ key: "delegated", label: "Delegated", on: true, detail: `${hubRunning} running${hubAttention > 0 ? ` · ${hubAttention} need you` : ""}` });
   }
   return chips;
