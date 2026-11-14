@@ -1,6 +1,18 @@
 import { useEffect, useRef, useState } from "react";
+import { CardMenu, useCardMenu, type CardMenuItem } from "../components/CardMenu";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { Toggletip } from "../components/Toggletip";
 import { createWorkspace, deleteWorkspace, openWorkspace, updateWorkspace, type DelegationSettings, type WorkspaceRecord } from "../delegation";
+import {
+  contextLabel,
+  decodeWorkspaceParam,
+  filterWorkspaces,
+  repoCountLabel,
+  splitRepoLines,
+  workspaceMenuEntries,
+  type WorkspaceMenuKey,
+} from "../workspaces-model";
+import "../workspaces.css";
 
 interface Props {
   workspaces: WorkspaceRecord[];
@@ -13,20 +25,76 @@ interface Props {
   onError: (text: string) => void;
 }
 
-const splitLines = (value: string): string[] =>
-  value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+interface RowProps {
+  workspace: WorkspaceRecord;
+  focused: boolean;
+  editing: boolean;
+  busy: boolean;
+  editRepos: string;
+  setRef: (node: HTMLLIElement | null) => void;
+  onOpen: () => void;
+  onToggleEdit: () => void;
+  onDelete: () => void;
+  onEditRepos: (value: string) => void;
+  onSaveRepos: () => void;
+}
 
-const decodeParam = (value: string | null | undefined): string | null => {
-  if (!value) return null;
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-};
+function WorkspaceRow({ workspace, focused, editing, busy, editRepos, setRef, onOpen, onToggleEdit, onDelete, onEditRepos, onSaveRepos }: RowProps) {
+  const menu = useCardMenu();
+  const handlers: Record<WorkspaceMenuKey, () => void> = { edit: onToggleEdit, delete: onDelete };
+  const items: CardMenuItem[] = workspaceMenuEntries(editing).map((entry) => ({
+    key: entry.key,
+    label: entry.label,
+    danger: entry.danger,
+    onSelect: handlers[entry.key],
+  }));
+
+  return (
+    <li ref={setRef} className={`wsrow ${focused ? "wsrow--focus" : ""}`} aria-current={focused ? "true" : undefined}>
+      <div className="wsrow__main">
+        <span className="wsrow__name" title={workspace.name}>
+          {workspace.name}
+          {workspace.error && <span className="tag tag--hold">unreadable</span>}
+        </span>
+        <span className="wsrow__repos muted small">{repoCountLabel(workspace.repos.length)}</span>
+        <span className="wsrow__context muted small" title={contextLabel(workspace)}>
+          {contextLabel(workspace)}
+        </span>
+        <span className="wsrow__actions">
+          <button className="act act--focus" disabled={busy} onClick={onOpen}>
+            Open
+          </button>
+          <CardMenu menu={menu} items={items} label={`Actions for ${workspace.name}`} />
+        </span>
+      </div>
+      {editing && (
+        <div className="wsrow__detail">
+          <p className="muted small path">{workspace.file}</p>
+          <ul className="repolist">
+            {workspace.repos.map((repo) => (
+              <li key={repo.path}>
+                <span className="repolist__name">{repo.name}</span>
+                <span className="path muted">{repo.path}</span>
+              </li>
+            ))}
+          </ul>
+          <label className="field">
+            <span>Edit repos (one absolute path per line)</span>
+            <textarea className="in area" value={editRepos} onChange={(event) => onEditRepos(event.target.value)} />
+          </label>
+          <div className="actions">
+            <button className="act act--focus" disabled={busy} onClick={onSaveRepos}>
+              Save repos
+            </button>
+            <button className="act act--ghost" onClick={onToggleEdit}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+    </li>
+  );
+}
 
 export function WorkspacesView({ workspaces, settings, enabled, focusName, onChanged, onOpenSettings, onNotice, onError }: Props) {
   const [busy, setBusy] = useState(false);
@@ -35,9 +103,10 @@ export function WorkspacesView({ workspaces, settings, enabled, focusName, onCha
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newRepos, setNewRepos] = useState("");
+  const [query, setQuery] = useState("");
   const [pendingDelete, setPendingDelete] = useState<WorkspaceRecord | null>(null);
-  const rowRefs = useRef(new Map<string, HTMLDivElement>());
-  const focused = decodeParam(focusName);
+  const rowRefs = useRef(new Map<string, HTMLLIElement>());
+  const focused = decodeWorkspaceParam(focusName);
 
   const scrolledRef = useRef<string | null>(null);
 
@@ -66,17 +135,32 @@ export function WorkspacesView({ workspaces, settings, enabled, focusName, onCha
     }
   };
 
+  const toggleEdit = (workspace: WorkspaceRecord) => {
+    if (editing === workspace.name) {
+      setEditing(null);
+      return;
+    }
+    setEditing(workspace.name);
+    setEditRepos(workspace.repos.map((repo) => repo.path).join("\n"));
+  };
+
   const root = settings?.workspacesRoot ?? null;
+  const visible = filterWorkspaces(workspaces, query);
 
   return (
-    <div className="view">
-      <div className="toolbar">
-        <p className="hint hint--lead">
-          Every <code>&lt;name&gt;.code-workspace</code> in your workspaces root is a workspace: the folder <code>&lt;name&gt;/</code> next to it is
-          its context (CLAUDE.md, skills), the other folders are its repos. Delegated runs start in the context with every repo attached; the{" "}
-          <code>wk</code> alias reads the same folder.
-        </p>
-        <div className="toolbar__right">
+    <div className="view view--workspaces">
+      <div className="wstoolbar">
+        <input className="in wstoolbar__search" placeholder="search workspace name" aria-label="Search workspaces" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <div className="wstoolbar__right">
+          <Toggletip label="About workspaces" align="end">
+            <span>
+              Every <code>&lt;name&gt;.code-workspace</code> in your workspaces root is a workspace: the folder <code>&lt;name&gt;/</code> next to it is its context (CLAUDE.md, skills), the other
+              folders are its repos.
+            </span>
+            <span>
+              Delegated runs start in the context with every repo attached; the <code>wk</code> alias reads the same folder.
+            </span>
+          </Toggletip>
           <button className="act act--focus" disabled={!root || busy} onClick={() => setCreating((value) => !value)}>
             {creating ? "Close" : "New workspace"}
           </button>
@@ -93,7 +177,11 @@ export function WorkspacesView({ workspaces, settings, enabled, focusName, onCha
           .
         </p>
       )}
-      {root && <p className="muted small">Root: <span className="path">{root}</span></p>}
+      {root && (
+        <p className="muted small wsroot" title={root}>
+          Root: <span className="path">{root}</span>
+        </p>
+      )}
 
       {creating && root && (
         <section className="panel">
@@ -113,7 +201,7 @@ export function WorkspacesView({ workspaces, settings, enabled, focusName, onCha
                 disabled={busy || newName.trim().length === 0}
                 onClick={() =>
                   void run(async () => {
-                    await createWorkspace(newName.trim(), splitLines(newRepos));
+                    await createWorkspace(newName.trim(), splitRepoLines(newRepos));
                     setNewName("");
                     setNewRepos("");
                     setCreating(false);
@@ -128,101 +216,43 @@ export function WorkspacesView({ workspaces, settings, enabled, focusName, onCha
         </section>
       )}
 
-      {workspaces.length > 0 && (
-        <div className="table">
-          <div className="table__head">
-            <span>Workspace</span>
-            <span>Repos</span>
-            <span>Context</span>
-            <span className="table__actions">Actions</span>
-          </div>
-          {workspaces.map((workspace) => (
-            <div
+      {visible.length > 0 && (
+        <ul className="wslist">
+          {visible.map((workspace) => (
+            <WorkspaceRow
               key={workspace.name}
-              ref={(node) => {
+              workspace={workspace}
+              focused={focused === workspace.name}
+              editing={editing === workspace.name}
+              busy={busy}
+              editRepos={editRepos}
+              setRef={(node) => {
                 if (node) rowRefs.current.set(workspace.name, node);
                 else rowRefs.current.delete(workspace.name);
               }}
-              className={`table__rowgroup ${focused === workspace.name ? "table__rowgroup--focus" : ""}`}
-              aria-current={focused === workspace.name ? "true" : undefined}
-            >
-              <div className="table__row">
-                <span className="table__name">
-                  {workspace.name}
-                  {workspace.error && <span className="tag tag--hold">unreadable</span>}
-                </span>
-                <span>{workspace.repos.length}</span>
-                <span className="muted">{workspace.contextPath ? "context folder" : "no context folder"}</span>
-                <span className="table__actions">
-                  <button
-                    className="act"
-                    disabled={busy}
-                    onClick={() => {
-                      if (editing === workspace.name) {
-                        setEditing(null);
-                        return;
-                      }
-                      setEditing(workspace.name);
-                      setEditRepos(workspace.repos.map((repo) => repo.path).join("\n"));
-                    }}
-                  >
-                    {editing === workspace.name ? "Close" : "Repos"}
-                  </button>
-                  <button
-                    className="act act--focus"
-                    disabled={busy}
-                    onClick={() =>
-                      void run(async () => {
-                        const outcome = await openWorkspace(workspace.name);
-                        if (!outcome.ok) throw new Error(outcome.error ?? "could not open");
-                        return `Opening ${workspace.name} with ${outcome.command}.`;
-                      })
-                    }
-                  >
-                    Open
-                  </button>
-                  <button className="act act--danger" disabled={busy} onClick={() => setPendingDelete(workspace)}>
-                    Delete
-                  </button>
-                </span>
-              </div>
-              {editing === workspace.name && (
-                <div className="table__detail">
-                  <p className="muted small path">{workspace.file}</p>
-                  <ul className="repolist">
-                    {workspace.repos.map((repo) => (
-                      <li key={repo.path}>
-                        <span className="repolist__name">{repo.name}</span>
-                        <span className="path muted">{repo.path}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <label className="field">
-                    <span>Edit repos (one absolute path per line)</span>
-                    <textarea className="in area" value={editRepos} onChange={(event) => setEditRepos(event.target.value)} />
-                  </label>
-                  <div className="actions">
-                    <button
-                      className="act act--focus"
-                      disabled={busy}
-                      onClick={() =>
-                        void run(async () => {
-                          await updateWorkspace(workspace.name, splitLines(editRepos));
-                          setEditing(null);
-                          return `Workspace ${workspace.name} updated.`;
-                        })
-                      }
-                    >
-                      Save repos
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+              onOpen={() =>
+                void run(async () => {
+                  const outcome = await openWorkspace(workspace.name);
+                  if (!outcome.ok) throw new Error(outcome.error ?? "could not open");
+                  return `Opening ${workspace.name} with ${outcome.command}.`;
+                })
+              }
+              onToggleEdit={() => toggleEdit(workspace)}
+              onDelete={() => setPendingDelete(workspace)}
+              onEditRepos={setEditRepos}
+              onSaveRepos={() =>
+                void run(async () => {
+                  await updateWorkspace(workspace.name, splitRepoLines(editRepos));
+                  setEditing(null);
+                  return `Workspace ${workspace.name} updated.`;
+                })
+              }
+            />
           ))}
-        </div>
+        </ul>
       )}
-      {enabled && root && workspaces.length === 0 && <p className="empty">No workspaces in this root yet. Create one above.</p>}
+      {enabled && root && workspaces.length === 0 && <p className="empty">No workspaces in this root yet: press New workspace.</p>}
+      {workspaces.length > 0 && visible.length === 0 && <p className="empty">No workspace matches this search.</p>}
 
       {pendingDelete && (
         <ConfirmDialog

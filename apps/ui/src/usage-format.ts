@@ -1,5 +1,5 @@
 import type { UsageDay } from "./delegation";
-import type { Tone } from "./widget-layout";
+import { resetCountdown, resetsAtMs, type Tone } from "./widget-layout";
 
 export type SortDirection = "asc" | "desc";
 
@@ -90,4 +90,37 @@ export function usageResponseState(status: number, body: unknown): UsageResponse
   if (status < 200 || status >= 300) return "unavailable";
   if (isRecord(body) && body.scanning === true) return "scanning";
   return isRecord(body) ? "ready" : "unavailable";
+}
+
+export type LimitWindowKind = "fiveHour" | "sevenDay";
+
+export type ResetLabel = { kind: "countdown"; text: string } | { kind: "unknown" } | { kind: "none" };
+
+export const RESET_MAX_AHEAD_MS: Record<LimitWindowKind, number> = { fiveHour: 6 * 3_600_000, sevenDay: 8 * 86_400_000 };
+export const RESET_PAST_GRACE_MS = 2 * 60_000;
+
+export function resetLabel(resetsAt: number | null, now: number, window: LimitWindowKind, required = false): ResetLabel {
+  const at = resetsAtMs(resetsAt);
+  if (at == null) return required ? { kind: "unknown" } : { kind: "none" };
+  if (at - now > RESET_MAX_AHEAD_MS[window] || now - at > RESET_PAST_GRACE_MS) return { kind: "unknown" };
+  return { kind: "countdown", text: resetCountdown(resetsAt, now) ?? "now" };
+}
+
+export type UsageTab = "model" | "project" | "session";
+
+export const USAGE_TABS: readonly UsageTab[] = ["model", "project", "session"];
+export const DEFAULT_USAGE_TAB: UsageTab = "model";
+
+export function parseUsageTab(raw: string | null | undefined): UsageTab {
+  return USAGE_TABS.find((tab) => tab === raw) ?? DEFAULT_USAGE_TAB;
+}
+
+export function stepUsageTab(current: UsageTab, key: string): UsageTab | null {
+  const index = USAGE_TABS.indexOf(current);
+  const last = USAGE_TABS.length - 1;
+  if (key === "ArrowRight") return USAGE_TABS[index >= last ? 0 : index + 1] ?? null;
+  if (key === "ArrowLeft") return USAGE_TABS[index <= 0 ? last : index - 1] ?? null;
+  if (key === "Home") return USAGE_TABS[0] ?? null;
+  if (key === "End") return USAGE_TABS[last] ?? null;
+  return null;
 }

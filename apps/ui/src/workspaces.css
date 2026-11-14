@@ -1,0 +1,151 @@
+.view--workspaces .wstoolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.view--workspaces .wstoolbar__search {
+  flex: 1 1 200px;
+  max-width: 360px;
+  min-width: 0;
+}
+
+.view--workspaces .wstoolbar__right {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.view--workspaces .wstoolbar .toggletip {
+  position: static;
+}
+
+.view--workspaces .wstoolbar .toggletip__pop {
+  top: calc(100% + 6px);
+  right: 0;
+  left: auto;
+}
+
+.view--workspaces .wsroot {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view--workspaces .wslist {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.view--workspaces .wsrow + .wsrow {
+  border-top: 1px solid var(--border);
+}
+
+.view--workspaces .wsrow--focus {
+  background: color-mix(in srgb, var(--brand) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--brand);
+}
+
+.view--workspaces .wsrow__main {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 72px minmax(0, 2fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+}
+
+.view--workspaces .wsrow__main:hover {
+  background: var(--panel-2);
+}
+
+.view--workspaces .wsrow__name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view--workspaces .wsrow__repos {
+  white-space: nowrap;
+}
+
+.view--workspaces .wsrow__context {
+  min-width: 0;
+  overflow: hidden;
+  font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view--workspaces .wsrow__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.view--workspaces .wsrow__actions .card__menu-btn {
+  margin: 0;
+  height: 26px;
+  opacity: 1;
+}
+
+.view--workspaces .wsrow__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 14px 14px;
+  background: var(--panel-2);
+  border-top: 1px dashed var(--border);
+}
+
+.view--workspaces .wsrow__detail .path {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .view--workspaces .wsrow__main {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+  }
+
+  .view--workspaces .wsrow__name {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .view--workspaces .wsrow__repos {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .view--workspaces .wsrow__context {
+    grid-column: 1;
+    grid-row: 3;
+  }
+
+  .view--workspaces .wsrow__actions {
+    grid-column: 2;
+    grid-row: 1 / span 3;
+  }
+
+  .view--workspaces .wstoolbar__search {
+    max-width: none;
+  }
+}

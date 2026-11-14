@@ -2261,67 +2261,6 @@ h3 {
 
 /* ---------- workspaces ---------- */
 
-.table {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--panel);
-}
-
-.table__head,
-.table__row {
-  display: grid;
-  grid-template-columns: minmax(160px, 1.4fr) 80px minmax(120px, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-  padding: 10px 14px;
-}
-
-.table__head {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  border-bottom: 1px solid var(--border);
-}
-
-.table__rowgroup + .table__rowgroup {
-  border-top: 1px solid var(--border);
-}
-
-.table__rowgroup--focus {
-  background: color-mix(in srgb, var(--brand) 12%, transparent);
-  box-shadow: inset 3px 0 0 var(--brand);
-}
-
-.table__row:hover {
-  background: var(--panel-2);
-}
-
-.table__name {
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.table__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 6px;
-}
-
-.table__detail {
-  padding: 10px 14px 14px;
-  border-top: 1px dashed var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  background: var(--panel-2);
-}
-
 .repolist {
   list-style: none;
   margin: 0;
@@ -2921,19 +2860,6 @@ h3 {
     width: 100%;
   }
 
-  .table__head {
-    display: none;
-  }
-
-  .table__row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-  }
-
-  .table__actions {
-    justify-content: flex-start;
-  }
-
   .flow__canvas {
     height: 60vh;
   }
@@ -2950,31 +2876,6 @@ h3 {
   grid-template-columns: minmax(0, 1.3fr) minmax(320px, 1fr);
   gap: 14px;
   align-items: start;
-}
-
-.reach {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.reach__row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  min-height: 32px;
-}
-
-.reach--compact {
-  gap: 6px;
-}
-
-.reach__sep {
-  width: 1px;
-  align-self: stretch;
-  margin: 2px 4px;
-  background: var(--border);
 }
 
 .sharetoolbar {
@@ -3237,7 +3138,6 @@ h3 {
 
 .view--share .panel,
 .sharerow,
-.reach__row > *,
 .activity__item,
 .share-grid > * {
   min-width: 0;

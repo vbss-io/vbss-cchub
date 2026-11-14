@@ -305,6 +305,27 @@ const serverEnv = {
   HUB_TRUSTED_ORIGINS: `${uiOrigin},http://127.0.0.1:${UI_PORT}`,
 };
 if (codexHome) serverEnv.CODEX_HOME = codexHome;
+if (!realPrep && !has("--real-home")) {
+  const isolatedHome = join(dataDir, "home");
+  mkdirSync(join(isolatedHome, ".claude", "projects"), { recursive: true });
+  const fixtures = join(repoRoot, "apps", "server", "test", "fixtures");
+  Object.assign(serverEnv, {
+    HUB_HOME: isolatedHome,
+    APPDATA: join(isolatedHome, "AppData", "Roaming"),
+    HUB_CLAUDE_PROJECTS_DIR: join(isolatedHome, ".claude", "projects"),
+    HUB_CLAUDE_CREDENTIALS: join(isolatedHome, ".claude", ".credentials.json"),
+    HUB_CLAUDE_STATE: join(isolatedHome, ".claude.json"),
+    HUB_CLAUDE_BIN: process.execPath,
+    HUB_CLAUDE_ARGS_PREFIX: JSON.stringify([join(fixtures, "fake-claude.mjs")]),
+    HUB_CODEX_BIN: process.execPath,
+    HUB_CODEX_ARGS_PREFIX: JSON.stringify([join(fixtures, "fake-codex.mjs")]),
+    HUB_NGROK_BIN: process.execPath,
+    HUB_NGROK_ARGS_PREFIX: JSON.stringify([join(fixtures, "fake-ngrok.mjs")]),
+    HUB_AUTOSTART_KEY: "HKCU:\\Software\\vbss-cchub-preview\\Run",
+    FAKE_CLAUDE_DELAY_MS: "400",
+    HUB_SHARE_ENV_PASSTHROUGH: "FAKE_CLAUDE_DELAY_MS",
+  });
+}
 if (realPrep) {
   for (const key of ["HUB_DEV_SEED", "HUB_SECOND_BRAIN", "HUB_WORKSPACES_ROOT", "HUB_EDITOR", "HUB_RESOURCE_DIR", "HUB_STATIC_DIR", "HUB_APP_EXE", "HUB_PARENT_PID", "HUB_URL"]) delete serverEnv[key];
   Object.assign(serverEnv, realPrep.env);

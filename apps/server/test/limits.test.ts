@@ -12,6 +12,7 @@ import {
   limitsPollingActive,
   limitsSnapshot,
   parseClaudeUsage,
+  parseCodexRateLimits,
   readClaudeCachedLimits,
   readClaudeCredentials,
   readCodexRolloutLimits,
@@ -402,6 +403,50 @@ describe("codex rollout", () => {
   });
 });
 
+describe("codex reset plausibility", () => {
+  const FIVE_H = 5 * 3_600_000;
+  const WEEK = 7 * 86_400_000;
+  const parse = (primary: Record<string, unknown>, secondary: Record<string, unknown>, at: number, now: number = at) =>
+    parseCodexRateLimits({ primary: { used_percent: 10, window_minutes: 300, ...primary }, secondary: { used_percent: 20, window_minutes: 10080, ...secondary }, plan_type: "plus" }, at, now);
+
+  it("keeps epoch seconds inside the window and reads epoch milliseconds as such", () => {
+    const limits = parse({ resets_at: (T0 + FIVE_H) / 1000 }, { resets_at: T0 + WEEK }, T0);
+    assert.equal(limits?.primary.resetsAt, T0 + FIVE_H);
+    assert.equal(limits?.secondary.resetsAt, T0 + WEEK);
+  });
+
+  it("reads resets_in_seconds relative to the snapshot time, not to now", () => {
+    const limits = parse({ resets_in_seconds: 3 * 3600 }, { resets_in_seconds: 2 * 86_400 }, T0);
+    assert.equal(limits?.primary.resetsAt, T0 + 3 * 3_600_000);
+    assert.equal(limits?.secondary.resetsAt, T0 + 2 * 86_400_000);
+  });
+
+  it("drops a reset time further away than its window allows instead of reporting it", () => {
+    const farSeconds = (T0 + 1219 * 86_400_000) / 1000;
+    const limits = parse({ resets_at: farSeconds }, { resets_at: farSeconds }, T0);
+    assert.equal(limits?.primary.resetsAt, null);
+    assert.equal(limits?.secondary.resetsAt, null);
+    assert.equal(limits?.primary.usedPercent, 10);
+    assert.equal(parse({ resets_at: (T0 + 7 * 3_600_000) / 1000 }, {}, T0)?.primary.resetsAt, null);
+    assert.equal(parse({ resets_at: (T0 + 9 * 86_400_000) / 1000 }, {}, T0)?.secondary.resetsAt, null);
+  });
+
+  it("uses the window length the payload declares and defaults to 5h and 7d without it", () => {
+    const weeklyPrimary = parse({ window_minutes: 10080, resets_at: (T0 + 6 * 86_400_000) / 1000 }, {}, T0);
+    assert.equal(weeklyPrimary?.primary.resetsAt, T0 + 6 * 86_400_000);
+    const bare = parseCodexRateLimits({ primary: { used_percent: 5, resets_at: (T0 + 10 * 3_600_000) / 1000 }, secondary: { used_percent: 5, resets_at: (T0 + 6 * 86_400_000) / 1000 } }, T0);
+    assert.equal(bare?.primary.resetsAt, null);
+    assert.equal(bare?.secondary.resetsAt, T0 + 6 * 86_400_000);
+  });
+
+  it("keeps a reset time in the past so the caller can report the window as reset", () => {
+    const snapshotAt = T0 - 3 * 86_400_000;
+    const limits = parse({ resets_at: (snapshotAt + 2 * 3_600_000) / 1000 }, { resets_at: (snapshotAt + 5 * 86_400_000) / 1000 }, snapshotAt, T0);
+    assert.equal(limits?.primary.resetsAt, snapshotAt + 2 * 3_600_000);
+    assert.equal(limits?.secondary.resetsAt, snapshotAt + 5 * 86_400_000);
+  });
+});
+
 describe("codex live", () => {
   const fakeCodex = join(fixtures, "fake-codex.mjs");
 
@@ -447,8 +492,8 @@ describe("codex live", () => {
     const run = await runLive("", 8000);
     assert.ok(run.result);
     assert.equal(run.result.source, "live");
-    assert.deepEqual(run.result.primary, { usedPercent: 12, resetsAt: 1_900_000_000_000, reset: false });
-    assert.deepEqual(run.result.secondary, { usedPercent: 45, resetsAt: 1_900_500_000_000, reset: false });
+    assert.deepEqual(run.result.primary, { usedPercent: 12, resetsAt: null, reset: false });
+    assert.deepEqual(run.result.secondary, { usedPercent: 45, resetsAt: null, reset: false });
     assert.equal(run.result.planType, "pro");
     assert.deepEqual(run.methods, ["initialize", "initialized", "account/rateLimits/read"]);
   });
@@ -816,8 +861,8 @@ describe("limits routes", () => {
     const get = (await http("GET", "/delegation/limits")).json as LimitsPayload;
     assert.equal(get.codex?.source, "live");
     assert.equal(get.codex?.error, null);
-    assert.deepEqual(get.codex?.primary, { usedPercent: 12, resetsAt: 1_900_000_000_000, reset: false });
-    assert.deepEqual(get.codex?.secondary, { usedPercent: 45, resetsAt: 1_900_500_000_000, reset: false });
+    assert.deepEqual(get.codex?.primary, { usedPercent: 12, resetsAt: null, reset: false });
+    assert.deepEqual(get.codex?.secondary, { usedPercent: 45, resetsAt: null, reset: false });
     assert.equal(get.codex?.planType, "pro");
     assert.equal(get.updatedAt, Math.max(get.claude?.fetchedAt ?? 0, get.codex?.fetchedAt ?? 0));
     const methods = readFileSync(appCapture, "utf8").trim().split("\n");

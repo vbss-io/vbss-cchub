@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   fetchLimits,
   fetchUsage,
@@ -16,10 +16,29 @@ import {
   type UsageScanning,
   type UsageSessionRow,
 } from "../delegation";
+import { BoardActionsMenu, type BoardMenuItem } from "../components/BoardActionsMenu";
+import { Toggletip } from "../components/Toggletip";
 import { IconClaude, IconOpenAI } from "../icons";
 import type { SessionRecord } from "../types";
-import { CONTEXT_WARN, contextTone, dayBarHeights, sharePercent, shortProject, sortRows, sourceNote, timeAgo, type SortDirection } from "../usage-format";
-import { clampPercent, formatTokens, resetCountdown, ringTone } from "../widget-layout";
+import {
+  CONTEXT_WARN,
+  USAGE_TABS,
+  contextTone,
+  dayBarHeights,
+  parseUsageTab,
+  resetLabel,
+  sharePercent,
+  shortProject,
+  sortRows,
+  sourceNote,
+  stepUsageTab,
+  timeAgo,
+  type LimitWindowKind,
+  type SortDirection,
+  type UsageTab,
+} from "../usage-format";
+import { clampPercent, formatTokens, ringTone } from "../widget-layout";
+import "../usage.css";
 
 export type UsageEvent = "usage" | "limits";
 
@@ -32,7 +51,9 @@ interface Props {
 
 const DAY_OPTIONS: readonly number[] = [7, 14, 30];
 const STORAGE_KEY = "hub.usage.days";
+const TAB_STORAGE_KEY = "hub.usage.tab";
 const PROVIDER_NAME: Record<UsageProvider, string> = { claude: "Claude", codex: "Codex" };
+const TAB_LABEL: Record<UsageTab, string> = { model: "By model", project: "By project", session: "By session" };
 const ROW_LIMIT = 12;
 const BAR_MIN_WIDTH = 20;
 const SCAN_POLL_MS = 3000;
@@ -49,6 +70,22 @@ function readStoredDays(): number | null {
 function storeDays(days: number): void {
   try {
     localStorage.setItem(STORAGE_KEY, String(days));
+  } catch {
+    return;
+  }
+}
+
+function readStoredTab(): UsageTab {
+  try {
+    return parseUsageTab(localStorage.getItem(TAB_STORAGE_KEY));
+  } catch {
+    return parseUsageTab(null);
+  }
+}
+
+function storeTab(tab: UsageTab): void {
+  try {
+    localStorage.setItem(TAB_STORAGE_KEY, tab);
   } catch {
     return;
   }
@@ -89,11 +126,19 @@ interface GaugeProps {
   label: string;
   percent: number;
   resetsAt: number | null;
+  window: LimitWindowKind;
+  requireReset?: boolean;
   reset?: boolean;
   now: number;
 }
 
-function Gauge({ label, percent, resetsAt, reset, now }: GaugeProps) {
+function resetText(resetsAt: number | null, now: number, window: LimitWindowKind, requireReset: boolean): string {
+  const label = resetLabel(resetsAt, now, window, requireReset);
+  if (label.kind === "countdown") return `resets in ${label.text}`;
+  return label.kind === "unknown" ? "reset time unknown" : "";
+}
+
+function Gauge({ label, percent, resetsAt, window, requireReset = false, reset, now }: GaugeProps) {
   if (reset) {
     return (
       <div className="usage__gauge usage__gauge--reset">
@@ -105,7 +150,6 @@ function Gauge({ label, percent, resetsAt, reset, now }: GaugeProps) {
     );
   }
   const shown = clampPercent(percent);
-  const countdown = resetCountdown(resetsAt, now);
   return (
     <div className="usage__gauge">
       <span className="usage__gauge-l">{label}</span>
@@ -113,7 +157,7 @@ function Gauge({ label, percent, resetsAt, reset, now }: GaugeProps) {
         <span className={`usage__meter-fill usage__meter-fill--${ringTone(percent)}`} style={{ width: `${shown}%` }} />
       </span>
       <span className="usage__gauge-v">{Math.round(shown)}%</span>
-      <span className="usage__gauge-r">{countdown ? `resets in ${countdown}` : ""}</span>
+      <span className="usage__gauge-r">{resetText(resetsAt, now, window, requireReset)}</span>
     </div>
   );
 }
@@ -152,17 +196,17 @@ function ClaudeCard({ data, now }: { data: ClaudeLimits; now: number }) {
         <NoData message={data.error || "no Claude Code login found"} />
       ) : (
         <>
-          <Gauge label="5 h" percent={data.fiveHour.utilization} resetsAt={data.fiveHour.resetsAt} reset={data.fiveHour.reset} now={now} />
-          <Gauge label="7 d" percent={data.sevenDay.utilization} resetsAt={data.sevenDay.resetsAt} reset={data.sevenDay.reset} now={now} />
+          <Gauge label="5 h" percent={data.fiveHour.utilization} resetsAt={data.fiveHour.resetsAt} window="fiveHour" reset={data.fiveHour.reset} now={now} />
+          <Gauge label="7 d" percent={data.sevenDay.utilization} resetsAt={data.sevenDay.resetsAt} window="sevenDay" reset={data.sevenDay.reset} now={now} />
           {data.models.length > 0 && (
             <div className="usage__chips">
               {data.models.map((model) => {
-                const countdown = resetCountdown(model.resetsAt, now);
+                const countdown = resetLabel(model.resetsAt, now, "sevenDay");
                 return (
                   <span
                     key={model.name}
                     className={`chip usage__tone usage__tone--${ringTone(model.utilization)}`}
-                    title={countdown ? `${model.name} resets in ${countdown}` : model.name}
+                    title={countdown.kind === "countdown" ? `${model.name} resets in ${countdown.text}` : model.name}
                   >
                     {model.name} {Math.round(clampPercent(model.utilization))}%
                   </span>
@@ -195,8 +239,8 @@ function CodexCard({ data, now }: { data: CodexLimits; now: number }) {
         <NoData message={data.error || "no Codex session data found"} />
       ) : (
         <>
-          <Gauge label="5 h" percent={data.primary.usedPercent} resetsAt={data.primary.resetsAt} reset={data.primary.reset} now={now} />
-          <Gauge label="7 d" percent={data.secondary.usedPercent} resetsAt={data.secondary.resetsAt} reset={data.secondary.reset} now={now} />
+          <Gauge label="5 h" percent={data.primary.usedPercent} resetsAt={data.primary.resetsAt} window="fiveHour" requireReset reset={data.primary.reset} now={now} />
+          <Gauge label="7 d" percent={data.secondary.usedPercent} resetsAt={data.secondary.resetsAt} window="sevenDay" requireReset reset={data.secondary.reset} now={now} />
         </>
       )}
     </section>
@@ -206,14 +250,12 @@ function CodexCard({ data, now }: { data: CodexLimits; now: number }) {
 interface LimitsPanelProps {
   enabled: boolean;
   limits: LimitsSnapshot | null | undefined;
-  busy: boolean;
   error: string | null;
   now: number;
   refreshedAt: number | null;
-  onRefresh: () => void;
 }
 
-function LimitsPanel({ enabled, limits, busy, error, now, refreshedAt, onRefresh }: LimitsPanelProps) {
+function LimitsPanel({ enabled, limits, error, now, refreshedAt }: LimitsPanelProps) {
   if (!enabled) {
     return (
       <section className="panel">
@@ -228,9 +270,6 @@ function LimitsPanel({ enabled, limits, busy, error, now, refreshedAt, onRefresh
         <h3>Plan limits</h3>
         <span className="spacer" />
         {refreshedAt != null && <span className="muted small">refreshed {timeAgo(refreshedAt, now)}</span>}
-        <button type="button" className="act" disabled={busy || limits === null} onClick={onRefresh}>
-          {busy ? "Refreshing..." : "Refresh"}
-        </button>
       </div>
       {error && <p className="usage__warn">{error}</p>}
       {limits === undefined ? (
@@ -285,7 +324,7 @@ function DayBars({ report }: { report: UsageReport }) {
 }
 
 interface TileProps {
-  label: string;
+  label: ReactNode;
   value: ReactNode;
   sub?: ReactNode;
   tone?: "go" | "pend" | "hold";
@@ -301,35 +340,42 @@ function Tile({ label, value, sub, tone }: TileProps) {
   );
 }
 
-function WhereItGoes({ report }: { report: UsageReport }) {
+function Summary({ report }: { report: UsageReport }) {
   const { totals, byProvider, context } = report;
   const tone = contextTone(context.p90);
+  return (
+    <div className="usage__tiles">
+      <Tile label="Read" value={formatTokens(totals.read)} sub={`Claude ${formatTokens(byProvider.claude.read)} · Codex ${formatTokens(byProvider.codex.read)}`} />
+      <Tile label="Output" value={formatTokens(totals.output)} sub={`fresh input ${formatTokens(totals.fresh)}`} />
+      <Tile label="Messages" value={totals.messages.toLocaleString()} sub={`subagents: ${sharePercent(report.sidechainShare)} %`} />
+      <Tile
+        label={
+          <>
+            Context per message
+            <Toggletip label="About context per message" align="end">
+              <span className={`usage__tip-main ${tone !== "go" ? `usage__tip-main--${tone}` : ""}`}>
+                Every message re-reads the whole context; long sessions above {formatTokens(CONTEXT_WARN)} tokens are the main cost driver. Compact or start a
+                new session when p90 gets there.
+              </span>
+              <span className="usage__tip-sub">
+                {context.over300k.toLocaleString()} messages above 300k · {context.over600k.toLocaleString()} above 600k
+              </span>
+            </Toggletip>
+          </>
+        }
+        value={`${formatTokens(context.p50)} · ${formatTokens(context.p90)} · ${formatTokens(context.max)}`}
+        sub="p50 · p90 · max"
+        tone={tone}
+      />
+    </div>
+  );
+}
+
+function ChartPanel({ report }: { report: UsageReport }) {
   return (
     <section className="panel">
       <h3>Where it goes</h3>
       <DayBars report={report} />
-      <div className="usage__tiles">
-        <Tile
-          label="Read"
-          value={formatTokens(totals.read)}
-          sub={`Claude ${formatTokens(byProvider.claude.read)} · Codex ${formatTokens(byProvider.codex.read)}`}
-        />
-        <Tile label="Output" value={formatTokens(totals.output)} sub={`fresh input ${formatTokens(totals.fresh)}`} />
-        <Tile label="Messages" value={totals.messages.toLocaleString()} sub={`subagents: ${sharePercent(report.sidechainShare)} %`} />
-        <Tile
-          label="Context per message"
-          value={`${formatTokens(context.p50)} · ${formatTokens(context.p90)} · ${formatTokens(context.max)}`}
-          sub="p50 · p90 · max"
-          tone={tone}
-        />
-      </div>
-      <p className={`hint usage__explain ${tone !== "go" ? `usage__explain--${tone}` : ""}`}>
-        Every message re-reads the whole context; long sessions above {formatTokens(CONTEXT_WARN)} tokens are the main cost driver. Compact or start a new
-        session when p90 gets there.
-      </p>
-      <p className="muted small">
-        {context.over300k.toLocaleString()} messages above 300k · {context.over600k.toLocaleString()} above 600k
-      </p>
     </section>
   );
 }
@@ -347,30 +393,24 @@ interface SortState {
   direction: SortDirection;
 }
 
-interface UsageTableProps<T> {
-  title: string;
+interface DataTableProps<T> {
   rows: readonly T[];
   columns: readonly Column<T>[];
-  initialKey: string;
+  sort: SortState;
+  onSort: (key: string) => void;
+  showAll: boolean;
+  onToggleAll: () => void;
   rowKey: (row: T) => string;
   onRowClick?: (row: T) => void;
   isClickable?: (row: T) => boolean;
 }
 
-function UsageTable<T>({ title, rows, columns, initialKey, rowKey, onRowClick, isClickable }: UsageTableProps<T>) {
-  const [sort, setSort] = useState<SortState>({ key: initialKey, direction: "desc" });
-  const [all, setAll] = useState(false);
+function DataTable<T>({ rows, columns, sort, onSort, showAll, onToggleAll, rowKey, onRowClick, isClickable }: DataTableProps<T>) {
   const column = columns.find((item) => item.key === sort.key) ?? columns[0];
   const sorted = column ? sortRows(rows, column.value, sort.direction) : [...rows];
-  const shown = all ? sorted : sorted.slice(0, ROW_LIMIT);
-  const toggle = (key: string) =>
-    setSort((current) => (current.key === key ? { key, direction: current.direction === "desc" ? "asc" : "desc" } : { key, direction: "desc" }));
+  const shown = showAll ? sorted : sorted.slice(0, ROW_LIMIT);
   return (
-    <section className="panel">
-      <div className="usage__panel-h">
-        <h3>{title}</h3>
-        <span className="muted small">{rows.length}</span>
-      </div>
+    <>
       {rows.length === 0 ? (
         <p className="hint">Nothing to show.</p>
       ) : (
@@ -384,7 +424,7 @@ function UsageTable<T>({ title, rows, columns, initialKey, rowKey, onRowClick, i
                     className={item.numeric ? "usage__num" : undefined}
                     aria-sort={sort.key === item.key ? (sort.direction === "desc" ? "descending" : "ascending") : "none"}
                   >
-                    <button type="button" className="usage__sort" onClick={() => toggle(item.key)}>
+                    <button type="button" className="usage__sort" onClick={() => onSort(item.key)}>
                       {item.label}
                       <span className="usage__arrow" aria-hidden="true">
                         {sort.key === item.key ? (sort.direction === "desc" ? "▾" : "▴") : ""}
@@ -416,11 +456,11 @@ function UsageTable<T>({ title, rows, columns, initialKey, rowKey, onRowClick, i
         </div>
       )}
       {rows.length > ROW_LIMIT && (
-        <button type="button" className="act usage__more" onClick={() => setAll((value) => !value)}>
-          {all ? "Show fewer" : `Show all ${rows.length}`}
+        <button type="button" className="act usage__more" onClick={onToggleAll}>
+          {showAll ? "Show fewer" : `Show all ${rows.length}`}
         </button>
       )}
-    </section>
+    </>
   );
 }
 
@@ -513,6 +553,88 @@ const SESSION_COLUMNS: readonly Column<UsageSessionRow>[] = [
   { key: "firstAt", label: "First", numeric: true, value: (row) => row.firstAt, render: (row) => formatWhen(row.firstAt) },
   { key: "lastAt", label: "Last", numeric: true, value: (row) => row.lastAt, render: (row) => formatWhen(row.lastAt) },
 ];
+
+const INITIAL_SORT: SortState = { key: "read", direction: "desc" };
+const INITIAL_SORTS: Record<UsageTab, SortState> = { model: INITIAL_SORT, project: INITIAL_SORT, session: INITIAL_SORT };
+const INITIAL_EXPANDED: Record<UsageTab, boolean> = { model: false, project: false, session: false };
+
+interface BreakdownProps {
+  report: UsageReport;
+  openable: (row: UsageSessionRow) => boolean;
+  onOpenSession: (sessionId: string) => void;
+}
+
+function Breakdown({ report, openable, onOpenSession }: BreakdownProps) {
+  const [tab, setTab] = useState<UsageTab>(readStoredTab);
+  const [sorts, setSorts] = useState(INITIAL_SORTS);
+  const [expanded, setExpanded] = useState(INITIAL_EXPANDED);
+  const tabRefs = useRef<Partial<Record<UsageTab, HTMLButtonElement | null>>>({});
+  const baseId = useId();
+  const tabId = (value: UsageTab) => `${baseId}-tab-${value}`;
+  const panelId = `${baseId}-panel`;
+  const counts: Record<UsageTab, number> = { model: report.byModel.length, project: report.byProject.length, session: report.bySession.length };
+
+  const choose = (next: UsageTab) => {
+    storeTab(next);
+    setTab(next);
+  };
+
+  const onTabKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const next = stepUsageTab(tab, event.key);
+    if (next === null) return;
+    event.preventDefault();
+    choose(next);
+    tabRefs.current[next]?.focus();
+  };
+
+  const sortBy = (key: string) =>
+    setSorts((current) => {
+      const active = current[tab];
+      return { ...current, [tab]: active.key === key ? { key, direction: active.direction === "desc" ? "asc" : "desc" } : { key, direction: "desc" } };
+    });
+  const toggleAll = () => setExpanded((current) => ({ ...current, [tab]: !current[tab] }));
+  const shared = { sort: sorts[tab], onSort: sortBy, showAll: expanded[tab], onToggleAll: toggleAll };
+
+  return (
+    <section className="panel">
+      <div className="usage__tabs" role="tablist" aria-label="Usage breakdown" onKeyDown={onTabKeyDown}>
+        {USAGE_TABS.map((value) => (
+          <button
+            key={value}
+            ref={(element) => {
+              tabRefs.current[value] = element;
+            }}
+            id={tabId(value)}
+            type="button"
+            role="tab"
+            className="usage__tab"
+            aria-selected={tab === value}
+            aria-controls={panelId}
+            tabIndex={tab === value ? 0 : -1}
+            onClick={() => choose(value)}
+          >
+            {TAB_LABEL[value]}
+            <span className="usage__tab-n">{counts[value]}</span>
+          </button>
+        ))}
+      </div>
+      <div id={panelId} role="tabpanel" aria-labelledby={tabId(tab)} className="usage__tabpanel">
+        {tab === "model" && <DataTable rows={report.byModel} columns={MODEL_COLUMNS} rowKey={(row) => `${row.provider}:${row.model}`} {...shared} />}
+        {tab === "project" && <DataTable rows={report.byProject} columns={PROJECT_COLUMNS} rowKey={(row) => `${row.provider}:${row.project}`} {...shared} />}
+        {tab === "session" && (
+          <DataTable
+            rows={report.bySession}
+            columns={SESSION_COLUMNS}
+            rowKey={(row) => `${row.provider}:${row.sessionId}`}
+            isClickable={openable}
+            onRowClick={(row) => onOpenSession(row.sessionId)}
+            {...shared}
+          />
+        )}
+      </div>
+    </section>
+  );
+}
 
 export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }: Props) {
   const [storedDays, setStoredDays] = useState<number | null>(readStoredDays);
@@ -617,6 +739,23 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
   const openable = (row: UsageSessionRow): boolean => row.provider === "claude" && sessions[row.sessionId] != null;
   const missingHub = reportError != null && reportError.includes("(404)");
 
+  const menuItems: BoardMenuItem[] = [
+    {
+      id: "rescan",
+      label: rescanning ? "Rescanning..." : "Rescan transcripts",
+      title: "Scan the transcripts again",
+      disabled: rescanning,
+      onSelect: () => void rescan(),
+    },
+    {
+      id: "refresh-limits",
+      label: limitsBusy ? "Refreshing..." : "Refresh plan limits",
+      title: limitsEnabled ? "Fetch the plan limits again" : "Turn on Limits in Settings › Features first",
+      disabled: limitsBusy || !limitsEnabled || limits === null,
+      onSelect: () => void refresh(),
+    },
+  ];
+
   return (
     <div className="view usage">
       <div className="usage__head">
@@ -634,14 +773,18 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
             </button>
           ))}
         </div>
-        <button type="button" className="act" disabled={rescanning} onClick={() => void rescan()}>
-          {rescanning ? "Rescanning..." : "Rescan"}
-        </button>
         <span className="spacer" />
-        {report && <span className="muted small">scanned {timeAgo(report.to, now)}</span>}
+        {rescanning ? (
+          <span className="muted small" role="status">
+            Rescanning...
+          </span>
+        ) : (
+          report && <span className="muted small">scanned {timeAgo(report.to, now)}</span>
+        )}
+        <BoardActionsMenu label="Usage actions" items={menuItems} />
       </div>
 
-      <LimitsPanel enabled={limitsEnabled} limits={limits} busy={limitsBusy} error={limitsError} now={now} refreshedAt={refreshedAt} onRefresh={() => void refresh()} />
+      <LimitsPanel enabled={limitsEnabled} limits={limits} error={limitsError} now={now} refreshedAt={refreshedAt} />
 
       {reportError && <p className="error">{missingHub ? "Usage needs a newer hub." : `Could not load usage: ${reportError}`}</p>}
       {scanning && (
@@ -654,18 +797,9 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
       {report && report.totals.messages === 0 && <p className="empty">No transcripts in the last {days} days</p>}
       {report && report.totals.messages > 0 && (
         <>
-          <WhereItGoes report={report} />
-          <UsageTable title="By model" rows={report.byModel} columns={MODEL_COLUMNS} initialKey="read" rowKey={(row) => `${row.provider}:${row.model}`} />
-          <UsageTable title="By project" rows={report.byProject} columns={PROJECT_COLUMNS} initialKey="read" rowKey={(row) => `${row.provider}:${row.project}`} />
-          <UsageTable
-            title="By session"
-            rows={report.bySession}
-            columns={SESSION_COLUMNS}
-            initialKey="read"
-            rowKey={(row) => `${row.provider}:${row.sessionId}`}
-            isClickable={openable}
-            onRowClick={(row) => onOpenSession(row.sessionId)}
-          />
+          <Summary report={report} />
+          <ChartPanel report={report} />
+          <Breakdown report={report} openable={openable} onOpenSession={onOpenSession} />
         </>
       )}
     </div>

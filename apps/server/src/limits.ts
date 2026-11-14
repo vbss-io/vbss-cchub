@@ -356,13 +356,36 @@ export async function fetchClaudeLimits(sources: LimitsSources = {}): Promise<Cl
   return settle({ source: "api", fetchedAt: now, stale: false, ...parsed, error: null }, null);
 }
 
-function parseCodexWindow(value: unknown, usedKey: string, resetKey: string): CodexWindow | null {
+interface CodexWindowKeys {
+  used: string;
+  resetsAt: string;
+  resetsIn: string;
+  minutes: string;
+}
+
+const ROLLOUT_KEYS: CodexWindowKeys = { used: "used_percent", resetsAt: "resets_at", resetsIn: "resets_in_seconds", minutes: "window_minutes" };
+const LIVE_KEYS: CodexWindowKeys = { used: "usedPercent", resetsAt: "resetsAt", resetsIn: "resetsInSeconds", minutes: "windowDurationMins" };
+const CODEX_FALLBACK_MINUTES = { primary: 300, secondary: 10_080 } as const;
+const EPOCH_MS_THRESHOLD = 1e11;
+const RESET_PLAUSIBLE_FACTOR = 1.2;
+
+function codexResetMs(obj: Json, keys: CodexWindowKeys, snapshotAt: number): number | null {
+  const absolute = asNumber(obj[keys.resetsAt]);
+  if (absolute !== null) return absolute >= EPOCH_MS_THRESHOLD ? absolute : absolute * 1000;
+  const relative = asNumber(obj[keys.resetsIn]);
+  return relative === null ? null : snapshotAt + relative * 1000;
+}
+
+function parseCodexWindow(value: unknown, keys: CodexWindowKeys, slot: keyof typeof CODEX_FALLBACK_MINUTES, snapshotAt: number, now: number): CodexWindow | null {
   const obj = asObject(value);
   if (!obj) return null;
-  const used = asNumber(obj[usedKey]);
+  const used = asNumber(obj[keys.used]);
   if (used === null) return null;
-  const resetsSeconds = asNumber(obj[resetKey]);
-  return { usedPercent: clampPercent(used), resetsAt: resetsSeconds === null ? null : resetsSeconds * 1000, reset: false };
+  const minutes = asNumber(obj[keys.minutes]);
+  const windowMs = (minutes !== null && minutes > 0 ? minutes : CODEX_FALLBACK_MINUTES[slot]) * 60_000;
+  const resetsAt = codexResetMs(obj, keys, snapshotAt);
+  const plausible = resetsAt !== null && resetsAt <= now + windowMs * RESET_PLAUSIBLE_FACTOR;
+  return { usedPercent: clampPercent(used), resetsAt: plausible ? resetsAt : null, reset: false };
 }
 
 function buildCodexLimits(
@@ -385,12 +408,12 @@ function buildCodexLimits(
   };
 }
 
-export function parseCodexRateLimits(raw: unknown, fetchedAt: number): CodexLimits | null {
+export function parseCodexRateLimits(raw: unknown, fetchedAt: number, now: number = fetchedAt): CodexLimits | null {
   const obj = asObject(raw);
   if (!obj) return null;
   return buildCodexLimits(
-    parseCodexWindow(obj.primary, "used_percent", "resets_at"),
-    parseCodexWindow(obj.secondary, "used_percent", "resets_at"),
+    parseCodexWindow(obj.primary, ROLLOUT_KEYS, "primary", fetchedAt, now),
+    parseCodexWindow(obj.secondary, ROLLOUT_KEYS, "secondary", fetchedAt, now),
     obj.plan_type,
     "rollout",
     fetchedAt,
@@ -467,7 +490,7 @@ export function readCodexRolloutLimits(options: { root?: string; now?: number; d
       try {
         const found = newestRateLimits(file, mtimeMs);
         if (!found) continue;
-        const parsed = parseCodexRateLimits(found.rateLimits, found.at);
+        const parsed = parseCodexRateLimits(found.rateLimits, found.at, now);
         if (parsed) return resolveCodexResets(parsed, now);
       } catch {
         continue;
@@ -524,13 +547,14 @@ export function readCodexLimitsLive(timeoutMs: number = LIVE_TIMEOUT_MS): Promis
       if (message.id !== 2) return;
       const snapshot = asObject(asObject(message.result)?.rateLimits);
       if (!snapshot) return finish(null);
+      const received = Date.now();
       finish(
         buildCodexLimits(
-          parseCodexWindow(snapshot.primary, "usedPercent", "resetsAt"),
-          parseCodexWindow(snapshot.secondary, "usedPercent", "resetsAt"),
+          parseCodexWindow(snapshot.primary, LIVE_KEYS, "primary", received, received),
+          parseCodexWindow(snapshot.secondary, LIVE_KEYS, "secondary", received, received),
           snapshot.planType,
           "live",
-          Date.now(),
+          received,
         ),
       );
     };

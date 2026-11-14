@@ -1,0 +1,124 @@
+.view--share .sharetoolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.view--share .sharetoolbar .filters {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: visible;
+}
+
+.view--share .sharetoolbar__search {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+.view--share .sharetoolbar__new {
+  flex: 0 0 auto;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.sharereach {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sharereach__line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 4px 6px 4px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.sharereach__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 18px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.sharereach__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sharereach__dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ended);
+}
+
+.sharereach__dot--ok {
+  background: var(--ok);
+}
+
+.sharereach__dot--warn {
+  background: var(--pend);
+}
+
+.sharereach__dot--error {
+  background: var(--hold);
+}
+
+.sharereach__label {
+  color: var(--muted);
+}
+
+.sharereach__detail {
+  min-width: 0;
+  max-width: 260px;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sharereach__tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.sharereach__tools .card__menu-btn {
+  margin: 0;
+  height: 26px;
+  opacity: 1;
+}
+
+.sharereach__problem {
+  margin: 0;
+  padding: 0 12px;
+  color: var(--hold);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.sharereach__notice {
+  margin: 0;
+  padding: 0 12px;
+}
+
+.sharecard__meta {
+  overflow-wrap: anywhere;
+}

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { CardMenu, useCardMenu, type CardMenuItem } from "../components/CardMenu";
 import { ConfirmDialog } from "../components/ConfirmDialog";
-import { bestLink, maskLink, ShareCard, untilText } from "../components/ShareCard";
+import { bestLink, maskLink, ShareCard, untilText, type ShareManageAction } from "../components/ShareCard";
+import { Toggletip } from "../components/Toggletip";
 import {
   createShare,
   deleteShare,
@@ -23,6 +25,18 @@ import {
 } from "../delegation";
 import { IconClose, IconCopy } from "../icons";
 import { Markdown } from "../markdown";
+import {
+  DEFAULT_SHARE_FILTER,
+  filterShares,
+  isShareFilter,
+  reachItems,
+  reachMenuEntries,
+  reachProblems,
+  SHARE_FILTERS,
+  shareCounts,
+  type ReachMenuKey,
+  type ShareFilter,
+} from "../share-model";
 import { sharePrompt } from "../share-prompt";
 import { isStale } from "../stale";
 import { relativeTime } from "../time";
@@ -49,7 +63,30 @@ interface Props {
 
 type Expiry = "24" | "168" | "720" | "never";
 type DetailTab = "activity" | "details" | "actions";
-type ShareFilter = "active" | "paused" | "expired" | "all";
+
+const FILTER_KEY = "hub.share.filter";
+
+const loadFilter = (): ShareFilter => {
+  try {
+    const stored = localStorage.getItem(FILTER_KEY);
+    return isShareFilter(stored) ? stored : DEFAULT_SHARE_FILTER;
+  } catch {
+    return DEFAULT_SHARE_FILTER;
+  }
+};
+
+const saveFilter = (filter: ShareFilter) => {
+  try {
+    localStorage.setItem(FILTER_KEY, filter);
+  } catch {
+    return;
+  }
+};
+
+interface PendingConfirm {
+  kind: "revoke" | "delete";
+  share: ShareRecord;
+}
 
 interface Draft {
   label: string;
@@ -227,6 +264,60 @@ function ShareActions({ share, onPause, onResume, onNewKey, onRevoke, onDelete }
   );
 }
 
+interface ReachLineProps {
+  tunnel: TunnelStatus | null;
+  firewall: FirewallStatus | null;
+  busy: boolean;
+  onToggleTunnel: () => void;
+  onAllowLan: () => void;
+  onOpenSettings: () => void;
+}
+
+function ReachLine({ tunnel, firewall, busy, onToggleTunnel, onAllowLan, onOpenSettings }: ReachLineProps) {
+  const menu = useCardMenu();
+  const handlers: Record<ReachMenuKey, () => void> = {
+    tunnel: () => {
+      if (!busy) onToggleTunnel();
+    },
+    firewall: () => {
+      if (!busy) onAllowLan();
+    },
+    settings: onOpenSettings,
+  };
+  const items: CardMenuItem[] = reachMenuEntries(tunnel, firewall).map((entry) => ({ key: entry.key, label: entry.label, onSelect: handlers[entry.key] }));
+  const problems = reachProblems(tunnel);
+
+  return (
+    <div className="sharereach">
+      <div className="sharereach__line">
+        <ul className="sharereach__status" aria-label="Sharing reach">
+          {reachItems(tunnel, firewall).map((item) => (
+            <li key={item.key} className="sharereach__item" title={item.title}>
+              <span className={`sharereach__dot sharereach__dot--${item.tone}`} aria-hidden="true" />
+              <span className="sharereach__label">{item.label}</span>
+              <span className="sharereach__detail">{item.detail}</span>
+            </li>
+          ))}
+        </ul>
+        <div className="sharereach__tools">
+          <Toggletip label="About share links" align="end">
+            <span>
+              Every share gets a LAN link; while the tunnel is on it also gets a public one. Links carry the key, so send them privately. The ngrok authtoken and domain live in Settings › Sharing.
+            </span>
+          </Toggletip>
+          <CardMenu menu={menu} items={items} label="Sharing connection actions" />
+        </div>
+      </div>
+      {problems.map((problem) => (
+        <p key={problem} className="sharereach__problem">
+          {problem}
+        </p>
+      ))}
+      {tunnel?.notice && <p className="muted small sharereach__notice">{tunnel.notice}</p>}
+    </div>
+  );
+}
+
 export function ShareView(props: Props) {
   const { enabled, workspaces, sessions, param, tick, tunnel, onTunnelChanged, subscribeShareStream, onOpenSettings, onOpenTask, onNotice, onError, panelHost } = props;
   const [shares, setShares] = useState<ShareRecord[]>([]);
@@ -238,8 +329,9 @@ export function ShareView(props: Props) {
   const [firewall, setFirewall] = useState<FirewallStatus | null>(null);
   const [firewallBusy, setFirewallBusy] = useState(false);
   const [manualCopy, setManualCopy] = useState<string | null>(null);
-  const [filter, setFilter] = useState<ShareFilter>("active");
+  const [filter, setFilter] = useState<ShareFilter>(loadFilter);
   const [query, setQuery] = useState("");
+  const [pending, setPending] = useState<PendingConfirm | null>(null);
   const [detailTab, setDetailTab] = useState<DetailTab>("activity");
   const [detailRequests, setDetailRequests] = useState<ShareRequestRecord[]>([]);
   const [handoff, setHandoff] = useState<{ id: string; text: string } | null>(null);
@@ -476,9 +568,17 @@ export function ShareView(props: Props) {
     }
   };
 
-  const tunnelOn = tunnel?.state === "running";
-  const tunnelLabel =
-    tunnel?.state === "installing" ? "installing ngrok…" : tunnel?.state === "starting" ? "starting…" : tunnelOn ? "Stop tunnel" : "Start tunnel";
+  const chooseFilter = (next: ShareFilter) => {
+    setFilter(next);
+    saveFilter(next);
+  };
+
+  const manage = (action: ShareManageAction, share: ShareRecord) => {
+    if (action === "pause") void patch(share, { paused: true }, "share paused");
+    else if (action === "resume") void patch(share, { paused: false }, "share resumed");
+    else if (action === "rotate") void patch(share, { rotate: true }, "new key generated; the old link no longer works");
+    else setPending({ kind: action, share });
+  };
 
   if (!enabled) {
     return (
@@ -490,24 +590,8 @@ export function ShareView(props: Props) {
     );
   }
 
-  const counts: Record<ShareFilter, number> = {
-    active: shares.filter((share) => share.state === "active").length,
-    paused: shares.filter((share) => share.state === "paused").length,
-    expired: shares.filter((share) => share.state === "expired").length,
-    all: shares.length,
-  };
-  const filters: { key: ShareFilter; label: string }[] = [
-    { key: "active", label: "Active" },
-    { key: "paused", label: "Paused" },
-    { key: "expired", label: "Expired" },
-    { key: "all", label: "All" },
-  ];
-  const needle = query.trim().toLowerCase();
-  const filtered = shares.filter((share) => {
-    if (needle && !`${share.label} ${share.workspace} ${share.repo ?? ""}`.toLowerCase().includes(needle)) return false;
-    if (filter === "all") return true;
-    return share.state === filter;
-  });
+  const counts = shareCounts(shares);
+  const filtered = filterShares(shares, filter, query);
 
   const selectedLink = selected ? bestLink(selected) : null;
   const selectedSession = selected?.sessionId ? sessions[selected.sessionId] : undefined;
@@ -754,66 +838,31 @@ export function ShareView(props: Props) {
 
   return (
     <div className="view view--share">
-      <section className="panel">
-        <div className="reach reach--compact">
-          {tunnel?.endpointError && (
-            <div className="reach__row">
-              <span className="tag tag--share-revoked">share endpoint down</span>
-              <span className="taskrow__error">
-                port {tunnel.sharePort} could not be opened ({tunnel.endpointError}); close whatever uses it or change HUB_SHARE_PORT, then restart the hub
-              </span>
-            </div>
-          )}
-          <div className="reach__row">
-            <span className={`tag ${tunnel?.lanUrl ? "tag--go" : "tag--muted"}`}>LAN</span>
-            {tunnel?.lanUrl ? <code className="share-link">{tunnel.lanUrl}</code> : <span className="muted small">{tunnel ? "no LAN address" : "checking…"}</span>}
-            {firewall === null && <span className="tag tag--muted">firewall…</span>}
-            {firewall?.supported && firewall.allowed === false && (
-              <button className="act" disabled={firewallBusy} onClick={() => void allowLan()} title="Adds an inbound rule for the share port; Windows asks for admin">
-                {firewallBusy ? "waiting…" : "Allow LAN (admin)"}
-              </button>
-            )}
-            {firewall?.supported && firewall.allowed === true && <span className="tag tag--go">firewall ok</span>}
-            <span className="reach__sep" />
-            <span className={`tag ${tunnelOn ? "tag--go" : "tag--muted"}`}>Internet</span>
-            {tunnelOn && tunnel?.publicUrl ? <code className="share-link">{tunnel.publicUrl}</code> : <span className="muted small">tunnel off</span>}
-            <button className={`act ${tunnelOn ? "" : "act--focus"}`} disabled={tunnelBusy} onClick={() => void toggleTunnel()}>
-              {tunnelLabel}
-            </button>
-            {tunnel?.state === "error" && tunnel.error && <span className="taskrow__error">{tunnel.error}</span>}
-          </div>
-          {tunnel?.notice && (
-            <div className="reach__row">
-              <span className="muted small">{tunnel.notice}</span>
-            </div>
-          )}
-        </div>
-        <p className="hint">
-          Every share gets a LAN link; while the tunnel is on it also gets a public one. Links carry the key, so send them privately. ngrok
-          authtoken and domain live in{" "}
-          <button className="linklike" onClick={onOpenSettings}>
-            Settings › Sharing
-          </button>
-          .
-        </p>
-      </section>
-
       <div className="sharetoolbar">
         <div className="filters filters--tight">
-          {filters.map((item) => (
-            <button key={item.key} className={`pill ${filter === item.key ? "pill--on" : ""}`} onClick={() => setFilter(item.key)}>
+          {SHARE_FILTERS.map((item) => (
+            <button key={item.key} className={`pill ${filter === item.key ? "pill--on" : ""}`} onClick={() => chooseFilter(item.key)}>
               {item.label}
               <span className="pill__count">{counts[item.key]}</span>
             </button>
           ))}
         </div>
-        <input className="in sharetoolbar__search" placeholder="search label or workspace" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <input className="in sharetoolbar__search" placeholder="search label or workspace" aria-label="Search shares" value={query} onChange={(event) => setQuery(event.target.value)} />
         <button className="act act--focus sharetoolbar__new" onClick={openForm}>
           New share
         </button>
       </div>
 
-      {shares.length === 0 && <p className="hint">No share yet. Press New share, or open a session and press Share.</p>}
+      <ReachLine
+        tunnel={tunnel}
+        firewall={firewall}
+        busy={tunnelBusy || firewallBusy}
+        onToggleTunnel={() => void toggleTunnel()}
+        onAllowLan={() => void allowLan()}
+        onOpenSettings={onOpenSettings}
+      />
+
+      {shares.length === 0 && <p className="empty">No shares yet: press New share, or press Share on a session.</p>}
       <div className="grid sharegrid">
         {filtered.map((share) => (
           <ShareCard
@@ -823,13 +872,29 @@ export function ShareView(props: Props) {
             files={files[share.id]}
             onSelect={openShare}
             onCopy={(url, what) => void copy(url, what)}
-            onRevoke={(item) => void patch(item, { revoke: true }, "share revoked")}
+            onManage={manage}
           />
         ))}
         {shares.length > 0 && filtered.length === 0 && <p className="empty">Nothing in this filter.</p>}
       </div>
 
       {panelHost && panel && createPortal(panel, panelHost)}
+
+      {pending && (
+        <ConfirmDialog
+          title={pending.kind === "revoke" ? `Revoke ${pending.share.label}?` : `Delete ${pending.share.label}?`}
+          body={pending.kind === "revoke" ? "Stops the link right away. It cannot be undone." : "Removes the record and its files for good."}
+          confirmLabel={pending.kind === "revoke" ? "Revoke" : "Delete"}
+          danger
+          onCancel={() => setPending(null)}
+          onConfirm={() => {
+            const target = pending;
+            setPending(null);
+            if (target.kind === "revoke") void patch(target.share, { revoke: true }, "share revoked");
+            else void remove(target.share);
+          }}
+        />
+      )}
 
       {manualCopy && (
         <ConfirmDialog

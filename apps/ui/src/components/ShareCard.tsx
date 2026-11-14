@@ -1,8 +1,11 @@
 import { useRef, useState, type MouseEvent } from "react";
 import { shareFileUrl, type ShareFile, type ShareRecord, type TrustLevel } from "../delegation";
 import { IconCopy } from "../icons";
+import { activitySummary, shareMenuEntries, type ShareMenuKey } from "../share-model";
 import { sharePrompt } from "../share-prompt";
 import { relativeTime } from "../time";
+import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
+import "../share.css";
 
 const STATE_LABEL: Record<ShareRecord["state"], string> = { active: "active", paused: "paused", expired: "expired", revoked: "revoked" };
 const TRUST_LABEL: Record<TrustLevel, string> = { low: "Low · read only", medium: "Medium · edits, no shell", high: "High · edits + safe shell", total: "Total · no blocks" };
@@ -22,30 +25,47 @@ export function untilText(timestamp: number): string {
   return `in ${Math.round(diff / 86_400_000)} days`;
 }
 
+export type ShareManageAction = "pause" | "resume" | "rotate" | "revoke" | "delete";
+
+const MANAGE_ACTIONS: readonly ShareMenuKey[] = ["pause", "resume", "rotate", "revoke", "delete"];
+
+const isManageAction = (key: ShareMenuKey): key is ShareManageAction => MANAGE_ACTIONS.includes(key);
+
 interface Props {
   share: ShareRecord;
   selected: boolean;
   files: ShareFile[] | undefined;
   onSelect: (id: string) => void;
   onCopy: (url: string, what: string) => void;
-  onRevoke: (share: ShareRecord) => void;
+  onManage: (action: ShareManageAction, share: ShareRecord) => void;
 }
 
-export function ShareCard({ share, selected, files, onSelect, onCopy, onRevoke }: Props) {
+export function ShareCard({ share, selected, files, onSelect, onCopy, onManage }: Props) {
   const [revealed, setRevealed] = useState(false);
-  const [confirmRevoke, setConfirmRevoke] = useState(false);
   const codeRef = useRef<HTMLElement | null>(null);
+  const menu = useCardMenu();
   const link = bestLink(share);
   const stop = (event: MouseEvent) => event.stopPropagation();
-  const toggleReveal = (event: MouseEvent) => {
-    stop(event);
-    setRevealed((value) => {
-      const next = !value;
-      if (next) requestAnimationFrame(() => codeRef.current?.focus());
-      return next;
-    });
+
+  const reveal = () => {
+    setRevealed(true);
+    requestAnimationFrame(() => codeRef.current?.focus());
   };
-  const revokable = share.state === "active" || share.state === "paused";
+
+  const run = (key: ShareMenuKey) => {
+    if (key === "details") onSelect(share.id);
+    else if (key === "copy-prompt") onCopy(sharePrompt(share, link.url), "prompt");
+    else if (key === "reveal") reveal();
+    else if (key === "hide") setRevealed(false);
+    else if (isManageAction(key)) onManage(key, share);
+  };
+
+  const menuItems: CardMenuItem[] = shareMenuEntries(share.state, revealed).map((entry) => ({
+    key: entry.key,
+    label: entry.label,
+    danger: entry.danger,
+    onSelect: () => run(entry.key),
+  }));
 
   return (
     <article className={`card card--share card--share-${share.state} ${selected ? "card--sel" : ""} card--clickable`} onClick={() => onSelect(share.id)}>
@@ -54,6 +74,7 @@ export function ShareCard({ share, selected, files, onSelect, onCopy, onRevoke }
           {share.label}
         </span>
         <span className={`tag tag--share-${share.state}`}>{STATE_LABEL[share.state]}</span>
+        <CardMenu menu={menu} items={menuItems} label={`Actions for ${share.label}`} />
       </div>
 
       <div className="card__badges">
@@ -63,23 +84,19 @@ export function ShareCard({ share, selected, files, onSelect, onCopy, onRevoke }
           {share.repo ? ` / ${share.repo}` : ""}
         </span>
         {share.sessionId && <span className="chip">continues a session</span>}
-        <span className="muted small">
-          {share.uses} uses · {share.requestsLastHour}/{share.maxPerHour} this hour · expires {share.expiresAt ? untilText(share.expiresAt) : "never"}
-        </span>
       </div>
 
-      <div className="card__line">
-        <code
-          ref={codeRef}
-          tabIndex={0}
-          className="share-link share-link--row"
-          title={revealed ? link.url : "hidden — Copy sends the full link, Reveal shows it"}
-          onClick={stop}
-          onBlur={() => setRevealed(false)}
-        >
-          {revealed ? link.url : maskLink(link.url)}
-        </code>
+      <div className="muted small sharecard__meta">
+        expires {share.expiresAt ? untilText(share.expiresAt) : "never"} · {activitySummary(share, relativeTime)}
       </div>
+
+      {revealed && (
+        <div className="card__line">
+          <code ref={codeRef} tabIndex={0} className="share-link share-link--row" title={link.url} onClick={stop} onBlur={() => setRevealed(false)}>
+            {link.url}
+          </code>
+        </div>
+      )}
 
       {files && (
         <ul className="filelist" onClick={stop}>
@@ -103,31 +120,8 @@ export function ShareCard({ share, selected, files, onSelect, onCopy, onRevoke }
       <div className="card__actions">
         <div className="card__open">
           <button className="act act--focus" disabled={!share.active} onClick={(event) => { stop(event); onCopy(link.url, `${link.kind} link`); }}>
-            <IconCopy /> Copy
+            <IconCopy /> Copy link
           </button>
-          <button className="act" disabled={!share.active} onClick={(event) => { stop(event); onCopy(sharePrompt(share, link.url), "prompt"); }}>
-            <IconCopy /> Copy prompt
-          </button>
-          <button className="act" onClick={toggleReveal}>
-            {revealed ? "Hide" : "Reveal"}
-          </button>
-        </div>
-        <div className="card__manage">
-          {revokable && !confirmRevoke && (
-            <button className="act act--danger" onClick={(event) => { stop(event); setConfirmRevoke(true); }}>
-              Revoke
-            </button>
-          )}
-          {revokable && confirmRevoke && (
-            <>
-              <button className="act act--ghost" onClick={(event) => { stop(event); setConfirmRevoke(false); }}>
-                Cancel
-              </button>
-              <button className="act act--danger" onClick={(event) => { stop(event); setConfirmRevoke(false); onRevoke(share); }}>
-                Confirm revoke
-              </button>
-            </>
-          )}
         </div>
       </div>
     </article>

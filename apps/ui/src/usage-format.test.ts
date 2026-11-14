@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { UsageDay, UsageTotals } from "./delegation";
-import { contextTone, dayBarHeights, sharePercent, shortProject, sortRows, sourceNote, timeAgo, usageResponseState } from "./usage-format";
+import { contextTone, dayBarHeights, parseUsageTab, resetLabel, sharePercent, shortProject, sortRows, sourceNote, stepUsageTab, timeAgo, usageResponseState } from "./usage-format";
 
 const totals = (read: number): UsageTotals => ({ read, fresh: 0, cacheRead: 0, cacheWrite: 0, output: 0, messages: 0 });
 const day = (name: string, claude: number, codex: number): UsageDay => ({ day: name, claude: totals(claude), codex: totals(codex) });
@@ -92,4 +92,59 @@ test("usageResponseState treats a 200 report as ready and a 200 scanning body as
 test("usageResponseState treats other statuses as unavailable", () => {
   assert.equal(usageResponseState(404, { error: "not found" }), "unavailable");
   assert.equal(usageResponseState(500, null), "unavailable");
+});
+
+const HOUR = 3_600_000;
+const DAY = 86_400_000;
+const NOW = Date.parse("2026-11-14T12:00:00.000Z");
+
+test("resetLabel counts down a plausible reset inside its window", () => {
+  assert.deepEqual(resetLabel(NOW + 3 * HOUR + 11 * 60_000, NOW, "fiveHour"), { kind: "countdown", text: "3h 11m" });
+  assert.deepEqual(resetLabel(NOW + 4 * DAY + 11 * HOUR, NOW, "sevenDay"), { kind: "countdown", text: "4d 11h" });
+  assert.deepEqual(resetLabel(Math.round((NOW + HOUR) / 1000), NOW, "fiveHour"), { kind: "countdown", text: "1h" });
+});
+
+test("resetLabel refuses the 1219d countdown the fake Codex snapshot produced", () => {
+  const fixtureReset = 1_900_000_000_000;
+  assert.deepEqual(resetLabel(fixtureReset, Date.parse("2026-11-14T08:00:00.000Z"), "fiveHour"), { kind: "unknown" });
+  assert.deepEqual(resetLabel(1_900_500_000_000, NOW, "sevenDay"), { kind: "unknown" });
+});
+
+test("resetLabel enforces 6h for the 5h window and 8d for the 7d window", () => {
+  assert.equal(resetLabel(NOW + 6 * HOUR, NOW, "fiveHour").kind, "countdown");
+  assert.equal(resetLabel(NOW + 6 * HOUR + 60_000, NOW, "fiveHour").kind, "unknown");
+  assert.equal(resetLabel(NOW + 8 * DAY, NOW, "sevenDay").kind, "countdown");
+  assert.equal(resetLabel(NOW + 8 * DAY + 60_000, NOW, "sevenDay").kind, "unknown");
+  assert.equal(resetLabel(NOW + 7 * HOUR, NOW, "sevenDay").kind, "countdown");
+});
+
+test("resetLabel treats a reset time well in the past as unknown and a just-passed one as now", () => {
+  assert.deepEqual(resetLabel(NOW - 30_000, NOW, "fiveHour"), { kind: "countdown", text: "now" });
+  assert.deepEqual(resetLabel(NOW - 10 * 60_000, NOW, "fiveHour"), { kind: "unknown" });
+  assert.deepEqual(resetLabel(NOW - 3 * DAY, NOW, "sevenDay"), { kind: "unknown" });
+});
+
+test("resetLabel without a reset time is silent unless the caller requires one", () => {
+  assert.deepEqual(resetLabel(null, NOW, "fiveHour"), { kind: "none" });
+  assert.deepEqual(resetLabel(null, NOW, "fiveHour", true), { kind: "unknown" });
+  assert.deepEqual(resetLabel(Number.NaN, NOW, "sevenDay", true), { kind: "unknown" });
+});
+
+test("parseUsageTab accepts the three tabs and falls back to model", () => {
+  assert.equal(parseUsageTab("project"), "project");
+  assert.equal(parseUsageTab("session"), "session");
+  assert.equal(parseUsageTab("model"), "model");
+  assert.equal(parseUsageTab("bogus"), "model");
+  assert.equal(parseUsageTab(null), "model");
+  assert.equal(parseUsageTab(undefined), "model");
+});
+
+test("stepUsageTab wraps with the arrows and jumps with Home and End", () => {
+  assert.equal(stepUsageTab("model", "ArrowRight"), "project");
+  assert.equal(stepUsageTab("session", "ArrowRight"), "model");
+  assert.equal(stepUsageTab("model", "ArrowLeft"), "session");
+  assert.equal(stepUsageTab("project", "ArrowLeft"), "model");
+  assert.equal(stepUsageTab("project", "Home"), "model");
+  assert.equal(stepUsageTab("model", "End"), "session");
+  assert.equal(stepUsageTab("model", "Enter"), null);
 });
