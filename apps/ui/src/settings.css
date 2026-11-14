@@ -377,6 +377,6 @@
   }
 }
 
-.plugin-page__body > .settings__section:first-child > h2:first-child {
+.plugin-page__body:not([data-plugin-page="usage"]):not([data-plugin-page="limits"]) > .settings__section:first-child > h2:first-child {
   display: none;
 }
