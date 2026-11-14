@@ -48,17 +48,43 @@ export function taskStatusTone(task: TaskShape): TaskTone {
 export const runStatusTone = (status: TaskStatus): TaskTone =>
   taskStatusTone({ status, archivedAt: null, isolation: "shared", worktreePath: null, mergedAt: null });
 
-export function taskBucket(task: TaskShape): Bucket {
+export interface RunToneInput {
+  status: SessionStatus;
+  unread: boolean;
+  stale: boolean;
+  archived: boolean;
+}
+
+export function sessionStatusTone({ status, unread, stale, archived }: RunToneInput): TaskTone {
+  if (archived || stale || status === "ended") return "muted";
+  if (status === "waiting") return "pend";
+  if (status === "active") return "go";
+  return unread ? "unread" : "muted";
+}
+
+const DAY_MS = 24 * 3_600_000;
+
+export const READY_TO_MERGE_LIVE_MS = 7 * DAY_MS;
+
+export interface TaskFinish {
+  updatedAt: number;
+  finishedAt?: number | null;
+}
+
+export const readyToMergeLive = (task: TaskFinish, now: number): boolean => now - (task.finishedAt ?? task.updatedAt) < READY_TO_MERGE_LIVE_MS;
+
+export function taskBucket(task: TaskShape & TaskFinish, now: number): Bucket {
   if (task.archivedAt != null) return "archived";
   if (taskInFlight(task.status)) return "active";
   if (task.status === "attention") return "waiting";
-  if (taskNeedsYou(task.status) || taskReadyToMerge(task)) return "idle";
+  if (taskNeedsYou(task.status)) return "idle";
+  if (taskReadyToMerge(task) && readyToMergeLive(task, now)) return "idle";
   return "ended";
 }
 
 const BUCKET_STATUS: Partial<Record<Bucket, SessionStatus>> = { active: "active", waiting: "waiting", idle: "idle" };
 
-export const taskRunStatus = (task: TaskShape): SessionStatus => BUCKET_STATUS[taskBucket(task)] ?? "ended";
+export const taskRunStatus = (task: TaskShape & TaskFinish, now: number): SessionStatus => BUCKET_STATUS[taskBucket(task, now)] ?? "ended";
 
 export interface OriginEntry {
   origin: RunOrigin;
@@ -203,8 +229,6 @@ export interface WorktreeShape {
 
 export const worktreeMergeable = (worktree: WorktreeShape | null, running: boolean): boolean =>
   worktree !== null && worktree.exists && !worktree.dirty && worktree.commits.length > 0 && worktree.mergedAt === null && !running;
-
-const DAY_MS = 24 * 3_600_000;
 
 export interface TaskSummary {
   running: number;

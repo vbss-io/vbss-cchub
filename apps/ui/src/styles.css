@@ -1140,10 +1140,6 @@ h3 {
   opacity: 0.6;
 }
 
-.card--codex {
-  border-left-color: var(--amber);
-}
-
 .card--codex-active {
   border-left-color: var(--go);
 }
@@ -1277,14 +1273,6 @@ h3 {
 
 .select--also-on {
   border-color: var(--brand);
-}
-
-.card--favorite {
-  border-left-color: var(--pend);
-}
-
-.card--favorite.card--unread {
-  border-left-color: var(--unread);
 }
 
 .card__rename {

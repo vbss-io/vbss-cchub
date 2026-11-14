@@ -11,6 +11,9 @@ import {
   originOptions,
   parseOrigin,
   partitionNeedsYou,
+  readyToMergeLive,
+  READY_TO_MERGE_LIVE_MS,
+  sessionStatusTone,
   filterForOrigin,
   humanizeDuration,
   runStatusTone,
@@ -25,11 +28,17 @@ import {
   taskSummary,
   withNeedsYouOnTop,
   worktreeMergeable,
+  type TaskFinish,
   type TaskShape,
 } from "./runs-model";
 
-const task = (status: TaskStatus, extra: Partial<TaskShape> = {}): TaskShape => ({
+const NOW = 1_800_000_000_000;
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
+const task = (status: TaskStatus, extra: Partial<TaskShape & TaskFinish> = {}): TaskShape & TaskFinish => ({
   status,
+  updatedAt: NOW,
   archivedAt: null,
   isolation: "shared",
   worktreePath: null,
@@ -75,37 +84,96 @@ describe("origin facet", () => {
   });
 });
 
+describe("ready to merge window", () => {
+  const ready = (extra: Partial<TaskShape & TaskFinish>) => task("completed", { isolation: "worktree", worktreePath: "C:/wt", ...extra });
+
+  it("keeps a ready to merge task live for seven days after it finished", () => {
+    const fresh = ready({ finishedAt: NOW - (6 * DAY + 23 * HOUR), updatedAt: NOW - (6 * DAY + 23 * HOUR) });
+    assert.equal(readyToMergeLive(fresh, NOW), true);
+    assert.equal(taskBucket(fresh, NOW), "idle");
+    assert.equal(taskRunStatus(fresh, NOW), "idle");
+  });
+
+  it("moves a ready to merge task older than seven days to ended", () => {
+    const old = ready({ finishedAt: NOW - (7 * DAY + HOUR), updatedAt: NOW - (7 * DAY + HOUR) });
+    assert.equal(readyToMergeLive(old, NOW), false);
+    assert.equal(taskBucket(old, NOW), "ended");
+    assert.equal(taskRunStatus(old, NOW), "ended");
+    assert.equal(taskReadyToMerge(old), true);
+  });
+
+  it("uses updatedAt when finishedAt is missing", () => {
+    assert.equal(taskBucket(ready({ updatedAt: NOW - (6 * DAY + 23 * HOUR) }), NOW), "idle");
+    assert.equal(taskBucket(ready({ updatedAt: NOW - (7 * DAY + HOUR) }), NOW), "ended");
+    assert.equal(taskBucket(ready({ finishedAt: null, updatedAt: NOW - (7 * DAY + HOUR) }), NOW), "ended");
+  });
+
+  it("prefers finishedAt over a later updatedAt", () => {
+    assert.equal(taskBucket(ready({ finishedAt: NOW - (7 * DAY + HOUR), updatedAt: NOW - HOUR }), NOW), "ended");
+  });
+
+  it("ends the window at exactly seven days", () => {
+    assert.equal(READY_TO_MERGE_LIVE_MS, 7 * DAY);
+    assert.equal(readyToMergeLive({ updatedAt: NOW - 7 * DAY }, NOW), false);
+  });
+
+  it("never ends a failed, interrupted or attention task by age", () => {
+    const old = { updatedAt: NOW - 30 * DAY };
+    assert.equal(taskBucket(task("failed", old), NOW), "idle");
+    assert.equal(taskBucket(task("interrupted", old), NOW), "idle");
+    assert.equal(taskBucket(task("attention", old), NOW), "waiting");
+    assert.equal(taskBucket(task("running", old), NOW), "active");
+  });
+});
+
+describe("session status tone", () => {
+  const base = { unread: false, stale: false, archived: false };
+
+  it("colours waiting, active and unread idle sessions", () => {
+    assert.equal(sessionStatusTone({ ...base, status: "waiting" }), "pend");
+    assert.equal(sessionStatusTone({ ...base, status: "active" }), "go");
+    assert.equal(sessionStatusTone({ ...base, status: "idle", unread: true }), "unread");
+  });
+
+  it("keeps read idle, ended, stale and archived sessions grey", () => {
+    assert.equal(sessionStatusTone({ ...base, status: "idle" }), "muted");
+    assert.equal(sessionStatusTone({ ...base, status: "ended" }), "muted");
+    assert.equal(sessionStatusTone({ ...base, status: "active", stale: true }), "muted");
+    assert.equal(sessionStatusTone({ ...base, status: "waiting", archived: true }), "muted");
+  });
+});
+
 describe("task buckets", () => {
   it("maps in-flight tasks to active and attention to waiting", () => {
-    assert.equal(taskBucket(task("pending")), "active");
-    assert.equal(taskBucket(task("running")), "active");
-    assert.equal(taskBucket(task("attention")), "waiting");
+    assert.equal(taskBucket(task("pending"), NOW), "active");
+    assert.equal(taskBucket(task("running"), NOW), "active");
+    assert.equal(taskBucket(task("attention"), NOW), "waiting");
   });
 
   it("keeps failed and interrupted tasks live as idle", () => {
-    assert.equal(taskBucket(task("failed")), "idle");
-    assert.equal(taskBucket(task("interrupted")), "idle");
+    assert.equal(taskBucket(task("failed"), NOW), "idle");
+    assert.equal(taskBucket(task("interrupted"), NOW), "idle");
   });
 
   it("keeps a completed worktree waiting for merge live, and ends the rest", () => {
     const ready = task("completed", { isolation: "worktree", worktreePath: "C:/wt" });
     assert.equal(taskReadyToMerge(ready), true);
-    assert.equal(taskBucket(ready), "idle");
-    assert.equal(taskBucket(task("completed", { isolation: "worktree", worktreePath: "C:/wt", mergedAt: 1 })), "ended");
-    assert.equal(taskBucket(task("completed", { isolation: "worktree", worktreePath: null })), "ended");
-    assert.equal(taskBucket(task("completed")), "ended");
-    assert.equal(taskBucket(task("cancelled")), "ended");
+    assert.equal(taskBucket(ready, NOW), "idle");
+    assert.equal(taskBucket(task("completed", { isolation: "worktree", worktreePath: "C:/wt", mergedAt: 1 }), NOW), "ended");
+    assert.equal(taskBucket(task("completed", { isolation: "worktree", worktreePath: null }), NOW), "ended");
+    assert.equal(taskBucket(task("completed"), NOW), "ended");
+    assert.equal(taskBucket(task("cancelled"), NOW), "ended");
   });
 
   it("archives win over every status", () => {
-    assert.equal(taskBucket(task("running", { archivedAt: 5 })), "archived");
+    assert.equal(taskBucket(task("running", { archivedAt: 5 }), NOW), "archived");
   });
 
   it("derives a session-like status for sorting", () => {
-    assert.equal(taskRunStatus(task("running")), "active");
-    assert.equal(taskRunStatus(task("attention")), "waiting");
-    assert.equal(taskRunStatus(task("failed")), "idle");
-    assert.equal(taskRunStatus(task("cancelled")), "ended");
+    assert.equal(taskRunStatus(task("running"), NOW), "active");
+    assert.equal(taskRunStatus(task("attention"), NOW), "waiting");
+    assert.equal(taskRunStatus(task("failed"), NOW), "idle");
+    assert.equal(taskRunStatus(task("cancelled"), NOW), "ended");
   });
 });
 

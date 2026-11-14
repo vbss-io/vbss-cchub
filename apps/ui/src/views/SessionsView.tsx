@@ -266,7 +266,8 @@ export function SessionsView({
     for (const thread of codexSessions) {
       entries.push({ origin: "codex", live: LIVE_BUCKETS.includes(codexBucketOf(thread)), folded: delegatedEnabled && fold.foldedThreads.has(thread.id) });
     }
-    if (delegatedEnabled) for (const task of liveTasks) entries.push({ origin: "delegated", live: LIVE_BUCKETS.includes(taskBucket(task)) });
+    const now = Date.now();
+    if (delegatedEnabled) for (const task of liveTasks) entries.push({ origin: "delegated", live: LIVE_BUCKETS.includes(taskBucket(task, now)) });
     return originCounts(entries);
   }, [sessions, codexSessions, liveTasks, delegatedEnabled, fold, tick]);
 
@@ -322,17 +323,18 @@ export function SessionsView({
       }
     }
     if (showTasks) {
+      const now = Date.now();
       const source = filter === "archived" ? archivedTasks : liveTasks;
       for (const task of source) {
         if (!matchesQuery(`${task.title} ${task.workspace} ${task.repo ?? ""}`)) continue;
-        const bucket = taskBucket(task);
+        const bucket = taskBucket(task, now);
         if (bucket === "hidden") continue;
         const attention = taskNeedsYou(task.status) && taskArchivedAt(task) == null;
         take(bucket, attention, {
           id: task.id,
           kind: "task",
           task,
-          status: taskRunStatus(task),
+          status: taskRunStatus(task, now),
           updatedAt: task.updatedAt,
           name: task.title,
           cwd: task.cwd,

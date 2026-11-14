@@ -6,7 +6,8 @@ import { relativeTime } from "../time";
 import type { SessionRecord } from "../types";
 import type { RetryMode } from "../use-task-detail";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
-import { MoreChip } from "./RunChips";
+import type { ClientLabel } from "../clients";
+import { CtxMeter, RunFoot, RunMeta, RunStatus, RunWhy, type MetaPart } from "./RunChips";
 import { contextLimitFor } from "./SessionCard";
 
 export type { RetryMode };
@@ -89,17 +90,21 @@ export function TaskCard({ task, origin, runSession, selected, archiveSupported,
   const running = inFlight(task.status);
   const archived = taskArchivedAt(task) != null;
   const why = whyOf(task);
-  const runnerLabel = task.runner === "codex" ? "Codex" : "Claude";
-  const runnerFamily = task.runner === "codex" ? "codex" : "claude";
+  const runnerInfo: ClientLabel = task.runner === "codex" ? { label: "Codex runner", family: "codex", icon: <IconCodex /> } : { label: "Claude runner", family: "claude", icon: <IconCode /> };
   const workspaceLabel = `${task.workspace}${task.repo ? ` / ${task.repo}` : ""}`;
   const worktree = worktreeLabel(task);
   const tone = taskStatusTone(task);
   const context = runSession && typeof runSession.contextTokens === "number" ? runSession.contextTokens : null;
   const pct = context !== null && runSession ? Math.min(100, Math.round((context / contextLimitFor(context, runSession.model)) * 100)) : null;
+  const branch = taskBranch(task);
+  const metaParts: MetaPart[] = [
+    { key: "ws", text: task.repo ?? task.workspace, title: `${workspaceLabel}\n${task.cwd}` },
+    ...(worktree ? [{ key: "wt", text: branch ?? "worktree", title: `${worktree}\nWorks in its own git worktree and branch; merge it from the task panel` }] : []),
+  ];
+  const runs = `${task.runsCount} run${task.runsCount === 1 ? "" : "s"}`;
 
   const extras: string[] = [
     origin.label,
-    `${task.runsCount} run${task.runsCount === 1 ? "" : "s"}`,
     ...(task.portBase != null && task.portEnd != null ? [`ports ${task.portBase}–${task.portEnd}`] : []),
     ...(!isolated && peers > 0 ? [`${peers} more here: other live agents work in this folder`] : []),
     ...(runSession ? [`hub session ${runSession.sessionId.slice(0, 8)} · ${runSession.status}`] : []),
@@ -117,7 +122,7 @@ export function TaskCard({ task, origin, runSession, selected, archiveSupported,
 
   return (
     <article
-      className={`card card--task card--tone-${tone} ${selected ? "card--sel" : ""} ${archived ? "card--archived" : ""} ${task.status === "cancelled" ? "card--task-cancelled" : ""} card--clickable`}
+      className={`card card--run card--task card--tone-${tone} ${selected ? "card--sel" : ""} ${archived ? "card--archived" : ""} ${task.status === "cancelled" ? "card--task-cancelled" : ""} card--clickable`}
       onClick={() => onSelect(task.id)}
       aria-busy={busy}
       onContextMenu={(event) => {
@@ -129,42 +134,21 @@ export function TaskCard({ task, origin, runSession, selected, archiveSupported,
         <span className="card__name" title={task.title}>
           {task.title}
         </span>
-        <span className={`tag tag--${tone}`} data-status={task.status}>{taskStatusLabel(task)}</span>
+        <RunStatus tone={tone} label={taskStatusLabel(task)} />
         <CardMenu menu={menu} items={menuItems} label={`Actions for ${task.title}`} />
       </div>
 
-      <div className="card__badges">
-        <span className={`client client--${runnerFamily}`} title={`${runnerLabel} runner`}>
-          {task.runner === "codex" ? <IconCodex /> : <IconCode />}
-          <span>{runnerLabel}</span>
-        </span>
-        <span className="chip chip--ws" title={task.cwd}>
-          {workspaceLabel}
-        </span>
-        {worktree && (
-          <span className={`chip chip--worktree ${taskMergedAt(task) != null ? "chip--worktree-merged" : ""}`} title="Works in its own git worktree and branch; merge it from the task panel">
-            {worktree}
-          </span>
-        )}
-        <MoreChip extras={extras} />
-      </div>
+      <RunMeta client={runnerInfo} parts={metaParts} extras={extras} />
 
-      {why && (
-        <div className={`why why--compact why--${tone}`}>
-          <span className="why__headline">{why.headline}</span>
-          {why.detail && <span className="why__detail">{why.detail}</span>}
-        </div>
-      )}
+      {why && <RunWhy tone={tone} headline={why.headline} detail={why.detail} />}
 
-      <div className="card__line">
-        <span className="card__dur">{durationLabel(task)}</span>
-        {pct !== null && (
-          <span className="card__ctx" title={`hub session context ${context?.toLocaleString("en-US") ?? ""} tokens`}>
-            ctx {pct}%
-          </span>
-        )}
-        <time>{relativeTime(task.updatedAt)}</time>
-      </div>
+      <RunFoot>
+        <span className="rc__dur">
+          {durationLabel(task)} · {runs}
+        </span>
+        {pct !== null && <CtxMeter pct={pct} title={`hub session context ${context?.toLocaleString("en-US") ?? ""} tokens`} />}
+        <time className="rc__time">{relativeTime(task.updatedAt)}</time>
+      </RunFoot>
     </article>
   );
 }

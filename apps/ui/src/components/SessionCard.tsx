@@ -5,7 +5,8 @@ import { relativeTime } from "../time";
 import type { SessionRecord, SessionStatus } from "../types";
 import { shortFolder } from "../wsmatch";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
-import { MoreChip, RunChip } from "./RunChips";
+import { sessionStatusTone } from "../runs-model";
+import { CtxMeter, RunFoot, RunMeta, RunStatus, type MetaPart } from "./RunChips";
 
 const statusLabel: Record<SessionStatus, string> = {
   active: "Active",
@@ -90,11 +91,21 @@ export function SessionCard({
   const context = typeof session.contextTokens === "number" ? session.contextTokens : null;
   const limit = context !== null ? contextLimitFor(context, session.model) : 0;
   const pct = limit > 0 ? Math.min(100, ((context ?? 0) / limit) * 100) : 0;
-  const level = pct < 60 ? "ok" : pct < 85 ? "warn" : "high";
   const agentsRunning = session.agentsRunning ?? 0;
   const agentsTotal = session.agentsTotal ?? 0;
   const clientInfo = sessionClient(session);
   const live = !archived && session.status !== "ended" && !stale;
+  const tone = sessionStatusTone({ status: session.status, unread, stale, archived });
+  const statusText = unread ? "Finished" : stale ? "Inactive" : statusLabel[session.status];
+  const folder = shortFolder(session.cwd);
+  const metaParts: MetaPart[] = [
+    { key: "where", text: workspace ?? folder, title: session.cwd ?? folder },
+    ...(workspace && workspace !== folder ? [{ key: "folder", text: folder, title: session.cwd ?? folder }] : []),
+  ];
+  const ctxTitle =
+    context !== null
+      ? `${model ?? "model unknown"} · context ${context.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")} tokens · ↓${formatTokens(session.tokensIn)} ↑${formatTokens(session.tokensOut)}`
+      : `${model ?? "model unknown"} · context unavailable`;
   const extras = [
     ...(showSource && session.source ? [`from ${session.source}`] : []),
     ...(agentsRunning > 0 ? [`${agentsRunning} subagent${agentsRunning === 1 ? "" : "s"} running · ${agentsTotal} spawned`] : []),
@@ -113,6 +124,54 @@ export function SessionCard({
     ...(archived ? [] : [{ key: "archive", label: "Archive", onSelect: () => onArchive(session.sessionId) }]),
     { key: "favorite", label: favorite ? "Unfavorite" : "Favorite", onSelect: () => onFavorite(session.sessionId, !favorite) },
   ];
+  const actions = (
+    <>
+      {canFocus && (
+        <button
+          className="act rc__act"
+          onClick={(event) => {
+            stop(event);
+            onFocus(session.sessionId);
+          }}
+        >
+          <IconFocus /> Focus
+        </button>
+      )}
+      {archived && !confirming && (
+        <button
+          className="act rc__act"
+          onClick={(event) => {
+            stop(event);
+            setConfirming(true);
+          }}
+        >
+          Delete
+        </button>
+      )}
+      {archived && confirming && (
+        <>
+          <button
+            className="act act--ghost rc__act"
+            onClick={(event) => {
+              stop(event);
+              setConfirming(false);
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            className="act act--danger rc__act"
+            onClick={(event) => {
+              stop(event);
+              onDelete(session.sessionId);
+            }}
+          >
+            Confirm delete
+          </button>
+        </>
+      )}
+    </>
+  );
   const submitRename = (value: string) => {
     setRenaming(false);
     onRename(session.sessionId, value.trim());
@@ -120,7 +179,7 @@ export function SessionCard({
 
   return (
     <article
-      className={`card card--${session.status} ${unread ? "card--unread" : ""} ${archived ? "card--archived" : ""} ${stale ? "card--stale" : ""} ${favorite ? "card--favorite" : ""} card--clickable`}
+      className={`card card--run card--tone-${tone} card--${session.status} ${unread ? "card--unread" : ""} ${archived ? "card--archived" : ""} ${stale ? "card--stale" : ""} ${favorite ? "card--favorite" : ""} card--clickable`}
       onClick={() => onOpen(session.sessionId)}
       onContextMenu={(event) => {
         if (event.target instanceof HTMLInputElement) return;
@@ -152,80 +211,21 @@ export function SessionCard({
             {name}
           </span>
         )}
-        <span className={`card__status ${unread ? "card__status--unread" : ""}`}>{unread ? "Finished" : stale ? "Inactive" : statusLabel[session.status]}</span>
+        <RunStatus tone={tone} label={statusText} />
         <CardMenu menu={menu} items={menuItems} label={`Actions for ${name}`} />
       </div>
 
-      <div className="card__badges">
-        <RunChip info={clientInfo} label={workspace ?? shortFolder(session.cwd)} title={`${clientInfo.label} · ${shortFolder(session.cwd)}`} />
-        <MoreChip extras={extras} />
-      </div>
+      <RunMeta client={clientInfo} clientTitle={`${clientInfo.label} · ${folder}`} parts={metaParts} extras={extras} />
 
-      <div className="card__line">
-        <span
-          className="card__ctx"
-          data-level={level}
-          title={
-            context !== null
-              ? `${model ?? "model unknown"} · context ${context.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")} tokens · ↓${formatTokens(session.tokensIn)} ↑${formatTokens(session.tokensOut)}`
-              : `${model ?? "model unknown"} · context unavailable`
-          }
-        >
-          ctx {context !== null ? `${Math.round(pct)}%` : "—"}
-        </span>
-        <time>{relativeTime(session.updatedAt)}</time>
-      </div>
-
-      <div className="card__actions">
-        <div className="card__open">
-          {canFocus && (
-            <button
-              className="act act--focus"
-              onClick={(event) => {
-                stop(event);
-                onFocus(session.sessionId);
-              }}
-            >
-              <IconFocus /> Focus
-            </button>
-          )}
-        </div>
-        <div className="card__manage">
-          {archived && !confirming && (
-            <button
-              className="act"
-              onClick={(event) => {
-                stop(event);
-                setConfirming(true);
-              }}
-            >
-              Delete
-            </button>
-          )}
-          {archived && confirming && (
-            <>
-              <button
-                className="act act--ghost"
-                onClick={(event) => {
-                  stop(event);
-                  setConfirming(false);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="act act--danger"
-                onClick={(event) => {
-                  stop(event);
-                  onDelete(session.sessionId);
-                }}
-              >
-                Confirm delete
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+      <RunFoot actions={canFocus || archived ? actions : undefined}>
+        {model && (
+          <span className="rc__model" title={ctxTitle}>
+            {model}
+          </span>
+        )}
+        {context !== null && <CtxMeter pct={pct} title={ctxTitle} />}
+        <time className="rc__time">{relativeTime(session.updatedAt)}</time>
+      </RunFoot>
     </article>
   );
 }

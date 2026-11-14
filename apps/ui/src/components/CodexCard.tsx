@@ -6,7 +6,8 @@ import { relativeTime } from "../time";
 import type { CodexSessionRecord } from "../types";
 import { shortFolder } from "../wsmatch";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
-import { MoreChip, RunChip } from "./RunChips";
+import type { TaskTone } from "../runs-model";
+import { RunFoot, RunMeta, RunStatus } from "./RunChips";
 
 const STATUS_LABEL: Record<CodexSessionRecord["status"], string> = {
   active: "Active",
@@ -44,12 +45,65 @@ export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRenam
   const archived = session.archivedAt != null;
   const name = session.customTitle ?? session.title;
   const clientInfo = codexClient(session.client);
+  const tone: TaskTone = !archived && session.status === "active" ? "go" : "muted";
+  const folder = shortFolder(session.cwd);
+  const origin = originLabel(session);
 
   const stop = (event: MouseEvent) => event.stopPropagation();
   const menuItems: CardMenuItem[] = [
     { key: "rename", label: "Rename", onSelect: () => setRenaming(true) },
     archived ? { key: "unarchive", label: "Unarchive", onSelect: () => onUnarchive(session.id) } : { key: "archive", label: "Archive", onSelect: () => onArchive(session.id) },
   ];
+  const actions = (
+    <>
+      {codexAppRunning && (
+        <button
+          className="act rc__act"
+          title="Brings the Codex app window to the front; a single thread cannot be targeted"
+          onClick={(event) => {
+            stop(event);
+            void focusCodexApp();
+          }}
+        >
+          <IconFocus /> Focus app
+        </button>
+      )}
+      {archived && !confirming && (
+        <button
+          className="act rc__act"
+          title="Hides the thread from the hub; the rollout file on disk is untouched"
+          onClick={(event) => {
+            stop(event);
+            setConfirming(true);
+          }}
+        >
+          Delete
+        </button>
+      )}
+      {archived && confirming && (
+        <>
+          <button
+            className="act act--ghost rc__act"
+            onClick={(event) => {
+              stop(event);
+              setConfirming(false);
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            className="act act--danger rc__act"
+            onClick={(event) => {
+              stop(event);
+              onDelete(session.id);
+            }}
+          >
+            Confirm delete
+          </button>
+        </>
+      )}
+    </>
+  );
   const submitRename = (value: string) => {
     setRenaming(false);
     onRename(session.id, value.trim());
@@ -57,7 +111,7 @@ export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRenam
 
   return (
     <article
-      className={`card card--codex card--codex-${session.status} ${archived ? "card--archived" : ""} card--clickable`}
+      className={`card card--run card--tone-${tone} card--codex card--codex-${session.status} ${archived ? "card--archived" : ""} card--clickable`}
       onClick={() => onOpen(session.id)}
       onContextMenu={(event) => {
         if (event.target instanceof HTMLInputElement) return;
@@ -84,72 +138,21 @@ export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRenam
             {name}
           </span>
         )}
-        <span className="card__status">{STATUS_LABEL[session.status]}</span>
+        <RunStatus tone={tone} label={STATUS_LABEL[session.status]} />
         <CardMenu menu={menu} items={menuItems} label={`Actions for ${name}`} />
       </div>
-      <div className="card__badges">
-        <RunChip info={clientInfo} label={workspace ?? shortFolder(session.cwd)} title={`${clientInfo.label} · ${shortFolder(session.cwd)}`} />
-        <MoreChip extras={originLabel(session) ? [originLabel(session)] : []} />
-      </div>
-      <div className="card__line">
-        <span className="card__model">
+
+      <RunMeta client={clientInfo} clientTitle={`${clientInfo.label} · ${folder}`} parts={[
+          { key: "where", text: workspace ?? folder, title: session.cwd ?? folder },
+          ...(workspace && workspace !== folder ? [{ key: "folder", text: folder, title: session.cwd ?? folder }] : []),
+        ]} extras={origin ? [origin] : []} />
+
+      <RunFoot actions={codexAppRunning || archived ? actions : undefined}>
+        <span className="rc__model">
           {session.turns} turn{session.turns === 1 ? "" : "s"}
         </span>
-        <time>{relativeTime(session.updatedAt)}</time>
-      </div>
-
-      <div className="card__actions">
-        <div className="card__open">
-          {codexAppRunning && (
-            <button
-              className="act act--focus"
-              title="Brings the Codex app window to the front; a single thread cannot be targeted"
-              onClick={(event) => {
-                stop(event);
-                void focusCodexApp();
-              }}
-            >
-              <IconFocus /> Focus app
-            </button>
-          )}
-        </div>
-        <div className="card__manage">
-          {archived && !confirming && (
-            <button
-              className="act"
-              title="Hides the thread from the hub; the rollout file on disk is untouched"
-              onClick={(event) => {
-                stop(event);
-                setConfirming(true);
-              }}
-            >
-              Delete
-            </button>
-          )}
-          {archived && confirming && (
-            <>
-              <button
-                className="act act--ghost"
-                onClick={(event) => {
-                  stop(event);
-                  setConfirming(false);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="act act--danger"
-                onClick={(event) => {
-                  stop(event);
-                  onDelete(session.id);
-                }}
-              >
-                Confirm delete
-              </button>
-            </>
-          )}
-        </div>
-      </div>
+        <time className="rc__time">{relativeTime(session.updatedAt)}</time>
+      </RunFoot>
     </article>
   );
 }
