@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { BOARD_STATUSES, BOARD_STATUS_LABEL, newTaskBody, projectBreadcrumb, projectOptions, supportsReason, validateNewTask } from "../board-model";
 import type { BoardCreateInput, BoardProject, BoardStatus, BoardTask } from "../delegation";
 import { BoardDateInput, BoardPrioritySelect } from "./BoardParts";
+import "../board-drawer.css";
 
 interface Props {
   projects: BoardProject[];
@@ -22,11 +23,30 @@ export function BoardNewTaskDialog({ projects, defaultProjectId, parent, levels,
   const [dueInvalid, setDueInvalid] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const options = projectOptions(projects);
+  const chosen = options.find((option) => option.id === projectId) ?? null;
+  const [projectInMain] = useState(() => parent === null && !projectOptions(projects).some((option) => option.id === defaultProjectId));
   const draft = { projectId, title, status, reason, priority, due };
   const problem = validateNewTask(draft);
   const blocked = problem ?? (dueInvalid ? "Fix the due date first" : null);
-  const onDueInvalid = useCallback((invalid: boolean) => setDueInvalid(invalid), []);
+  const onDueInvalid = useCallback((invalid: boolean) => {
+    setDueInvalid(invalid);
+    if (invalid) setMoreOpen(true);
+  }, []);
+  const projectField = (
+    <label className="field">
+      <span>Project</span>
+      <select className="in" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+        <option value="">Select a project</option>
+        {options.map((option) => (
+          <option key={option.id} value={option.id}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
   const heading = parent ? "Add subtask" : "New task";
 
   useEffect(() => {
@@ -57,23 +77,12 @@ export function BoardNewTaskDialog({ projects, defaultProjectId, parent, levels,
           <h2>{heading}</h2>
         </header>
         <div className="modal__body">
-          {parent ? (
+          {parent && (
             <p className="hint board-dialog__task">
               Under "{parent.title}" in {projectBreadcrumb(projects, parent.projectId).join(" › ")}
             </p>
-          ) : (
-            <label className="field">
-              <span>Project</span>
-              <select className="in" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-                <option value="">Select a project</option>
-                {options.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
           )}
+          {projectInMain && projectField}
           <label className="field">
             <span>Title</span>
             <input
@@ -86,37 +95,46 @@ export function BoardNewTaskDialog({ projects, defaultProjectId, parent, levels,
               }}
             />
           </label>
-          <label className="field">
-            <span>Status</span>
-            <select className="in" value={status} onChange={(event) => setStatus(event.target.value as BoardStatus)}>
-              {BOARD_STATUSES.map((item) => (
-                <option key={item} value={item}>
-                  {BOARD_STATUS_LABEL[item]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Priority</span>
-            <BoardPrioritySelect value={priority} levels={levels} label="Priority" onChange={setPriority} />
-          </label>
-          <label className="field">
-            <span>Due (optional)</span>
-            <BoardDateInput ariaLabel="Due date" className="in" value={due === "" ? null : due} onCommit={(value) => setDue(value ?? "")} onInvalidChange={onDueInvalid} />
-          </label>
-          {supportsReason(status) && (
-            <label className="field">
-              <span>Reason (optional)</span>
-              <input
-                className="in"
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void submit();
-                }}
-              />
-            </label>
-          )}
+          {!parent && !projectInMain && chosen !== null && <p className="hint">In {chosen.label}</p>}
+          <details className="more-options" open={moreOpen} onToggle={(event) => setMoreOpen(event.currentTarget.open)}>
+            <summary className="more-options__summary">More options</summary>
+            <div className="more-options__body">
+              {!parent && !projectInMain && projectField}
+              <div className="frow frow--fields">
+                <label className="field">
+                  <span>Status</span>
+                  <select className="in" value={status} onChange={(event) => setStatus(event.target.value as BoardStatus)}>
+                    {BOARD_STATUSES.map((item) => (
+                      <option key={item} value={item}>
+                        {BOARD_STATUS_LABEL[item]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Priority</span>
+                  <BoardPrioritySelect value={priority} levels={levels} label="Priority" onChange={setPriority} />
+                </label>
+              </div>
+              <label className="field">
+                <span>Due (optional)</span>
+                <BoardDateInput ariaLabel="Due date" className="in" value={due === "" ? null : due} onCommit={(value) => setDue(value ?? "")} onInvalidChange={onDueInvalid} />
+              </label>
+              {supportsReason(status) && (
+                <label className="field">
+                  <span>Reason (optional)</span>
+                  <input
+                    className="in"
+                    value={reason}
+                    onChange={(event) => setReason(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void submit();
+                    }}
+                  />
+                </label>
+              )}
+            </div>
+          </details>
           {error && <span className="error small">{error}</span>}
         </div>
         <footer className="modal__footer">

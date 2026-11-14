@@ -40,6 +40,7 @@ const FIXTURE_FILES = [
   "projects/alex-personal.md",
   "projects/globex/globex.md",
   "projects/initech.md",
+  "signifier-order.md",
 ];
 const PROJECT_FILES = ["acme/acme", "alex-personal", "globex/globex", "initech"];
 const DAILY_DATES = ["2026-11-10", "2026-11-11", "2026-11-12"];
@@ -376,6 +377,119 @@ describe("golden vault: a status write changes only the expected line", () => {
       for (const rel of others) assert.equal(digestOf(root)[rel], goldenDigest[rel], rel);
     });
   }
+});
+
+describe("golden vault: signifier order on done lines", () => {
+  const ORDER_FIXTURE = "signifier-order.md";
+  const ORDER_PROJECT = "signifier-order";
+  const lineOf = (rel: string, needle: string): string => {
+    const found = readFileSync(join(GOLDEN, rel), "utf8").split("\n").find((line) => line.includes(needle));
+    assert.ok(found, needle);
+    return found;
+  };
+  const orderVault = (): string => {
+    const root = freshVault();
+    cpSync(join(GOLDEN, ORDER_FIXTURE), pathOf(root, ORDER_PROJECT));
+    return root;
+  };
+  type Shape = [string, BoardTask["section"], string | null, string | null, string | null, string | null, string | null, number | null];
+  const shapeOf = (task: BoardTask): Shape => [task.title, task.section, task.doneAt, task.start, task.scheduled, task.due, task.repeat, task.priority];
+
+  it("keeps every signifier and the done stamp out of the title whatever their order", () => {
+    const root = orderVault();
+    const payload = board.readBoard(settingsFor(root));
+    assert.deepEqual(payload.errors, []);
+    const tasks = flatten(payload.tasks).filter((task) => task.projectId === ORDER_PROJECT);
+    assert.deepEqual(tasks.map(shapeOf), [
+      ["Infra: Drop the legacy cache", "open", "2026-11-12", null, "2026-11-12", null, null, null],
+      ["Infra: Rotate the staging keys", "open", "2026-11-12", null, "2026-11-13", null, null, null],
+      ["Billing: Close the quarter", "open", "2026-11-11", null, null, "2026-11-14", null, null],
+      ["Weekly digest", "open", "2026-11-09", null, "2026-11-09", null, "every week", null],
+      ["Ship ✅ the checklist ⏳ later", "open", "2026-11-10", null, "2026-11-10", null, null, null],
+      ["Audit the vendors", "open", "2026-11-04", "2026-11-01", "2026-11-02", "2026-11-03", null, 1],
+      ["Plan the offsite", "open", null, null, "2026-11-20", null, null, null],
+      ["Docs: Archive the old guide", "done", "2026-11-06", null, "2026-11-05", null, null, null],
+      ["Infra: Retire the old runner", "done", "2026-11-07", null, "2026-11-07", null, null, null],
+    ]);
+  });
+
+  it("anchors each parsed task to the exact bytes of its line", () => {
+    const root = orderVault();
+    const content = readFileSync(pathOf(root, ORDER_PROJECT), "utf8");
+    const lines = content.split("\n");
+    for (const task of flatten(board.readBoard(settingsFor(root)).tasks).filter((entry) => entry.projectId === ORDER_PROJECT)) {
+      assert.equal(task.raw, lines[task.line], task.title);
+    }
+    assert.equal(lineOf(ORDER_FIXTURE, "Drop the legacy cache"), "- [x] Infra: Drop the legacy cache ⏳ 2026-11-12 ✅ 2026-11-12");
+  });
+
+  it("renders the document back to the same bytes", () => {
+    const content = readFileSync(join(GOLDEN, ORDER_FIXTURE), "utf8");
+    assert.equal(board.renderDoc(board.openDoc(content)), content);
+  });
+
+
+  it("writes a done task in the done section its own status without touching a byte when the line is already in write order", () => {
+    const root = orderVault();
+    const before = readFileSync(pathOf(root, ORDER_PROJECT));
+    const task = taskNamed(root, ORDER_PROJECT, "Docs: Archive the old guide");
+    const result = board.writeBoardTask(settingsFor(root), { projectId: ORDER_PROJECT, line: task.line, raw: task.raw, status: "done" });
+    assert.equal(result.task.raw, task.raw);
+    assert.equal(readFileSync(pathOf(root, ORDER_PROJECT)).equals(before), true);
+  });
+
+  it("puts a done stamp that came before the scheduled date back in write order only on the line it rewrites", () => {
+    const root = orderVault();
+    const original = readFileSync(pathOf(root, ORDER_PROJECT), "utf8");
+    const task = taskNamed(root, ORDER_PROJECT, "Infra: Retire the old runner");
+    const result = board.writeBoardTask(settingsFor(root), { projectId: ORDER_PROJECT, line: task.line, raw: task.raw, status: "done" });
+    const expected = "- [x] Infra: Retire the old runner ⏳ 2026-11-07 ✅ 2026-11-07";
+    assert.equal(result.task.raw, expected);
+    assert.equal(result.task.title, "Infra: Retire the old runner");
+    assert.equal(result.task.doneAt, "2026-11-07");
+    assert.equal(result.task.scheduled, "2026-11-07");
+    assert.deepEqual(changedLines(original, readFileSync(pathOf(root, ORDER_PROJECT), "utf8")), [task.line]);
+  });
+
+  const started: [string, string][] = [
+    ["Infra: Drop the legacy cache", "- [-] Infra: Drop the legacy cache ⏳ 2026-11-12 ✅ 2026-11-12"],
+    ["Weekly digest", "- [-] Weekly digest 🔁 every week ⏳ 2026-11-09 ✅ 2026-11-09"],
+    ["Ship ✅ the checklist ⏳ later", "- [-] Ship ✅ the checklist ⏳ later ⏳ 2026-11-10 ✅ 2026-11-10"],
+    ["Audit the vendors", "- [-] Audit the vendors #p1 🛫 2026-11-01 ⏳ 2026-11-02 📅 2026-11-03 ✅ 2026-11-04"],
+    ["Infra: Rotate the staging keys", "- [-] Infra: Rotate the staging keys ⏳ 2026-11-13 ✅ 2026-11-12"],
+    ["Billing: Close the quarter", "- [-] Billing: Close the quarter 📅 2026-11-14 ✅ 2026-11-11"],
+  ];
+
+  for (const [title, expected] of started) {
+    it(`a status write on "${title}" changes only that line and keeps every date and the stamp`, () => {
+      const root = orderVault();
+      const original = readFileSync(pathOf(root, ORDER_PROJECT), "utf8");
+      const task = taskNamed(root, ORDER_PROJECT, title);
+      const result = board.writeBoardTask(settingsFor(root), { projectId: ORDER_PROJECT, line: task.line, raw: task.raw, status: "doing" });
+      const written = readFileSync(pathOf(root, ORDER_PROJECT), "utf8");
+      assert.deepEqual(changedLines(original, written), [task.line]);
+      assert.equal(withEol(written)[task.line], `${expected}\n`);
+      assert.equal(result.task.raw, expected);
+      assert.equal(result.task.scheduled, task.scheduled);
+      assert.equal(result.task.due, task.due);
+      assert.equal(result.task.start, task.start);
+      assert.equal(result.task.repeat, task.repeat);
+      assert.equal(result.task.priority, task.priority);
+    });
+  }
+
+  it("moves a finished open line to the done section keeping its own stamp instead of stamping twice", () => {
+    const root = orderVault();
+    const task = taskNamed(root, ORDER_PROJECT, "Infra: Drop the legacy cache");
+    const result = board.writeBoardTask(settingsFor(root), { projectId: ORDER_PROJECT, line: task.line, raw: task.raw, status: "done" });
+    assert.equal(result.moved, true);
+    const written = readFileSync(pathOf(root, ORDER_PROJECT), "utf8");
+    assert.equal(sectionFrom(written, "Done loops").includes(`${task.raw}\n`), true);
+    assert.equal(written.split(task.raw).length - 1, 1);
+    assert.equal(written.match(/Drop the legacy cache/g)?.length, 1);
+    assert.equal(result.task.title, "Infra: Drop the legacy cache");
+    assert.equal(result.task.doneAt, "2026-11-12");
+  });
 });
 
 describe("golden vault: finishing a task moves only its block", () => {

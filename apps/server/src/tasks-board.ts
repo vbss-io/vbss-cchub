@@ -886,11 +886,11 @@ export function parseBoardTasks(markdown: string, projectId: string, config: Tas
     const rest = match ? (match[3] as string).trim() : "";
     if (match && rest !== "") {
       const signified = splitSignifiers(rest, config);
-      const stamped = current === "done" || signified.repeat !== null ? splitStamp(signified.text, config) : { text: signified.text, doneAt: null, tail: "" };
+      const checkbox = checkboxOf(match[2] as string);
+      const stamped = current === "done" || checkbox === "done" || signified.repeat !== null ? splitStamp(signified.text, config) : { text: signified.text, doneAt: null, tail: "" };
       const prioritized = splitPriority(stamped.text, config);
       const body = prioritized.text.trim();
       const prefix = matchPrefix(body, config);
-      const checkbox = checkboxOf(match[2] as string);
       const status: BoardStatus = prefix?.status ?? checkbox;
       const split = splitReason((prefix ? prefix.title : body).trim(), status, config.reasonSeparator);
       const task: BoardTask = {

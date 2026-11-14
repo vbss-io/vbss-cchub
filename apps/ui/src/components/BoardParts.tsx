@@ -18,6 +18,7 @@ import {
   supportsReason,
   taskDates,
   todayStatusBadge,
+  type BoardProjectOption,
   type MoveAvailability,
   type MoveDirection,
 } from "../board-model";
@@ -752,5 +753,66 @@ export function BoardSubtasks({ tasks, ...shared }: SubtasksProps) {
         <SubtaskRow key={task.id} task={task} {...shared} />
       ))}
     </ul>
+  );
+}
+
+interface BulkBarProps {
+  count: number;
+  busy: boolean;
+  levels?: number | null;
+  projects: BoardProjectOption[];
+  onStatus: (status: BoardStatus) => void;
+  onPriority: (priority: number | null) => void;
+  onMove: (projectId: string) => void;
+  onArchive: () => void;
+  onClear: () => void;
+}
+
+const BULK_STATUSES = BOARD_STATUSES.filter((status) => status !== "archived");
+
+export function BoardBulkBar({ count, busy, levels, projects, onStatus, onPriority, onMove, onArchive, onClear }: BulkBarProps) {
+  return (
+    <div className="board-bulk" role="toolbar" aria-label="Bulk actions">
+      <span className="board-bulk__count" aria-live="polite">
+        {count} selected
+      </span>
+      <select className="select" aria-label="Set status" disabled={busy} value="" onChange={(event) => onStatus(event.target.value as BoardStatus)}>
+        <option value="">Set status…</option>
+        {BULK_STATUSES.map((status) => (
+          <option key={status} value={status}>
+            {BOARD_STATUS_LABEL[status]}
+          </option>
+        ))}
+      </select>
+      <select
+        className="select"
+        aria-label="Set priority"
+        disabled={busy}
+        value=""
+        onChange={(event) => onPriority(event.target.value === "none" ? null : Number(event.target.value))}
+      >
+        <option value="">Set priority…</option>
+        {priorityLevelList(levels).map((level) => (
+          <option key={level} value={level}>
+            {priorityLabel(level)}
+          </option>
+        ))}
+        <option value="none">No priority</option>
+      </select>
+      <select className="select board-bulk__project" aria-label="Move to project" disabled={busy} value="" onChange={(event) => onMove(event.target.value)}>
+        <option value="">Move to project…</option>
+        {projects.map((project) => (
+          <option key={project.id} value={project.id}>
+            {project.label}
+          </option>
+        ))}
+      </select>
+      <button className="act act--danger" disabled={busy} onClick={onArchive}>
+        Archive
+      </button>
+      <button className="act act--ghost" disabled={busy} onClick={onClear}>
+        Clear
+      </button>
+    </div>
   );
 }

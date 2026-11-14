@@ -41,6 +41,10 @@ import {
   parseDismissedOutOfSync,
   taskOfOutOfSync,
   visibleOutOfSync,
+  focusFact,
+  recentlyDoneTasks,
+  siblingsAfter,
+  stepsBelowAnchor,
 } from "./today-model";
 
 const TODAY = "2026-11-12";
@@ -457,5 +461,103 @@ describe("start the day: compose", () => {
     assert.equal(startPanelAuto("2026-11-12", "2026-11-13", false), false);
     assert.equal(startPanelAuto("2026-11-13", "2026-11-13", true), false);
     assert.equal(planDraftKey("2026-11-13"), "hub.daily.plan.2026-11-13");
+  });
+});
+
+describe("recentlyDoneTasks", () => {
+  const projects = [project("acme", "Acme"), project("bravo", "Bravo")];
+  const done = (id: string, projectId: string, line: number, doneAt: string | null, patch: Partial<BoardTask> = {}): BoardTask =>
+    task(id, projectId, line, { status: "done", checkbox: "done", section: "done", doneAt, ...patch });
+
+  it("lists done tasks stamped within the last 7 days, newest first, and drops older and undated ones", () => {
+    const tasks = [
+      done("old", "acme", 10, "2026-11-04"),
+      done("edge", "acme", 11, "2026-11-05"),
+      done("yesterday", "bravo", 12, "2026-11-11"),
+      done("undated", "acme", 13, null),
+      done("today", "acme", 14, "2026-11-12"),
+      task("open", "acme", 1),
+    ];
+    assert.deepEqual(
+      recentlyDoneTasks(tasks, projects, "", TODAY).items.map((item) => item.task.id),
+      ["today", "yesterday", "edge"],
+    );
+  });
+
+  it("includes a done task that still sits in the open section and done subtasks", () => {
+    const tasks = [task("parent", "acme", 1, {}, [done("child", "acme", 2, "2026-11-10", { section: "open" })]), done("stale", "acme", 3, "2026-10-01", { section: "open" }), done("kept", "bravo", 4, "2026-11-09", { section: "open" })];
+    assert.deepEqual(
+      recentlyDoneTasks(tasks, projects, "", TODAY).items.map((item) => item.task.id),
+      ["child", "kept"],
+    );
+  });
+
+  it("filters by title and project words, reports the project title and honours the limit", () => {
+    const tasks = [done("pay-invoice", "acme", 1, "2026-11-11"), done("pay-rent", "bravo", 2, "2026-11-11"), done("ship", "bravo", 3, "2026-11-10")];
+    assert.deepEqual(
+      recentlyDoneTasks(tasks, projects, "pay bravo", TODAY).items.map((item) => [item.task.id, item.projectTitle]),
+      [["pay-rent", "Bravo"]],
+    );
+    assert.deepEqual(recentlyDoneTasks(tasks, projects, "nothing here", TODAY), { items: [], total: 0 });
+    assert.deepEqual(recentlyDoneTasks(tasks, projects, "", TODAY, 2).total, 3);
+    assert.equal(recentlyDoneTasks(tasks, projects, "", TODAY, 2).items.length, 2);
+  });
+
+  it("uses the date at the start of the month window across a month boundary", () => {
+    const tasks = [done("a", "acme", 1, "2026-10-29"), done("b", "acme", 2, "2026-10-28")];
+    assert.deepEqual(
+      recentlyDoneTasks(tasks, projects, "", "2026-11-05").items.map((item) => item.task.id),
+      ["a"],
+    );
+  });
+});
+
+describe("focusFact", () => {
+  it("says the task is in today's focus when scheduled for today", () => {
+    assert.equal(focusFact("2026-11-12", TODAY), "In today's focus");
+  });
+
+  it("names another scheduled date", () => {
+    assert.equal(focusFact("2026-11-17", TODAY), "Scheduled 2026-11-17");
+  });
+
+  it("says nothing without a scheduled date", () => {
+    assert.equal(focusFact(null, TODAY), null);
+    assert.equal(focusFact(undefined, TODAY), null);
+    assert.equal(focusFact("", TODAY), null);
+  });
+});
+
+describe("stepsBelowAnchor", () => {
+  it("counts the tasks after the anchor in the same section of a top-level list", () => {
+    const tasks = [task("a", "acme", 5), task("b", "acme", 6), task("c", "acme", 7), task("other", "bravo", 20), task("finished", "acme", 30, { section: "done" })];
+    assert.equal(siblingsAfter(tasks, "a"), 2);
+    assert.equal(siblingsAfter(tasks, "b"), 1);
+    assert.equal(siblingsAfter(tasks, "c"), 0);
+    assert.equal(stepsBelowAnchor(tasks, "a", { group: null }), 2);
+    assert.equal(stepsBelowAnchor(tasks, "c", { group: null }), 0);
+  });
+
+  it("stays inside the anchor's group and gives up when the new task landed in another group", () => {
+    const tasks = [task("a", "acme", 5, { group: "Now" }), task("b", "acme", 6, { group: "Now" }), task("c", "acme", 9, { group: "Later" })];
+    assert.equal(siblingsAfter(tasks, "a"), 1);
+    assert.equal(stepsBelowAnchor(tasks, "a", { group: "Now" }), 1);
+    assert.equal(stepsBelowAnchor(tasks, "a", { group: "Later" }), 0);
+  });
+
+  it("counts subtasks and notes that follow the anchor under the same parent", () => {
+    const first = task("first", "acme", 2);
+    const second = task("second", "acme", 3);
+    const parent = task("parent", "acme", 1, { noteItems: [{ line: 4, raw: "  - note", text: "note" }] }, [first, second]);
+    const tasks = [parent, task("next", "acme", 8)];
+    assert.equal(siblingsAfter(tasks, "first"), 2);
+    assert.equal(siblingsAfter(tasks, "second"), 1);
+    assert.equal(stepsBelowAnchor(tasks, "first", { group: "ignored" }), 2);
+    assert.equal(siblingsAfter(tasks, "parent"), 1);
+  });
+
+  it("is zero for an unknown anchor", () => {
+    assert.equal(siblingsAfter([task("a", "acme", 1)], "missing"), 0);
+    assert.equal(stepsBelowAnchor([task("a", "acme", 1)], "missing", { group: null }), 0);
   });
 });

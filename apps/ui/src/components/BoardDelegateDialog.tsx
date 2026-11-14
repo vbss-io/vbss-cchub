@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { delegatePromptFor } from "../board-model";
 import type { BoardProject, BoardTask, Runner, WorkspaceRecord } from "../delegation";
+import "../board-drawer.css";
 
 export interface BoardDelegateRequest {
   workspace: string;
@@ -62,58 +63,70 @@ export function BoardDelegateDialog({ task, project, template, workspaces, notic
 
   return (
     <div className="modal__overlay" onClick={() => !busy && onCancel()}>
-      <div className="modal modal--wide" role="dialog" aria-modal="true" aria-label="Delegate task" onClick={(event) => event.stopPropagation()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Delegate task" onClick={(event) => event.stopPropagation()}>
         <header className="modal__header">
           <h2>Delegate task</h2>
         </header>
         <div className="modal__body">
           <p className="hint board-dialog__task">{task.title}</p>
-          <div className="frow frow--fields frow--top">
-            <label className="field">
-              <span>Workspace</span>
-              <select
-                className="in"
-                value={workspace}
-                onChange={(event) => {
-                  setWorkspace(event.target.value);
-                  setRepo("");
-                }}
-              >
-                <option value="">Select a workspace</option>
-                {workspaces.map((item) => (
-                  <option key={item.name} value={item.name}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-              {project.workspace && !unknownWorkspace && (
-                <small>From the project notes{project.workspaceSource === "inherited" ? " (inherited from a parent project)" : ""}.</small>
-              )}
-              {unknownWorkspace && <small>The project names workspace "{project.workspace}", which is not registered in the hub.</small>}
-            </label>
-            <label className="field">
-              <span>Repository (optional)</span>
-              <select className="in" value={repo} onChange={(event) => setRepo(event.target.value)} disabled={!selected}>
-                <option value="">whole workspace</option>
-                {(selected?.repos ?? []).map((item) => (
-                  <option key={item.name} value={item.name}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Runner</span>
-              <select className="in" value={runner} onChange={(event) => setRunner(event.target.value as Runner)}>
-                <option value="claude">Claude</option>
-                <option value="codex">Codex</option>
-              </select>
-            </label>
-          </div>
           <label className="field">
-            <span>Prompt</span>
-            <textarea className="in area board-dialog__prompt" rows={12} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+            <span>Workspace</span>
+            <select
+              className="in"
+              autoFocus
+              value={workspace}
+              onChange={(event) => {
+                setWorkspace(event.target.value);
+                setRepo("");
+              }}
+            >
+              <option value="">Select a workspace</option>
+              {workspaces.map((item) => (
+                <option key={item.name} value={item.name}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            {project.workspace && !unknownWorkspace && (
+              <small>From the project notes{project.workspaceSource === "inherited" ? " (inherited from a parent project)" : ""}.</small>
+            )}
+            {unknownWorkspace && <small>The project names workspace "{project.workspace}", which is not registered in the hub.</small>}
           </label>
+          <p className="hint">{prompt === rendered ? "Runs the default prompt for this task." : "Runs your edited prompt."}</p>
+          <details className="more-options">
+            <summary className="more-options__summary">More options</summary>
+            <div className="more-options__body">
+              <div className="frow frow--fields frow--top">
+                <label className="field">
+                  <span>Repository (optional)</span>
+                  <select className="in" value={repo} onChange={(event) => setRepo(event.target.value)} disabled={!selected}>
+                    <option value="">whole workspace</option>
+                    {(selected?.repos ?? []).map((item) => (
+                      <option key={item.name} value={item.name}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Runner</span>
+                  <select className="in" value={runner} onChange={(event) => setRunner(event.target.value as Runner)}>
+                    <option value="claude">Claude</option>
+                    <option value="codex">Codex</option>
+                  </select>
+                </label>
+              </div>
+              <label className="field">
+                <span>Prompt</span>
+                <textarea className="in area board-dialog__prompt" rows={10} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
+              </label>
+              <div className="frow">
+                <button className="act act--ghost" disabled={prompt === rendered || busy} onClick={() => setPrompt(rendered)}>
+                  Reset prompt
+                </button>
+              </div>
+            </div>
+          </details>
           {notice && (
             <p className="hint board-dialog__notice" role="status">
               {notice}
@@ -122,9 +135,6 @@ export function BoardDelegateDialog({ task, project, template, workspaces, notic
           {error && <span className="error small">{error}</span>}
         </div>
         <footer className="modal__footer">
-          <button className="act act--ghost" disabled={prompt === rendered || busy} onClick={() => setPrompt(rendered)}>
-            Reset prompt
-          </button>
           <span className="spacer" />
           <button className="act act--ghost" disabled={busy} onClick={onCancel}>
             Cancel

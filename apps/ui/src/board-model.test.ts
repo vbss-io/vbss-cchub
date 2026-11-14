@@ -3,6 +3,11 @@ import { test } from "node:test";
 import {
   activeStatuses,
   BOARD_STATUS_LABEL,
+  canShowFewerDone,
+  CARD_META_LIMIT,
+  cardMeta,
+  filterChips,
+  removeFilterChip,
   comparePriority,
   DEFAULT_PRIORITY_LEVELS,
   nextTableSort,
@@ -370,6 +375,7 @@ test("parseBoardPrefs keeps valid fields and discards invalid ones", () => {
   assert.deepEqual(parseBoardPrefs(stored), {
     view: "table",
     hideEmptyColumns: true,
+    hideDone: false,
     tableSort: { key: "priority", dir: "asc" },
     timelineZoom: "month",
     filters: { projectId: "acme", includeSubprojects: false, statuses: ["todo", "archived"], search: "abc", todayOnly: true, hiddenPriorities: [] },
@@ -490,13 +496,23 @@ test("capDoneSection keeps every open-section task and the newest done-section t
   assert.equal(all.hidden, 0);
 });
 
-test("doneColumnView orders then caps, defaulting the page size to 20", () => {
-  assert.equal(DONE_SECTION_PAGE, 20);
+test("doneColumnView orders then slices to the newest, defaulting the page size to 10", () => {
+  assert.equal(DONE_SECTION_PAGE, 10);
   const many = Array.from({ length: 25 }, (_, index) => doneTask(index + 1, "t" + (index + 1), "done", "2026-10-" + String((index % 28) + 1).padStart(2, "0")));
   const view = doneColumnView([doneTask(99, "open", "open", null), ...many], DONE_SECTION_PAGE);
-  assert.equal(view.tasks.length, 21);
+  assert.equal(view.tasks.length, 10);
   assert.equal(view.tasks[0]?.title, "open");
-  assert.equal(view.hidden, 5);
+  assert.equal(view.tasks[1]?.title, "t25");
+  assert.equal(view.hidden, 16);
+  const all = doneColumnView(many, 40);
+  assert.equal(all.tasks.length, 25);
+  assert.equal(all.hidden, 0);
+  assert.deepEqual(doneColumnView(many, 0), { tasks: [], hidden: 25 });
+});
+
+test("canShowFewerDone is true only after the page was extended", () => {
+  assert.equal(canShowFewerDone(DONE_SECTION_PAGE), false);
+  assert.equal(canShowFewerDone(DONE_SECTION_PAGE * 2), true);
 });
 
 test("todayIdSet is null without a today block and a set of task ids with one", () => {
@@ -1436,4 +1452,63 @@ test("validateNewTask checks the optional due date and newTaskBody sends it", ()
   assert.equal(validateNewTask({ ...base, due: "2026-02-30" }), "The due date must be a valid date");
   assert.deepEqual(newTaskBody({ ...base, due: "2026-10-31" }, null), { projectId: "acme", title: "a", status: "todo", due: "2026-10-31" });
   assert.deepEqual(newTaskBody({ ...base, due: "" }, null), { projectId: "acme", title: "a", status: "todo" });
+});
+
+const chipContext = { availability: "ready" as const, levels: [0, 1, 2, 3, null], projectSelected: false };
+
+test("filterChips is empty at the defaults and names each active popover filter", () => {
+  assert.deepEqual(filterChips(prefs(), chipContext), []);
+  const chips = filterChips(
+    prefs({ hideDone: true, hideEmptyColumns: false }, { statuses: ["todo", "doing"], hiddenPriorities: [3, null], todayOnly: true, includeSubprojects: false }),
+    { ...chipContext, projectSelected: true },
+  );
+  assert.deepEqual(chips, [
+    { id: "status", label: "Status: To-Do, Doing" },
+    { id: "priority", label: "Priority: 3 of 5" },
+    { id: "today", label: "In today's daily" },
+    { id: "subprojects", label: "Without subprojects" },
+    { id: "hideDone", label: "Done hidden" },
+    { id: "showEmpty", label: "Empty columns shown" },
+  ]);
+});
+
+test("filterChips ignores the today filter without a daily, subprojects without a project and kanban-only options elsewhere", () => {
+  assert.deepEqual(filterChips(prefs({}, { todayOnly: true }), { ...chipContext, availability: "off" }), []);
+  assert.deepEqual(filterChips(prefs({}, { includeSubprojects: false }), chipContext), []);
+  assert.deepEqual(filterChips(prefs({ view: "table", hideDone: true, hideEmptyColumns: false }), chipContext), []);
+  assert.equal(filterChips(prefs({}, { todayOnly: true }), { ...chipContext, availability: "missing" }).length, 1);
+});
+
+test("removeFilterChip resets only the filter the chip stands for", () => {
+  const start = prefs({ hideDone: true, hideEmptyColumns: false }, { statuses: ["todo"], hiddenPriorities: [1], todayOnly: true, includeSubprojects: false, search: "keep", projectId: "acme" });
+  const withoutStatus = removeFilterChip(start, "status");
+  assert.deepEqual(withoutStatus.filters.statuses, ["blocked", "hold", "todo", "doing", "done"]);
+  assert.deepEqual(withoutStatus.filters.hiddenPriorities, [1]);
+  assert.deepEqual(removeFilterChip(start, "priority").filters.hiddenPriorities, []);
+  assert.equal(removeFilterChip(start, "today").filters.todayOnly, false);
+  assert.equal(removeFilterChip(start, "subprojects").filters.includeSubprojects, true);
+  assert.equal(removeFilterChip(start, "hideDone").hideDone, false);
+  assert.equal(removeFilterChip(start, "showEmpty").hideEmptyColumns, true);
+  assert.equal(removeFilterChip(start, "status").filters.search, "keep");
+  assert.equal(removeFilterChip(start, "status").filters.projectId, "acme");
+  assert.equal(removeFilterChip(start, "status").hideDone, true);
+});
+
+test("hideDone defaults to false, parses booleans only, counts as custom and resets", () => {
+  assert.equal(DEFAULT_BOARD_PREFS.hideDone, false);
+  assert.equal(parseBoardPrefs(JSON.stringify({ hideDone: "yes" })).hideDone, false);
+  assert.equal(parseBoardPrefs(JSON.stringify({ hideDone: true })).hideDone, true);
+  assert.equal(parseBoardPrefs(JSON.stringify({ view: "table" })).hideDone, false);
+  assert.equal(hasCustomFilters(prefs({ hideDone: true }), "ready"), true);
+  assert.equal(resetFilterPrefs(prefs({ hideDone: true })).hideDone, false);
+});
+
+test("cardMeta keeps three entries in priority order and shows all when expanded", () => {
+  const all = { project: true, done: true, due: true, today: true, progress: true, repeat: true };
+  assert.equal(CARD_META_LIMIT, 3);
+  assert.deepEqual(cardMeta(all, false), ["project", "done", "due"]);
+  assert.deepEqual(cardMeta(all, true), ["project", "done", "due", "today", "progress", "repeat"]);
+  assert.deepEqual(cardMeta({ ...all, project: false, done: false }, false), ["due", "today", "progress"]);
+  assert.deepEqual(cardMeta({ project: true, repeat: true }, false), ["project", "repeat"]);
+  assert.deepEqual(cardMeta({}, false), []);
 });

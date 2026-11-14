@@ -15,7 +15,7 @@ export const WORKING_STATUSES: readonly BoardStatus[] = BOARD_STATUSES.filter((s
 
 export const REASON_STATUSES: readonly BoardStatus[] = ["blocked", "hold", "archived"];
 
-export const DONE_SECTION_PAGE = 20;
+export const DONE_SECTION_PAGE = 10;
 
 export const DEFAULT_PRIORITY_LEVELS = 4;
 
@@ -52,6 +52,7 @@ export const TABLE_SORT_KEYS: readonly TableSortKey[] = ["priority", "status", "
 export interface BoardPrefs {
   view: BoardViewMode;
   hideEmptyColumns: boolean;
+  hideDone: boolean;
   tableSort: TableSort;
   timelineZoom: TimelineZoom;
   filters: BoardFilters;
@@ -60,6 +61,7 @@ export interface BoardPrefs {
 export const DEFAULT_BOARD_PREFS: BoardPrefs = {
   view: "kanban",
   hideEmptyColumns: true,
+  hideDone: false,
   tableSort: { key: "priority", dir: "asc" },
   timelineZoom: "month",
   filters: { projectId: null, includeSubprojects: true, statuses: [...WORKING_STATUSES], search: "", todayOnly: false, hiddenPriorities: [] },
@@ -117,12 +119,13 @@ export function parseBoardPrefs(raw: string | null): BoardPrefs {
     return DEFAULT_BOARD_PREFS;
   }
   if (typeof parsed !== "object" || parsed === null) return DEFAULT_BOARD_PREFS;
-  const stored = parsed as { view?: unknown; hideEmptyColumns?: unknown; tableSort?: unknown; timelineZoom?: unknown; filters?: unknown };
+  const stored = parsed as { view?: unknown; hideEmptyColumns?: unknown; hideDone?: unknown; tableSort?: unknown; timelineZoom?: unknown; filters?: unknown };
   const filters = typeof stored.filters === "object" && stored.filters !== null ? (stored.filters as Record<string, unknown>) : {};
   const defaults = DEFAULT_BOARD_PREFS.filters;
   return {
     view: stored.view === "table" || stored.view === "kanban" || stored.view === "timeline" ? stored.view : DEFAULT_BOARD_PREFS.view,
     hideEmptyColumns: typeof stored.hideEmptyColumns === "boolean" ? stored.hideEmptyColumns : DEFAULT_BOARD_PREFS.hideEmptyColumns,
+    hideDone: typeof stored.hideDone === "boolean" ? stored.hideDone : DEFAULT_BOARD_PREFS.hideDone,
     tableSort: parseTableSort(stored.tableSort),
     timelineZoom: TIMELINE_ZOOMS.find((zoom) => zoom === stored.timelineZoom) ?? DEFAULT_BOARD_PREFS.timelineZoom,
     filters: {
@@ -235,6 +238,7 @@ export function hasCustomFilters(prefs: BoardPrefs, availability: TodayAvailabil
   if (filters.hiddenPriorities.length > 0) return true;
   if (filters.todayOnly && availability !== "off") return true;
   if (filters.search.trim() !== "") return true;
+  if (prefs.hideDone !== defaults.hideDone) return true;
   return prefs.hideEmptyColumns !== defaults.hideEmptyColumns;
 }
 
@@ -243,8 +247,57 @@ export function resetFilterPrefs(prefs: BoardPrefs): BoardPrefs {
   return {
     ...prefs,
     hideEmptyColumns: defaults.hideEmptyColumns,
+    hideDone: defaults.hideDone,
     filters: { ...defaults.filters, statuses: [...defaults.filters.statuses], hiddenPriorities: [] },
   };
+}
+
+export type FilterChipId = "status" | "priority" | "today" | "hideDone" | "showEmpty" | "subprojects";
+
+export interface FilterChip {
+  id: FilterChipId;
+  label: string;
+}
+
+export interface FilterChipContext {
+  availability: TodayAvailability;
+  levels: (number | null)[];
+  projectSelected: boolean;
+}
+
+export function filterChips(prefs: BoardPrefs, context: FilterChipContext): FilterChip[] {
+  const { filters } = prefs;
+  const chips: FilterChip[] = [];
+  if (!hasDefaultStatuses(filters)) chips.push({ id: "status", label: statusFilterSummary(filters) });
+  if (filters.hiddenPriorities.length > 0) chips.push({ id: "priority", label: priorityFilterSummary(filters, context.levels) });
+  if (filters.todayOnly && context.availability !== "off") chips.push({ id: "today", label: "In today's daily" });
+  if (context.projectSelected && !filters.includeSubprojects) chips.push({ id: "subprojects", label: "Without subprojects" });
+  if (prefs.view === "kanban" && prefs.hideDone) chips.push({ id: "hideDone", label: "Done hidden" });
+  if (prefs.view === "kanban" && !prefs.hideEmptyColumns) chips.push({ id: "showEmpty", label: "Empty columns shown" });
+  return chips;
+}
+
+export function removeFilterChip(prefs: BoardPrefs, id: FilterChipId): BoardPrefs {
+  const defaults = DEFAULT_BOARD_PREFS;
+  if (id === "hideDone") return { ...prefs, hideDone: defaults.hideDone };
+  if (id === "showEmpty") return { ...prefs, hideEmptyColumns: defaults.hideEmptyColumns };
+  const filters = { ...prefs.filters };
+  if (id === "status") filters.statuses = [...defaults.filters.statuses];
+  else if (id === "priority") filters.hiddenPriorities = [];
+  else if (id === "today") filters.todayOnly = defaults.filters.todayOnly;
+  else filters.includeSubprojects = defaults.filters.includeSubprojects;
+  return { ...prefs, filters };
+}
+
+export type CardMetaKey = "project" | "done" | "due" | "today" | "progress" | "repeat";
+
+export const CARD_META_LIMIT = 3;
+
+const CARD_META_ORDER: readonly CardMetaKey[] = ["project", "done", "due", "today", "progress", "repeat"];
+
+export function cardMeta(present: Partial<Record<CardMetaKey, boolean>>, expanded: boolean): CardMetaKey[] {
+  const available = CARD_META_ORDER.filter((key) => present[key] === true);
+  return expanded ? available : available.slice(0, CARD_META_LIMIT);
 }
 
 export interface FilterNoteContext {
@@ -412,8 +465,12 @@ export function capDoneSection(tasks: BoardTask[], limit: number): { tasks: Boar
 }
 
 export function doneColumnView(tasks: BoardTask[], limit: number): { tasks: BoardTask[]; hidden: number } {
-  return capDoneSection(orderDoneColumn(tasks), limit);
+  const ordered = orderDoneColumn(tasks);
+  const keep = Math.max(0, limit);
+  return { tasks: ordered.slice(0, keep), hidden: Math.max(0, ordered.length - keep) };
 }
+
+export const canShowFewerDone = (limit: number): boolean => limit > DONE_SECTION_PAGE;
 
 export function todayIdSet(today: BoardToday | null): ReadonlySet<string> | null {
   return today === null ? null : new Set(today.taskIds);

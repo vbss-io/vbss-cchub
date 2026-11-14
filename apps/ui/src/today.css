@@ -330,6 +330,21 @@
   overflow-y: auto;
 }
 
+.today__picker-group {
+  flex: 1 1 100%;
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.today__picker > .hint {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
 .today__picker-empty {
   flex: 1 1 100%;
   margin: 0;

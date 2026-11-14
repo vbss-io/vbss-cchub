@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { FINISHED_OCCURRENCE_HINT, isSubtask, noteMoveAvailability, orderedChildren, taskMenuEntries, taskMoveAvailability, type MoveDirection } from "../board-model";
 import type { BoardChange, BoardCheckbox, BoardNoteItem, BoardProject, BoardStatus, BoardTask } from "../delegation";
+import { getToday, TodayUnavailableError } from "../delegation";
 import { IconClose, IconExpand, IconRun } from "../icons";
+import { focusFact, localDay } from "../today-model";
 import { BoardActionsMenu, type BoardMenuItem } from "./BoardActionsMenu";
 import {
   BoardDateFields,
@@ -22,6 +24,44 @@ import {
 } from "./BoardParts";
 import { useDrawerWidth, DRAWER_WIDTH } from "../use-layout-size";
 import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
+import "../board-drawer.css";
+
+type FocusMode = "scheduled" | "list";
+
+const FOCUS_MODE_TTL_MS = 30_000;
+
+let cachedFocusMode: { day: string; mode: FocusMode; at: number } | null = null;
+
+function freshFocusMode(day: string): FocusMode | null {
+  return cachedFocusMode !== null && cachedFocusMode.day === day && Date.now() - cachedFocusMode.at < FOCUS_MODE_TTL_MS ? cachedFocusMode.mode : null;
+}
+
+async function loadFocusMode(day: string): Promise<FocusMode> {
+  const known = freshFocusMode(day);
+  if (known !== null) return known;
+  try {
+    const data = await getToday(day);
+    cachedFocusMode = { day, mode: data.focusSource, at: Date.now() };
+    return data.focusSource;
+  } catch (err) {
+    return err instanceof TodayUnavailableError ? "list" : "scheduled";
+  }
+}
+
+function useFocusMode(): FocusMode | null {
+  const day = localDay();
+  const [mode, setMode] = useState<FocusMode | null>(() => freshFocusMode(day));
+  useEffect(() => {
+    let live = true;
+    void loadFocusMode(day).then((next) => {
+      if (live) setMode(next);
+    });
+    return () => {
+      live = false;
+    };
+  }, [day]);
+  return mode;
+}
 
 export interface BoardOrganizeActions {
   onMove: (task: BoardTask, direction: MoveDirection) => void;
@@ -52,6 +92,7 @@ interface TreeContext {
   finished: ReadonlySet<string>;
   onSyncDaily: (task: BoardTask) => void;
   onUseDaily: (task: BoardTask) => void;
+  mirrored: boolean;
 }
 
 function todayMenuItems(task: BoardTask, context: TreeContext, disabled: boolean): BoardMenuItem[] {
@@ -67,6 +108,7 @@ function todayMenuItems(task: BoardTask, context: TreeContext, disabled: boolean
   for (const entry of entries) {
     const base = { id: entry.id, label: entry.label, title: entry.title, disabled: disabled || entry.disabled };
     if (entry.action.type === "today") items.push({ ...base, onSelect: () => context.today.onAdd(task) });
+    else if (context.mirrored && (entry.action.type === "sync-daily" || entry.action.type === "use-daily")) continue;
     else if (entry.action.type === "sync-daily") items.push({ ...base, onSelect: () => context.onSyncDaily(task) });
     else if (entry.action.type === "use-daily") items.push({ ...base, onSelect: () => context.onUseDaily(task) });
   }
@@ -209,6 +251,9 @@ export function BoardDrawer(props: Props) {
   const busy = pending.has(task.id) || organizing;
   const outOfSync = inToday && props.today.isOutOfSync(task.id);
   const dailyState = props.today.dailyState(task.id);
+  const focusMode = useFocusMode();
+  const mirrored = focusMode !== "list";
+  const fact = focusFact(task.scheduled, localDay());
 
   useEffect(() => {
     panelRef.current?.focus();
@@ -256,8 +301,18 @@ export function BoardDrawer(props: Props) {
     finished: props.finished,
     onSyncDaily: props.onSyncDaily,
     onUseDaily: props.onUseDaily,
+    mirrored,
   };
   const locked = props.finished.has(task.id);
+  const moreItems: BoardMenuItem[] = [
+    ...(project
+      ? [
+          { id: "obsidian", label: "Open in Obsidian", title: "Open the project note in Obsidian", onSelect: () => props.onOpenObsidian(project) },
+          { id: "editor", label: "Open in editor", title: "Open the project note in the configured editor", onSelect: () => props.onOpenEditor(project) },
+        ]
+      : []),
+    ...(locked ? [] : organizeMenuItems(tasks, task, props.organize, busy).map((item, index) => (index === 0 && project ? { ...item, separator: true } : item))),
+  ];
 
   return (
     <>
@@ -280,11 +335,6 @@ export function BoardDrawer(props: Props) {
             </div>
             <p className="board-drawer__where small">
               <span className="muted">{breadcrumb}</span>
-              {project && (
-                <span className="path board-drawer__path" title={project.path}>
-                  {project.path}
-                </span>
-              )}
             </p>
             {locked && (
               <p className="board-drawer__locked muted small" title={FINISHED_OCCURRENCE_HINT}>
@@ -311,11 +361,6 @@ export function BoardDrawer(props: Props) {
                 </>
               )}
             </div>
-            {locked ? (
-              <BoardDatesReadOnly task={task} />
-            ) : (
-              <BoardDateFields key={`${task.id}:${task.repeat ?? ""}`} task={task} disabled={busy} onChange={(change) => props.onDates(task, change)} />
-            )}
             <BoardReason task={task} disabled={busy} readOnly={locked} onChange={(reason) => props.onReason(task, reason)} />
             <div className="board-drawer__buttons">
               {!locked && (
@@ -328,17 +373,7 @@ export function BoardDrawer(props: Props) {
                   {isSubtask(tasks, task) ? "Add this subtask to today" : "Add to today"}
                 </button>
               )}
-              {project && (
-                <button className="act" title="Open the project note in Obsidian" onClick={() => props.onOpenObsidian(project)}>
-                  Open in Obsidian
-                </button>
-              )}
-              {project && (
-                <button className="act" title="Open the project note in the configured editor" onClick={() => props.onOpenEditor(project)}>
-                  Open in editor
-                </button>
-              )}
-              {!locked && <BoardActionsMenu label={`Actions for ${task.title}`} disabled={busy} items={organizeMenuItems(tasks, task, props.organize, busy)} />}
+              {moreItems.length > 0 && <BoardActionsMenu label={`More actions for ${task.title}`} disabled={busy} items={moreItems} />}
             </div>
           </div>
           <div className="drawer__actions">
@@ -349,35 +384,6 @@ export function BoardDrawer(props: Props) {
         </header>
 
         <div className="drawer__body">
-          <dl className="details board-drawer__facts">
-            <dt>Group</dt>
-            <dd>{task.group ? <span className="chip">{task.group}</span> : <span className="muted">-</span>}</dd>
-            <dt>Today</dt>
-            <dd>
-              {inToday ? (
-                <span className="board-drawer__today">
-                  <BoardTodayBadge inToday checkbox={props.todayCheckbox} />
-                  <BoardOutOfSyncBadge outOfSync={outOfSync} />
-                  {outOfSync && (
-                    <>
-                      <button className="act" disabled={busy} title="Write this status into today's daily" onClick={() => props.onSyncDaily(task)}>
-                        Sync to daily
-                      </button>
-                      {dailyState !== null && (
-                        <button className="act" disabled={busy} title="Set this task from today's daily checkbox" onClick={() => props.onUseDaily(task)}>
-                          Use daily
-                        </button>
-                      )}
-                    </>
-                  )}
-                </span>
-              ) : (
-                <span className="muted">Not linked in today's daily</span>
-              )}
-            </dd>
-            <dt>Section</dt>
-            <dd>{task.section === "done" ? <BoardDoneStamp task={task} /> : <span>Open</span>}</dd>
-          </dl>
           <section className="board-drawer__tree" aria-label="Notes and subtasks">
             <h3 className="board-drawer__heading">Notes and subtasks</h3>
             <DrawerItems owner={task} context={context} />
@@ -389,6 +395,67 @@ export function BoardDrawer(props: Props) {
               </button>
             </div>
           )}
+          <details className="drawer-details">
+            <summary className="drawer-details__summary">Details</summary>
+            <div className="drawer-details__body">
+              {locked ? (
+                <BoardDatesReadOnly task={task} />
+              ) : (
+                <BoardDateFields key={`${task.id}:${task.repeat ?? ""}`} task={task} disabled={busy} onChange={(change) => props.onDates(task, change)} />
+              )}
+              <dl className="details board-drawer__facts">
+                <dt>Group</dt>
+                <dd>{task.group ? <span className="chip">{task.group}</span> : <span className="muted">-</span>}</dd>
+                {focusMode === "list" && (
+                  <>
+                    <dt>Today</dt>
+                    <dd>
+                      {inToday ? (
+                        <span className="board-drawer__today">
+                          <BoardTodayBadge inToday checkbox={props.todayCheckbox} />
+                          <BoardOutOfSyncBadge outOfSync={outOfSync} />
+                          {outOfSync && (
+                            <>
+                              <button className="act" disabled={busy} title="Write this status into today's daily" onClick={() => props.onSyncDaily(task)}>
+                                Sync to daily
+                              </button>
+                              {dailyState !== null && (
+                                <button className="act" disabled={busy} title="Set this task from today's daily checkbox" onClick={() => props.onUseDaily(task)}>
+                                  Use daily
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="muted">Not linked in today's daily</span>
+                      )}
+                    </dd>
+                  </>
+                )}
+                {focusMode === "scheduled" && fact !== null && (
+                  <>
+                    <dt>Today</dt>
+                    <dd>
+                      <span className={fact === "In today's focus" ? "board-drawer__focus" : "muted"}>{fact}</span>
+                    </dd>
+                  </>
+                )}
+                <dt>Section</dt>
+                <dd>{task.section === "done" ? <BoardDoneStamp task={task} /> : <span>Open</span>}</dd>
+                {project && (
+                  <>
+                    <dt>File</dt>
+                    <dd>
+                      <span className="path board-drawer__path" title={project.path}>
+                        {project.path}
+                      </span>
+                    </dd>
+                  </>
+                )}
+              </dl>
+            </div>
+          </details>
         </div>
         {drawerWidth.resizable && (
           <ResizableDrawerEdge

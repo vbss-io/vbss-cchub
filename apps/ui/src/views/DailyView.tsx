@@ -5,6 +5,7 @@ import { BoardTaskPicker } from "../components/BoardTaskPicker";
 import { DailyTasksCheck } from "../components/DailyTasksCheck";
 import { MarkdownEditor } from "../components/MarkdownEditor";
 import { ResizableSplit } from "../components/ResizableSplit";
+import "../board-drawer.css";
 import {
   appendNewItem,
   canOrganizeFocus,
@@ -68,6 +69,12 @@ export const DAILY_REFINE_EVENT = "cchub:daily-refine";
 type Mode = "preview" | "edit";
 type SaveStatus = "idle" | "saving" | "saved" | "unsaved";
 type WizardStep = 1 | 2 | 3;
+
+const WIZARD_STEPS: readonly { step: WizardStep; label: string }[] = [
+  { step: 1, label: "Yesterday" },
+  { step: 2, label: "Today" },
+  { step: 3, label: "Create" },
+];
 
 interface Conflict {
   content: string | null;
@@ -290,20 +297,21 @@ function DailyWizard(props: DailyWizardProps) {
   const previewLines = focusPreviewLines([...carriedItems, ...newItems], wikilinks);
 
   return (
-    <div className="daily__wizard">
-      <div className="daily__wizard-head">
+    <div className="daily__wizard daily__wizard--compact">
+      <div className="wizard__head">
         <h3>Plan today · {date}</h3>
         <button className="act act--icon" onClick={onClose}>
           Close
         </button>
       </div>
-      <div className="daily__steps">
-        <span className={`daily__step ${step === 1 ? "daily__step--on" : ""}`}>1 Yesterday</span>
-        <span className="daily__step-sep">·</span>
-        <span className={`daily__step ${step === 2 ? "daily__step--on" : ""}`}>2 Today</span>
-        <span className="daily__step-sep">·</span>
-        <span className={`daily__step ${step === 3 ? "daily__step--on" : ""}`}>3 Create</span>
-      </div>
+      <ol className="wizard__steps" aria-label="Steps">
+        {WIZARD_STEPS.map((item) => (
+          <li key={item.step} className={`wizard__step ${step === item.step ? "wizard__step--on" : ""} ${item.step < step ? "wizard__step--done" : ""}`} aria-current={step === item.step ? "step" : undefined}>
+            <span className="wizard__step-num">{item.step < step ? "✓" : item.step}</span>
+            {item.label}
+          </li>
+        ))}
+      </ol>
 
       {prepareLoading && <p className="muted">Loading…</p>}
       {prepareError && (
@@ -372,7 +380,7 @@ function DailyWizard(props: DailyWizardProps) {
                 <span>What happened yesterday (optional, 2-3 lines)</span>
                 <textarea
                   className="in daily__wizard-textarea"
-                  rows={3}
+                  rows={2}
                   value={yesterdayNotes}
                   onChange={(event) => onYesterdayNotesChange(event.target.value)}
                 />
@@ -395,47 +403,53 @@ function DailyWizard(props: DailyWizardProps) {
 
       {!prepareLoading && !prepareError && prepare && step === 2 && (
         <div className="daily__wizard-step">
-          <h4>Carried over</h4>
-          {carriedItems.length === 0 && <p className="muted small">Nothing carried over.</p>}
-          {carriedItems.length > 0 && (
-            <div className="daily__list">
-              {carriedItems.map((item, index) => (
-                <div className="daily__list-row" key={index}>
-                  <input
-                    className="in"
-                    value={item.text}
-                    onChange={(event) => {
-                      const nextText = event.target.value;
-                      onCarriedItemsChange(carriedItems.map((entryItem, i) => (i === index ? { ...entryItem, text: nextText } : entryItem)));
-                    }}
-                  />
-                  {isDoingBlock(item.block) && <span className="daily__doing-badge">In progress</span>}
-                  <button className="act act--icon" onClick={() => onCarriedItemsChange(carriedItems.filter((_, i) => i !== index))}>
-                    Remove
-                  </button>
+          <div className="wizard__two">
+            <div className="daily__wizard-step">
+              <h4>Carried over</h4>
+              {carriedItems.length === 0 && <p className="muted small">Nothing carried over.</p>}
+              {carriedItems.length > 0 && (
+                <div className="daily__list">
+                  {carriedItems.map((item, index) => (
+                    <div className="daily__list-row" key={index}>
+                      <input
+                        className="in"
+                        value={item.text}
+                        onChange={(event) => {
+                          const nextText = event.target.value;
+                          onCarriedItemsChange(carriedItems.map((entryItem, i) => (i === index ? { ...entryItem, text: nextText } : entryItem)));
+                        }}
+                      />
+                      {isDoingBlock(item.block) && <span className="daily__doing-badge">In progress</span>}
+                      <button className="act act--icon" onClick={() => onCarriedItemsChange(carriedItems.filter((_, i) => i !== index))}>
+                        Remove
+                      </button>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
+              <label className="field">
+                <span>Meetings (one per line)</span>
+                <textarea className="in daily__wizard-textarea" rows={3} value={meetingsText} onChange={(event) => onMeetingsTextChange(event.target.value)} />
+              </label>
             </div>
-          )}
-          <label className="field">
-            <span>New items (one per line, "Project - item")</span>
-            <textarea className="in daily__wizard-textarea" value={newItemsText} onChange={(event) => onNewItemsTextChange(event.target.value)} />
-          </label>
-          {tasksEnabled && (
-            <BoardTaskPicker
-              newItemsText={newItemsText}
-              carriedItems={carriedItems}
-              wikilinks={wikilinks}
-              onPick={(item) => onNewItemsTextChange(appendNewItem(newItemsText, item))}
-              onPickDoing={(item) => {
-                if (!hasFocusItem(carriedItems, item)) onCarriedItemsChange([...carriedItems, item]);
-              }}
-            />
-          )}
-          <label className="field">
-            <span>Meetings (one per line)</span>
-            <textarea className="in daily__wizard-textarea" value={meetingsText} onChange={(event) => onMeetingsTextChange(event.target.value)} />
-          </label>
+            <div className="daily__wizard-step">
+              <label className="field">
+                <span>New items (one per line, "Project - item")</span>
+                <textarea className="in daily__wizard-textarea" rows={4} value={newItemsText} onChange={(event) => onNewItemsTextChange(event.target.value)} />
+              </label>
+              {tasksEnabled && (
+                <BoardTaskPicker
+                  newItemsText={newItemsText}
+                  carriedItems={carriedItems}
+                  wikilinks={wikilinks}
+                  onPick={(item) => onNewItemsTextChange(appendNewItem(newItemsText, item))}
+                  onPickDoing={(item) => {
+                    if (!hasFocusItem(carriedItems, item)) onCarriedItemsChange([...carriedItems, item]);
+                  }}
+                />
+              )}
+            </div>
+          </div>
           <div className="frow frow--end">
             <button className="act" onClick={() => onStepChange(1)}>
               Back

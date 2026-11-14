@@ -83,15 +83,18 @@ import {
   parseDismissedOutOfSync,
   parseQuickAdd,
   pickerTasks,
+  recentlyDoneTasks,
   rootNodeOf,
   START_DAY_EVENT,
   startPanelAuto,
+  stepsBelowAnchor,
   targetOfTask,
   taskOfOutOfSync,
   TODAY_DRAG_MIME,
   unmatchedKey,
   visibleOutOfSync,
   type LinkTarget,
+  type PickerTask,
 } from "../today-model";
 import { DAILY_ORGANIZE_EVENT, DAILY_REFINE_EVENT, DailyView, useDailySessions, type DailyEntryInfo } from "./DailyView";
 
@@ -208,6 +211,40 @@ const OTHER_TASK = "other";
 
 const CHECKBOX_LABEL: Record<TodayUnmatched["checkbox"], string> = { todo: "To-do", doing: "Doing", done: "Done" };
 
+interface PickerGroupProps {
+  heading: string;
+  label: string;
+  items: PickerTask[];
+  total: number;
+  busy: boolean;
+  showDone?: boolean;
+  onPick: (task: BoardTask) => void;
+}
+
+function PickerGroup({ heading, label, items, total, busy, showDone = false, onPick }: PickerGroupProps) {
+  if (items.length === 0) return null;
+  return (
+    <>
+      <h4 className="today__picker-group">{heading}</h4>
+      <ul className="today__plain today__picker-list" aria-label={label}>
+        {items.map(({ task, projectTitle }) => (
+          <li key={task.id}>
+            <button type="button" className="today__picker-item" disabled={busy} onClick={() => onPick(task)}>
+              <span>{task.title}</span>
+              <span className="muted small">{showDone && task.doneAt ? `${projectTitle} - done ${task.doneAt}` : projectTitle}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {total > items.length && (
+        <p className="hint">
+          Showing {items.length} of {total}. Type to narrow the list.
+        </p>
+      )}
+    </>
+  );
+}
+
 interface UnmatchedTicksProps {
   items: TodayUnmatched[];
   tasks: BoardTask[];
@@ -221,6 +258,7 @@ function UnmatchedTicks({ items, tasks, projects, busyKeys, onLink }: UnmatchedT
   const [query, setQuery] = useState("");
   const titles = useMemo(() => new Map(projects.map((project) => [project.id, project.title])), [projects]);
   const found = useMemo(() => (picking === null ? null : pickerTasks(tasks, projects, query)), [picking, tasks, projects, query]);
+  const finished = useMemo(() => (picking === null ? null : recentlyDoneTasks(tasks, projects, query, localDay())), [picking, tasks, projects, query]);
 
   const onSelect = (item: TodayUnmatched, value: string) => {
     if (value === OTHER_TASK) {
@@ -279,8 +317,8 @@ function UnmatchedTicks({ items, tasks, projects, busyKeys, onLink }: UnmatchedT
                     className="in today__picker-search"
                     type="search"
                     value={query}
-                    placeholder="Search open tasks"
-                    aria-label="Search open tasks to link"
+                    placeholder="Search tasks"
+                    aria-label="Search tasks to link"
                     autoFocus
                     autoComplete="off"
                     spellCheck={false}
@@ -295,29 +333,32 @@ function UnmatchedTicks({ items, tasks, projects, busyKeys, onLink }: UnmatchedT
                   <button type="button" className="act" onClick={() => setPicking(null)}>
                     Cancel
                   </button>
-                  {found.items.length === 0 ? (
-                    <p className="hint today__picker-empty">No open task matches.</p>
-                  ) : (
-                    <ul className="today__plain today__picker-list" aria-label="Open tasks">
-                      {found.items.map(({ task, projectTitle }) => (
-                        <li key={task.id}>
-                          <button
-                            type="button"
-                            className="today__picker-item"
-                            disabled={busy}
-                            onClick={() => {
-                              setPicking(null);
-                              onLink(item, linkTargetOfTask(task));
-                            }}
-                          >
-                            <span>{task.title}</span>
-                            <span className="muted small">{projectTitle}</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
+                  {found.items.length === 0 && (finished === null || finished.items.length === 0) && <p className="hint today__picker-empty">No task matches.</p>}
+                  <PickerGroup
+                    heading="Open"
+                    label="Open tasks"
+                    items={found.items}
+                    total={found.total}
+                    busy={busy}
+                    onPick={(task) => {
+                      setPicking(null);
+                      onLink(item, linkTargetOfTask(task));
+                    }}
+                  />
+                  {finished !== null && (
+                    <PickerGroup
+                      heading="Recently done"
+                      label="Recently done tasks"
+                      items={finished.items}
+                      total={finished.total}
+                      busy={busy}
+                      showDone
+                      onPick={(task) => {
+                        setPicking(null);
+                        onLink(item, linkTargetOfTask(task));
+                      }}
+                    />
                   )}
-                  {found.total > found.items.length && <p className="hint">Showing {found.items.length} of {found.total}. Type to narrow the list.</p>}
                 </div>
               )}
             </li>
@@ -1096,7 +1137,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
     withRefresh(async () => {
       const parent = parentOfTask(boardTasks, node.id);
       const covered = parent !== null && focusIds.has(parent.id);
-      await createBoardItem({
+      const created = await createBoardItem({
         projectId: node.projectId,
         title,
         ...(fields.priority !== undefined && fields.priority !== null ? { priority: fields.priority } : {}),
@@ -1104,6 +1145,12 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
         ...(covered ? {} : { scheduled: date }),
         ...(parent ? { parentLine: parent.line, parentRaw: parent.raw } : {}),
       });
+      let current = targetOfTask(created.task);
+      const steps = stepsBelowAnchor(boardTasks, node.id, created.task);
+      for (let step = 0; step < steps; step += 1) {
+        const moved = await moveBoardItem(current, "up");
+        current = targetOfTask(moved.task);
+      }
     });
 
   const onIndent = (node: OutlineNode) =>

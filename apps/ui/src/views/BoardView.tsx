@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import "../board.css";
 import type { DailyStreamEvent, TasksBoardStreamEvent } from "../api";
 import {
   activeFilterNotes,
@@ -6,8 +7,16 @@ import {
   allExpanded,
   BOARD_STATUSES,
   BOARD_STATUS_LABEL,
+  canShowFewerDone,
   capDoneSection,
+  cardMeta,
   countedProjectOptions,
+  dueChip,
+  filterChips,
+  removeFilterChip,
+  taskDates,
+  todayStatusBadge,
+  type FilterChipId,
   DEFAULT_BOARD_PREFS,
   DONE_SECTION_PAGE,
   doneColumnView,
@@ -25,19 +34,16 @@ import {
   supportsReason,
   taskMenuEntries,
   hasCustomFilters,
-  hasDefaultStatuses,
   kanbanColumns,
   nextTableSort,
   parseBoardPrefs,
   priorityFilterLevels,
-  priorityFilterSummary,
   priorityLabel,
   projectBreadcrumb,
   remapExpanded,
   replaceBoardTask,
   resetFilterPrefs,
   sortByPriority,
-  statusFilterSummary,
   sortTableTasks,
   subtaskProgress,
   sweepTargets,
@@ -48,7 +54,6 @@ import {
   todayMissingHint,
   toggleHiddenPriority,
   validateNoteText,
-  viewSummary,
   visibleKanbanColumns,
   findTaskAfterRefetch,
   formatDayMonth,
@@ -71,10 +76,13 @@ import {
 import { BoardDelegateDialog, type BoardDelegateRequest } from "../components/BoardDelegateDialog";
 import { BoardActionsMenu, type BoardMenuItem } from "../components/BoardActionsMenu";
 import { BoardDrawer, type BoardOrganizeActions } from "../components/BoardDrawer";
+import { BoardFilterChips, BoardFilters, type BoardFilterGroup } from "../components/BoardFilters";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { BoardNewTaskDialog } from "../components/BoardNewTaskDialog";
 import { BoardTimeline } from "../components/BoardTimeline";
 import { BoardMoveProjectDialog, BoardParentPickerDialog } from "../components/BoardOrganizeDialogs";
 import {
+  BoardBulkBar,
   BoardDoneStamp,
   BoardDueChip,
   BoardExpandButton,
@@ -86,6 +94,17 @@ import {
   type BoardNoteActions,
   type BoardTodayControls,
 } from "../components/BoardParts";
+import {
+  bulkSummary,
+  planBulk,
+  runBulk,
+  selectedRows,
+  selectionState,
+  toggleSelected,
+  toggleSelectAll,
+  type BulkAction,
+  type BulkIo,
+} from "../board-bulk";
 import {
   addBoardNote,
   addBoardTaskToDaily,
@@ -114,7 +133,7 @@ import {
   type WorkspaceRecord,
 } from "../delegation";
 import { IconChevron, IconSearch } from "../icons";
-import { MultiSelectDropdown, type MultiSelectOption } from "../components/MultiSelectDropdown";
+import type { MultiSelectOption } from "../components/MultiSelectDropdown";
 import { InlineText } from "../markdown";
 import { openExternal } from "../notify";
 import { localDayKey, ZOOM_LABEL } from "../timeline-model";
@@ -211,6 +230,7 @@ interface ItemProps {
   onOpenDetails: (task: BoardTask) => void;
   finished: boolean;
   finishedIds: ReadonlySet<string>;
+  showProject: boolean;
 }
 
 type TaskMenuProps = Pick<
@@ -300,6 +320,17 @@ function BoardCard(props: CardProps) {
   const progress = subtaskProgress(task);
   const hasChildren = task.subtasks.length > 0 || task.noteItems.length > 0;
   const showReason = supportsReason(task.status) && task.reason !== null;
+  const metas = cardMeta(
+    {
+      project: props.showProject,
+      done: task.section === "done",
+      due: dueChip(task, props.todayKey) !== null,
+      today: todayStatusBadge(props.inToday, props.todayCheckbox, props.outOfSync, props.subtaskSync) !== null,
+      progress: progress.total > 0,
+      repeat: taskDates(task).repeat !== null,
+    },
+    expanded,
+  );
   return (
     <article
       className={`board-card ${dragging ? "board-card--drag" : ""} ${busy ? "board-card--busy" : ""}`}
@@ -341,20 +372,32 @@ function BoardCard(props: CardProps) {
           {task.reason}
         </p>
       )}
-      <div className="board-meta">
-        <span className="board-meta__project" title={breadcrumb}>
-          {breadcrumb}
-        </span>
-        {progress.total > 0 && (
-          <span className="chip board-meta__progress" title="Subtasks done">
-            {progress.done}/{progress.total}
-          </span>
-        )}
-        <BoardDueChip task={task} today={props.todayKey} />
-        <BoardRepeatMark task={task} />
-        <BoardTodayStatus inToday={props.inToday} checkbox={props.todayCheckbox} outOfSync={props.outOfSync} subtaskNames={props.subtaskSync} />
-        <BoardDoneStamp task={task} />
-      </div>
+      {metas.length > 0 && (
+        <div className="board-meta">
+          {metas.map((key) => {
+            if (key === "project") {
+              return (
+                <span key={key} className="board-meta__project" title={breadcrumb}>
+                  {breadcrumb}
+                </span>
+              );
+            }
+            if (key === "progress") {
+              return (
+                <span key={key} className="chip board-meta__progress" title="Subtasks done">
+                  {progress.done}/{progress.total}
+                </span>
+              );
+            }
+            if (key === "due") return <BoardDueChip key={key} task={task} today={props.todayKey} />;
+            if (key === "repeat") return <BoardRepeatMark key={key} task={task} />;
+            if (key === "today") {
+              return <BoardTodayStatus key={key} inToday={props.inToday} checkbox={props.todayCheckbox} outOfSync={props.outOfSync} subtaskNames={props.subtaskSync} />;
+            }
+            return <BoardDoneStamp key={key} task={task} />;
+          })}
+        </div>
+      )}
       {expanded && (
         <TaskDetails
           task={task}
@@ -376,9 +419,9 @@ function BoardCard(props: CardProps) {
   );
 }
 
-const TABLE_COLUMNS = 9;
+const TABLE_COLUMNS = 10;
 
-function BoardRow(props: ItemProps) {
+function BoardRow(props: ItemProps & { selected: boolean; onSelect: () => void }) {
   const { task, pending, expanded, onToggle } = props;
   const busy = pending.has(task.id);
   const progress = subtaskProgress(task);
@@ -387,7 +430,7 @@ function BoardRow(props: ItemProps) {
   return (
     <>
       <tr
-        className={`board-row ${busy ? "board-row--busy" : ""}`}
+        className={`board-row ${busy ? "board-row--busy" : ""} ${props.selected ? "board-row--selected" : ""}`}
         tabIndex={0}
         onClick={(event) => {
           if (event.target instanceof Element && event.target.closest(CARD_CONTROLS)) return;
@@ -398,6 +441,9 @@ function BoardRow(props: ItemProps) {
           if (event.key === "Enter" && event.target === event.currentTarget) open();
         }}
       >
+        <td className="board-table__select" onClick={(event) => event.stopPropagation()}>
+          <input type="checkbox" aria-label={`Select ${task.title}`} checked={props.selected} disabled={busy} onChange={props.onSelect} />
+        </td>
         <td className="board-table__pri">{task.priority === null ? <span className="muted">-</span> : <BoardPriorityBadge priority={task.priority} levels={props.levels} />}</td>
         <td className="board-table__status">
           <span className={`tag tag--board-${task.status}`}>{BOARD_STATUS_LABEL[task.status]}</span>
@@ -495,6 +541,9 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set());
   const [undatedOpen, setUndatedOpen] = useState(false);
   const [todayJump, setTodayJump] = useState(0);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [archiveAsk, setArchiveAsk] = useState(false);
   const holdDrawer = useRef(false);
   const delegateProject = useRef<BoardProject | null>(null);
   const refreshTimer = useRef<number | null>(null);
@@ -509,6 +558,7 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
       const next = await getTasksBoard();
       const previous = boardRef.current;
       if (previous) setExpanded((current) => remapExpanded(previous.tasks, next.tasks, current));
+      if (previous) setSelected((current) => remapExpanded(previous.tasks, next.tasks, current));
       if (previous && !holdDrawer.current) setDrawerId((current) => (current === null ? null : remapTaskId(previous.tasks, next.tasks, current)));
       setBoard(next);
       setLoadError(null);
@@ -631,8 +681,8 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
       done: doneView.tasks.length,
       archived: columns.archived.length,
     };
-    return visibleKanbanColumns(kanbanColumns(filters), counts, prefs.hideEmptyColumns, dragging);
-  }, [filters, columns, doneView, prefs.hideEmptyColumns, dragging]);
+    return visibleKanbanColumns(kanbanColumns(filters), counts, prefs.hideEmptyColumns, dragging).filter((status) => !(prefs.hideDone && status === "done"));
+  }, [filters, columns, doneView, prefs.hideEmptyColumns, prefs.hideDone, dragging]);
   const everythingExpanded = useMemo(() => allExpanded(visible, expanded), [visible, expanded]);
   const shownStatuses = activeStatuses(filters);
   const selectedProject = projects.some((project) => project.id === filters.projectId) ? (filters.projectId as string) : "";
@@ -640,14 +690,24 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
   const customFilters = hasCustomFilters(prefs, availability);
   const filterNotes = activeFilterNotes(filters, { projectTitle: projects.find((project) => project.id === selectedProject)?.title ?? null, availability });
   const missingTodayHint = todayMissingHint(filters, availability);
+  const rowTasks = useMemo(() => tableGroups.filter((group) => !collapsedGroups.has(group.project.id)).flatMap((group) => group.tasks), [tableGroups, collapsedGroups]);
+  const chips = filterChips(prefs, { availability, levels: priorityChips, projectSelected: selectedProject !== "" });
+  const picked = selectedRows(rowTasks, selected);
+  const allState = selectionState(rowTasks, selected);
+  const showProject = !(selectedProject !== "" && !filters.includeSubprojects);
 
   const setFilters = (patch: Partial<BoardPrefs["filters"]>) => setPrefs((current) => ({ ...current, filters: { ...current.filters, ...patch } }));
-  const setView = (next: BoardViewMode) => setPrefs((current) => ({ ...current, view: next }));
+  const setView = (next: BoardViewMode) => {
+    setPrefs((current) => ({ ...current, view: next }));
+    if (next !== "table") setSelected(new Set());
+  };
   const setZoom = (timelineZoom: TimelineZoom) => setPrefs((current) => ({ ...current, timelineZoom }));
 
   const sortTable = (key: TableSortKey) => setPrefs((current) => ({ ...current, tableSort: nextTableSort(current.tableSort, key) }));
 
   const setHideEmptyColumns = (hideEmptyColumns: boolean) => setPrefs((current) => ({ ...current, hideEmptyColumns }));
+
+  const setHideDone = (hideDone: boolean) => setPrefs((current) => ({ ...current, hideDone }));
 
   const resetFilters = () => setPrefs(resetFilterPrefs);
 
@@ -674,13 +734,43 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
     ...(availability === "off"
       ? []
       : [{ id: "today", label: "In today's daily", checked: filters.todayOnly, title: "Show only tasks linked in today's daily" }]),
-    { id: "hideEmpty", label: "Hide empty columns", checked: prefs.hideEmptyColumns, title: "Hide kanban columns that have no cards" },
+    ...(view === "kanban"
+      ? [
+          { id: "hideEmpty", label: "Hide empty columns", checked: prefs.hideEmptyColumns, title: "Hide kanban columns that have no cards" },
+          { id: "hideDone", label: "Hide Done column", checked: prefs.hideDone, title: "Hide the Done column of the kanban" },
+        ]
+      : []),
   ];
 
   const toggleViewOption = (id: string) => {
     if (id === "today") setFilters({ todayOnly: !filters.todayOnly });
+    else if (id === "hideDone") setHideDone(!prefs.hideDone);
     else setHideEmptyColumns(!prefs.hideEmptyColumns);
   };
+
+  const filterGroups: BoardFilterGroup[] = [
+    {
+      title: "Status",
+      options: statusOptions,
+      shortcuts: [
+        { label: "All", onClick: () => setFilters({ statuses: [...BOARD_STATUSES] }) },
+        { label: "All but Archived", onClick: () => setFilters({ statuses: [...DEFAULT_BOARD_PREFS.filters.statuses] }) },
+      ],
+      onToggle: (id) => toggleStatus(id as BoardStatus),
+    },
+    {
+      title: "Priority",
+      options: priorityOptions,
+      shortcuts: [
+        { label: "All", onClick: () => setFilters({ hiddenPriorities: [] }) },
+        { label: "None", onClick: () => setFilters({ hiddenPriorities: [...priorityChips] }) },
+      ],
+      onToggle: (id) => setFilters({ hiddenPriorities: toggleHiddenPriority(filters.hiddenPriorities, id === "none" ? null : Number(id)) }),
+    },
+    { title: "View", options: viewOptions, onToggle: toggleViewOption },
+  ];
+
+  const removeChip = (id: FilterChipId) => setPrefs((current) => removeFilterChip(current, id));
 
   const toggleStatus = (status: BoardStatus) => {
     const current = activeStatuses(filters);
@@ -915,6 +1005,46 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
     }
   };
 
+  const bulkIo: BulkIo = {
+    patch: (target, change) => patchBoardItem(target, change),
+    move: (target, projectId) => moveBoardTaskToProject(target, projectId, null),
+    reload: async () => (await load())?.tasks ?? null,
+    isConflict: (error) => error instanceof BoardConflictError,
+  };
+
+  const runBulkAction = async (action: BulkAction) => {
+    const plan = planBulk(picked, action, finishedIds);
+    const projectLabel = action.kind === "move" ? (breadcrumbs.get(action.projectId) ?? action.projectId) : "";
+    if (plan.steps.length === 0) {
+      const summary = bulkSummary(action, projectLabel, plan, { applied: [], skipped: [], conflicts: 0 });
+      if (summary.notice) onNotice(summary.notice);
+      if (summary.error) onError(summary.error);
+      return;
+    }
+    const ids = plan.steps.map((item) => item.id);
+    setBulkBusy(true);
+    setPending((current) => new Set([...current, ...ids]));
+    try {
+      const report = await runBulk(plan.steps, action, bulkIo);
+      const fresh = await load();
+      const summary = bulkSummary(action, projectLabel, plan, report);
+      if (summary.notice) onNotice(summary.notice);
+      if (summary.error) onError(summary.error);
+      const left = [...plan.skipped, ...report.skipped].flatMap((item) => {
+        const found = fresh ? findTaskAfterRefetch(fresh.tasks, item.task) : null;
+        return found ? [found.id] : [];
+      });
+      setSelected(new Set(left));
+    } finally {
+      setPending((current) => {
+        const next = new Set(current);
+        for (const id of ids) next.delete(id);
+        return next;
+      });
+      setBulkBusy(false);
+    }
+  };
+
   const submitCreate = async (body: BoardCreateInput) => {
     const parent = creating?.parent ?? null;
     try {
@@ -1029,6 +1159,15 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
   const foundProject = delegating ? (projects.find((project) => project.id === delegating.projectId) ?? null) : null;
   if (foundProject) delegateProject.current = foundProject;
   const delegatingProject = delegating ? (foundProject ?? delegateProject.current) : null;
+  const headerItems: BoardMenuItem[] = [
+    ...(view === "timeline"
+      ? []
+      : [{ id: "expand", label: everythingExpanded ? "Collapse all" : "Expand all", disabled: visible.length === 0, onSelect: toggleExpandAll }]),
+    ...(doneEnabled
+      ? [{ id: "sweep", label: sweeping ? "Moving…" : "Move done", title: "Move finished tasks to the done section", disabled: sweeping, onSelect: () => void sweepDone() }]
+      : []),
+    { id: "refresh", label: "Refresh", onSelect: () => void load() },
+  ];
   const todayControls: BoardTodayControls = {
     isLinked: (id) => isLinkedToday(today, id),
     isOutOfSync: (id) => isOutOfSync(today, id),
@@ -1065,52 +1204,44 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
     onOpenDetails: (item) => setDrawerId(item.id),
     finished: finishedIds.has(task.id),
     finishedIds,
+    showProject,
   });
 
   return (
     <div className="view view--board">
-      <div className="toolbar">
-        <div className="pillpair" role="group" aria-label="Board layout">
-          <button className={`pill ${view === "kanban" ? "pill--on" : ""}`} aria-pressed={view === "kanban"} onClick={() => setView("kanban")}>
-            Kanban
-          </button>
-          <button className={`pill ${view === "table" ? "pill--on" : ""}`} aria-pressed={view === "table"} onClick={() => setView("table")}>
-            Table
-          </button>
-          <button className={`pill ${view === "timeline" ? "pill--on" : ""}`} aria-pressed={view === "timeline"} onClick={() => setView("timeline")}>
-            Timeline
-          </button>
-        </div>
-        {view === "timeline" && (
-          <div className="pillpair" role="group" aria-label="Timeline zoom">
-            {TIMELINE_ZOOMS.map((zoom) => (
-              <button key={zoom} className={`pill ${prefs.timelineZoom === zoom ? "pill--on" : ""}`} aria-pressed={prefs.timelineZoom === zoom} onClick={() => setZoom(zoom)}>
-                {ZOOM_LABEL[zoom]}
-              </button>
-            ))}
+      <div className="toolbar board-head">
+        <div className="board-head__left">
+          <div className="pillpair" role="group" aria-label="Board layout">
+            <button className={`pill ${view === "kanban" ? "pill--on" : ""}`} aria-pressed={view === "kanban"} onClick={() => setView("kanban")}>
+              Kanban
+            </button>
+            <button className={`pill ${view === "table" ? "pill--on" : ""}`} aria-pressed={view === "table"} onClick={() => setView("table")}>
+              Table
+            </button>
+            <button className={`pill ${view === "timeline" ? "pill--on" : ""}`} aria-pressed={view === "timeline"} onClick={() => setView("timeline")}>
+              Timeline
+            </button>
           </div>
-        )}
+          {view === "timeline" && (
+            <>
+              <div className="pillpair" role="group" aria-label="Timeline zoom">
+                {TIMELINE_ZOOMS.map((zoom) => (
+                  <button key={zoom} className={`pill ${prefs.timelineZoom === zoom ? "pill--on" : ""}`} aria-pressed={prefs.timelineZoom === zoom} onClick={() => setZoom(zoom)}>
+                    {ZOOM_LABEL[zoom]}
+                  </button>
+                ))}
+              </div>
+              <button className="act" title="Scroll the timeline to today" onClick={() => setTodayJump((count) => count + 1)}>
+                Today
+              </button>
+            </>
+          )}
+        </div>
         <div className="toolbar__right">
-          {view === "timeline" ? (
-            <button className="act" title="Scroll the timeline to today" onClick={() => setTodayJump((count) => count + 1)}>
-              Today
-            </button>
-          ) : (
-            <button className="act" aria-pressed={everythingExpanded} disabled={visible.length === 0} onClick={toggleExpandAll}>
-              {everythingExpanded ? "Collapse all" : "Expand all"}
-            </button>
-          )}
-          {doneEnabled && (
-            <button className="act" disabled={sweeping} title="Move finished tasks to the done section" onClick={() => void sweepDone()}>
-              {sweeping ? "Moving…" : "Move done"}
-            </button>
-          )}
-          <button className="act" onClick={() => setCreating({ parent: null })}>
+          <button className="act act--focus" onClick={() => setCreating({ parent: null })}>
             New task
           </button>
-          <button className="act" onClick={() => void load()}>
-            Refresh
-          </button>
+          <BoardActionsMenu label="Board actions" items={headerItems} />
         </div>
       </div>
 
@@ -1131,45 +1262,6 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
             ))}
           </select>
         </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={filters.includeSubprojects}
-            disabled={selectedProject === ""}
-            onChange={(event) => setFilters({ includeSubprojects: event.target.checked })}
-          />
-          Include subprojects
-        </label>
-        <MultiSelectDropdown
-          label="Status filter"
-          summary={statusFilterSummary(filters)}
-          options={statusOptions}
-          highlighted={!hasDefaultStatuses(filters)}
-          shortcuts={[
-            { label: "All", onClick: () => setFilters({ statuses: [...BOARD_STATUSES] }) },
-            { label: "All but Archived", onClick: () => setFilters({ statuses: [...DEFAULT_BOARD_PREFS.filters.statuses] }) },
-          ]}
-          onToggle={(id) => toggleStatus(id as BoardStatus)}
-        />
-        <MultiSelectDropdown
-          label="Priority filter"
-          summary={priorityFilterSummary(filters, priorityChips)}
-          options={priorityOptions}
-          highlighted={filters.hiddenPriorities.length > 0}
-          shortcuts={[
-            { label: "All", onClick: () => setFilters({ hiddenPriorities: [] }) },
-            { label: "None", onClick: () => setFilters({ hiddenPriorities: [...priorityChips] }) },
-          ]}
-          onToggle={(id) => setFilters({ hiddenPriorities: toggleHiddenPriority(filters.hiddenPriorities, id === "none" ? null : Number(id)) })}
-        />
-        <MultiSelectDropdown
-          label="View options"
-          summary={viewSummary(prefs, availability)}
-          options={viewOptions}
-          highlighted={filters.todayOnly && availability !== "off"}
-          onToggle={toggleViewOption}
-        />
-        {missingTodayHint && <span className="board-filters__hint small">{missingTodayHint}</span>}
         <label className="search board-filters__search">
           <IconSearch />
           <input
@@ -1180,12 +1272,16 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
             onChange={(event) => setFilters({ search: event.target.value })}
           />
         </label>
-        <span title={customFilters ? "Reset filters and view options to their defaults" : "Filters and view options are already at their defaults"}>
-          <button className="act" disabled={!customFilters} onClick={resetFilters}>
-            Reset filters
-          </button>
-        </span>
+        <BoardFilters
+          count={chips.length}
+          groups={filterGroups}
+          subprojects={{ checked: filters.includeSubprojects, disabled: selectedProject === "", onChange: (checked) => setFilters({ includeSubprojects: checked }) }}
+          canReset={customFilters}
+          onReset={resetFilters}
+        />
+        {missingTodayHint && <span className="board-filters__hint small">{missingTodayHint}</span>}
       </div>
+      <BoardFilterChips chips={chips} onRemove={removeChip} />
 
       {board.errors.length > 0 && (
         <p className="error small">
@@ -1228,7 +1324,14 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
             >
               <header className="board-col__head">
                 <h3>{BOARD_STATUS_LABEL[status]}</h3>
-                <span className="pill__count">{columns[status].length}</span>
+                <span className="board-col__tools">
+                  {status === "done" && (
+                    <button className="bf__link" title="Hide the Done column. Bring it back in Filters." onClick={() => setHideDone(true)}>
+                      Hide
+                    </button>
+                  )}
+                  <span className="pill__count">{columns[status].length}</span>
+                </span>
               </header>
               <div className="board-col__body">
                 {(status === "done" ? doneView.tasks : columns[status]).map((task) => (
@@ -1244,10 +1347,19 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
                   />
                 ))}
                 {columns[status].length === 0 && <p className="board-col__empty muted small">Drop a task here</p>}
-                {status === "done" && doneView.hidden > 0 && (
-                  <button className="act board-more" onClick={() => setDoneShown((current) => current + DONE_SECTION_PAGE)}>
-                    Show more ({doneView.hidden})
-                  </button>
+                {status === "done" && (doneView.hidden > 0 || canShowFewerDone(doneShown)) && (
+                  <div className="board-more-row">
+                    {doneView.hidden > 0 && (
+                      <button className="act board-more" onClick={() => setDoneShown((current) => current + DONE_SECTION_PAGE)}>
+                        Show more ({doneView.hidden})
+                      </button>
+                    )}
+                    {canShowFewerDone(doneShown) && (
+                      <button className="act act--ghost board-more" onClick={() => setDoneShown(DONE_SECTION_PAGE)}>
+                        Show less
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             </section>
@@ -1256,53 +1368,97 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
       )}
 
       {projects.length > 0 && view === "table" && visible.length > 0 && (
-        <div className="board-table-wrap">
-          <table className="board-table">
-            <thead>
-              <tr>
-                <SortHeader label="Pri" sortKey="priority" sort={prefs.tableSort} onSort={sortTable} />
-                <SortHeader label="Status" sortKey="status" sort={prefs.tableSort} onSort={sortTable} />
-                <th>Start</th>
-                <SortHeader label="Due" sortKey="due" sort={prefs.tableSort} onSort={sortTable} />
-                <SortHeader label="Task" sortKey="title" sort={prefs.tableSort} onSort={sortTable} />
-                <th>Reason</th>
-                <th>Subtasks</th>
-                <th>Today</th>
-                <th aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {tableGroups.map((group) => {
-                const collapsed = collapsedGroups.has(group.project.id);
-                const label = breadcrumbs.get(group.project.id) ?? group.project.title;
-                return (
-                  <Fragment key={group.project.id}>
-                    <tr className="board-group">
-                      <td colSpan={TABLE_COLUMNS}>
-                        <button
-                          className={`board-group__toggle ${collapsed ? "" : "board-group__toggle--open"}`}
-                          aria-expanded={!collapsed}
-                          title={label}
-                          onClick={() => toggleGroup(group.project.id)}
-                        >
-                          <IconChevron />
-                          <span className="board-group__name">{label}</span>
-                          <span className="pill__count">{group.tasks.length}</span>
-                        </button>
-                      </td>
-                    </tr>
-                    {!collapsed && group.tasks.map((task) => <BoardRow key={task.id} {...detailProps(task)} />)}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-          {tableView.hidden > 0 && (
-            <button className="act board-more" onClick={() => setDoneShown((current) => current + DONE_SECTION_PAGE)}>
-              Show more done tasks ({tableView.hidden})
-            </button>
+        <>
+          {picked.length > 0 && (
+            <BoardBulkBar
+              count={picked.length}
+              busy={bulkBusy}
+              levels={levels}
+              projects={moveTargetProjects(projects, "")}
+              onStatus={(status) => void runBulkAction({ kind: "status", status })}
+              onPriority={(priority) => void runBulkAction({ kind: "priority", priority })}
+              onMove={(projectId) => void runBulkAction({ kind: "move", projectId })}
+              onArchive={() => setArchiveAsk(true)}
+              onClear={() => setSelected(new Set())}
+            />
           )}
-        </div>
+          <div className="board-table-wrap">
+            <table className="board-table">
+              <thead>
+                <tr>
+                  <th className="board-table__select">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all tasks"
+                      checked={allState === "all"}
+                      ref={(element) => {
+                        if (element) element.indeterminate = allState === "some";
+                      }}
+                      disabled={bulkBusy || rowTasks.length === 0}
+                      onChange={() => setSelected((current) => toggleSelectAll(rowTasks, current))}
+                    />
+                  </th>
+                  <SortHeader label="Pri" sortKey="priority" sort={prefs.tableSort} onSort={sortTable} />
+                  <SortHeader label="Status" sortKey="status" sort={prefs.tableSort} onSort={sortTable} />
+                  <th>Start</th>
+                  <SortHeader label="Due" sortKey="due" sort={prefs.tableSort} onSort={sortTable} />
+                  <SortHeader label="Task" sortKey="title" sort={prefs.tableSort} onSort={sortTable} />
+                  <th>Reason</th>
+                  <th>Subtasks</th>
+                  <th>Today</th>
+                  <th aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {tableGroups.map((group) => {
+                  const collapsed = collapsedGroups.has(group.project.id);
+                  const label = breadcrumbs.get(group.project.id) ?? group.project.title;
+                  return (
+                    <Fragment key={group.project.id}>
+                      <tr className="board-group">
+                        <td colSpan={TABLE_COLUMNS}>
+                          <button
+                            className={`board-group__toggle ${collapsed ? "" : "board-group__toggle--open"}`}
+                            aria-expanded={!collapsed}
+                            title={label}
+                            onClick={() => toggleGroup(group.project.id)}
+                          >
+                            <IconChevron />
+                            <span className="board-group__name">{label}</span>
+                            <span className="pill__count">{group.tasks.length}</span>
+                          </button>
+                        </td>
+                      </tr>
+                      {!collapsed &&
+                        group.tasks.map((task) => (
+                          <BoardRow
+                            key={task.id}
+                            {...detailProps(task)}
+                            selected={selected.has(task.id)}
+                            onSelect={() => setSelected((current) => toggleSelected(current, task.id))}
+                          />
+                        ))}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+            {(tableView.hidden > 0 || canShowFewerDone(doneShown)) && (
+              <div className="board-more-row">
+                {tableView.hidden > 0 && (
+                  <button className="act board-more" onClick={() => setDoneShown((current) => current + DONE_SECTION_PAGE)}>
+                    Show more done tasks ({tableView.hidden})
+                  </button>
+                )}
+                {canShowFewerDone(doneShown) && (
+                  <button className="act act--ghost board-more" onClick={() => setDoneShown(DONE_SECTION_PAGE)}>
+                    Show less
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {projects.length > 0 && view === "timeline" && visible.length > 0 && (
@@ -1322,10 +1478,19 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
             onToggleUndated={() => setUndatedOpen((open) => !open)}
             onOpen={(item) => setDrawerId(item.id)}
           />
-          {timelineView.hidden > 0 && (
-            <button className="act board-more" onClick={() => setDoneShown((current) => current + DONE_SECTION_PAGE)}>
-              Show more done tasks ({timelineView.hidden})
-            </button>
+          {(timelineView.hidden > 0 || canShowFewerDone(doneShown)) && (
+            <div className="board-more-row">
+              {timelineView.hidden > 0 && (
+                <button className="act board-more" onClick={() => setDoneShown((current) => current + DONE_SECTION_PAGE)}>
+                  Show more done tasks ({timelineView.hidden})
+                </button>
+              )}
+              {canShowFewerDone(doneShown) && (
+                <button className="act act--ghost board-more" onClick={() => setDoneShown(DONE_SECTION_PAGE)}>
+                  Show less
+                </button>
+              )}
+            </div>
           )}
         </>
       )}
@@ -1360,6 +1525,20 @@ export function BoardView({ workspaces, settings, subscribeBoard, subscribeDaily
           onOpenObsidian={openInObsidian}
           onOpenEditor={openInEditor}
           onClose={() => setDrawerId(null)}
+        />
+      )}
+
+      {archiveAsk && (
+        <ConfirmDialog
+          title={`Archive ${picked.length} ${picked.length === 1 ? "task" : "tasks"}?`}
+          body="The tasks get the archived mark in their project notes and leave the working columns. You can move them back to another status later."
+          confirmLabel="Archive"
+          danger
+          onCancel={() => setArchiveAsk(false)}
+          onConfirm={() => {
+            setArchiveAsk(false);
+            void runBulkAction({ kind: "archive" });
+          }}
         />
       )}
 

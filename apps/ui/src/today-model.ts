@@ -319,6 +319,49 @@ export function pickerTasks(tasks: readonly BoardTask[], projects: readonly Boar
   return { items: matches.slice(0, limit), total: matches.length };
 }
 
+export const RECENT_DONE_DAYS = 7;
+
+export function recentlyDoneTasks(
+  tasks: readonly BoardTask[],
+  projects: readonly BoardProject[],
+  query: string,
+  today: string,
+  limit: number = PICKER_LIMIT,
+): { items: PickerTask[]; total: number } {
+  const titles = new Map(projects.map((project) => [project.id, project.title]));
+  const words = query.trim().toLowerCase().split(/\s+/).filter((word) => word !== "");
+  const since = addDays(today, -RECENT_DONE_DAYS);
+  const matches: PickerTask[] = [];
+  for (const candidate of flattenBoardTasks(tasks)) {
+    if (candidate.status !== "done" || candidate.doneAt === null || candidate.doneAt < since) continue;
+    const projectTitle = titles.get(candidate.projectId) ?? candidate.projectId;
+    const haystack = `${candidate.title} ${projectTitle}`.toLowerCase();
+    if (words.every((word) => haystack.includes(word))) matches.push({ task: candidate, projectTitle });
+  }
+  matches.sort((a, b) => (a.task.doneAt === b.task.doneAt ? a.task.line - b.task.line : (a.task.doneAt ?? "") < (b.task.doneAt ?? "") ? 1 : -1));
+  return { items: matches.slice(0, limit), total: matches.length };
+}
+
+export function focusFact(scheduled: string | null | undefined, today: string): string | null {
+  if (scheduled === null || scheduled === undefined || scheduled === "") return null;
+  return scheduled === today ? "In today's focus" : `Scheduled ${scheduled}`;
+}
+
+export function siblingsAfter(tasks: readonly BoardTask[], id: string): number {
+  const anchor = findBoardTask([...tasks], id);
+  if (anchor === null) return 0;
+  const parent = parentOfTask(tasks, id);
+  if (parent !== null) return parent.subtasks.filter((task) => task.line > anchor.line).length + parent.noteItems.filter((note) => note.line > anchor.line).length;
+  return tasks.filter((task) => task.projectId === anchor.projectId && task.section === anchor.section && task.group === anchor.group && task.line > anchor.line).length;
+}
+
+export function stepsBelowAnchor(tasks: readonly BoardTask[], anchorId: string, created: Pick<BoardTask, "group">): number {
+  const anchor = findBoardTask([...tasks], anchorId);
+  if (anchor === null) return 0;
+  if (parentOfTask(tasks, anchorId) === null && created.group !== anchor.group) return 0;
+  return siblingsAfter(tasks, anchorId);
+}
+
 export const START_DAY_EVENT = "cchub:daily-start-day";
 
 export const planDraftKey = (date: string): string => `hub.daily.plan.${date}`;

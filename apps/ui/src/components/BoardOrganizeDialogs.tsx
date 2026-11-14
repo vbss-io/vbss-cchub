@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { parentCandidateLabel, parentCandidates, type BoardProjectOption, type ParentCandidate } from "../board-model";
 import type { BoardTask } from "../delegation";
 import { BoardPriorityBadge } from "./BoardParts";
+import "../board-drawer.css";
 
 function useEscape(onCancel: () => void, busy: boolean): void {
   useEffect(() => {
@@ -110,18 +111,23 @@ export function BoardMoveProjectDialog({ task, projects, tasks, busy, onCancel, 
               ))}
             </select>
           </label>
-          <label className="field">
-            <span>Place under</span>
-            <select className="in" aria-label="Parent task in the target project" value={parentId} disabled={busy || targetId === ""} onChange={(event) => setParentId(event.target.value)}>
-              <option value="">Top level</option>
-              {candidates.map((candidate) => (
-                <option key={candidate.task.id} value={candidate.task.id}>
-                  {parentCandidateLabel(candidate)}
-                </option>
-              ))}
-            </select>
-            <small>The task keeps its notes and subtasks.</small>
-          </label>
+          <details className="more-options">
+            <summary className="more-options__summary">More options</summary>
+            <div className="more-options__body">
+              <label className="field">
+                <span>Place under</span>
+                <select className="in" aria-label="Parent task in the target project" value={parentId} disabled={busy || targetId === ""} onChange={(event) => setParentId(event.target.value)}>
+                  <option value="">Top level</option>
+                  {candidates.map((candidate) => (
+                    <option key={candidate.task.id} value={candidate.task.id}>
+                      {parentCandidateLabel(candidate)}
+                    </option>
+                  ))}
+                </select>
+                <small>The task keeps its notes and subtasks.</small>
+              </label>
+            </div>
+          </details>
         </div>
         <footer className="modal__footer">
           <button className="act act--ghost" disabled={busy} onClick={onCancel}>
