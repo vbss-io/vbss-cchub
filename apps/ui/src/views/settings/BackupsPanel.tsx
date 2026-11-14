@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { BackupsUnavailableError, createBackup, getBackups } from "../delegation";
-import type { BackupReason, BackupsOverview } from "../delegation";
+import { BackupsUnavailableError, createBackup, getBackups } from "../../delegation";
+import type { BackupReason, BackupsOverview } from "../../delegation";
 
 const REASON_LABEL: Record<BackupReason, string> = {
   upgrade: "Upgrade",

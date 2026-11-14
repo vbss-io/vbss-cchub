@@ -29,6 +29,7 @@ import { TodayView } from "./views/TodayView";
 import { FlowView } from "./views/FlowView";
 import { ReportsView } from "./views/ReportsView";
 import { SessionsView } from "./views/SessionsView";
+import { settingsTabs } from "./settings-sections";
 import { SettingsView, type NotifSettings, type SettingsSection, type ThemeName } from "./views/SettingsView";
 import { ShareView } from "./views/ShareView";
 import { TasksView } from "./views/TasksView";
@@ -47,7 +48,7 @@ interface Route {
   param: string | null;
 }
 
-const SETTINGS_HEAD = { label: "Settings", subtitle: "Paths, hooks, connections, notifications, groups" };
+const SETTINGS_HEAD = { label: "Settings", subtitle: "Plugins, appearance, connections, notifications and more" };
 
 const LIMITS_REFRESH_MS = 300_000;
 
@@ -899,7 +900,7 @@ export function App() {
         themeHint: theme === "midnight" ? "Switch to Dracula" : "Switch to Midnight",
         installHooks: () => navigate("settings", "hooks"),
       }),
-      ...buildViewItems(views, (view, param) => navigate(view as View, param)),
+      ...buildViewItems(views, (view, param) => navigate(view as View, param), settingsTabs(features)),
       ...buildSessionItems(Object.values(sessions), codexSessions, workspaces, {
         classify: (session) => {
           if (session.archivedAt != null || session.helperOf || isHubRun(session.client) || isEmpty(session)) return null;
@@ -1041,7 +1042,7 @@ export function App() {
                 settings={settings}
                 subscribeBoard={subscribeBoard}
                 subscribeDaily={subscribeDaily}
-                onOpenSettings={() => navigate("settings", "features")}
+                onOpenSettings={() => navigate("settings", "tasks")}
                 openTaskId={route.param}
                 onOpenTaskHandled={consumeBoardParam}
                 onDelegated={(taskId, title) => pushToast("ok", `Delegated "${title}".`, { label: "Open task", run: () => navigate("tasks", taskId) })}

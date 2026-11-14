@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { DailyStreamEvent, TasksBoardStreamEvent } from "../api";
 import { BoardTaskPicker } from "../components/BoardTaskPicker";
 import { DailyTasksCheck } from "../components/DailyTasksCheck";
 import { MarkdownEditor } from "../components/MarkdownEditor";
+import { ResizableSplit } from "../components/ResizableSplit";
 import {
   appendNewItem,
   canOrganizeFocus,
@@ -41,6 +42,7 @@ import {
   type DelegationSettings,
 } from "../delegation";
 import { IconClose } from "../icons";
+import { useLayoutSize } from "../use-layout-size";
 import { countTasks, Markdown, renderInline, toggleTaskLine, type TaskFilter } from "../markdown";
 
 interface Props {
@@ -485,6 +487,27 @@ function DailyWizard(props: DailyWizardProps) {
         </div>
       )}
     </div>
+  );
+}
+
+const NOTE_ASIDE_WIDTH = { default: 340, min: 240, max: 560 } as const;
+
+function DailySplit({ main, aside }: { main: ReactNode; aside: ReactNode }) {
+  const [width, setWidth] = useLayoutSize("note", "aside", NOTE_ASIDE_WIDTH.default);
+  return (
+    <ResizableSplit
+      id="note-aside"
+      className="daily-split"
+      side="end"
+      defaultSize={NOTE_ASIDE_WIDTH.default}
+      minSize={NOTE_ASIDE_WIDTH.min}
+      maxSize={NOTE_ASIDE_WIDTH.max}
+      size={width}
+      onSizeChange={setWidth}
+      ariaLabel="Resize note sidebar"
+    >
+      {[main, aside]}
+    </ResizableSplit>
   );
 }
 
@@ -1126,7 +1149,8 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
         </div>
       )}
 
-      <div className="daily">
+      <DailySplit
+        main={
         <div className="panel daily__main">
           {!wizardOpen && conflict && (
             <div className="daily__banner">
@@ -1242,6 +1266,8 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
             </>
           )}
         </div>
+        }
+        aside={
         <div className="daily__aside">
           <div className="panel daily__side">
             <h3>Sessions today</h3>
@@ -1267,7 +1293,8 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
           </div>
           {settings?.features.tasks === true && date && <DailyTasksCheck date={date} onNotice={showNotice} subscribeDaily={subscribeDaily} subscribeBoard={subscribeBoard} />}
         </div>
-      </div>
+        }
+      />
       {notice && (
         <div className="toasts" aria-live="polite">
           <div className={`toast toast--${notice.kind}`} role="status">

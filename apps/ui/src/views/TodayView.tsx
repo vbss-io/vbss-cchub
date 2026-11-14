@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type ReactNode } from "react";
 import "../today.css";
 import type { DailyStreamEvent, TasksBoardStreamEvent } from "../api";
 import { BacklogPanel } from "../components/BacklogPanel";
@@ -9,7 +9,9 @@ import { BoardNewTaskDialog } from "../components/BoardNewTaskDialog";
 import { BoardMoveProjectDialog, BoardParentPickerDialog } from "../components/BoardOrganizeDialogs";
 import type { BoardNoteActions, BoardTodayControls } from "../components/BoardParts";
 import { FocusOutliner, type OutlineFields } from "../components/FocusOutliner";
+import { ResizableSplit } from "../components/ResizableSplit";
 import { StartDayPanel } from "../components/StartDayPanel";
+import { useLayoutSize } from "../use-layout-size";
 import {
   effectiveProjectOrder,
   findBoardTask,
@@ -147,6 +149,35 @@ const writeStored = (key: string, value: string): void => {
 function readTab(): Tab {
   const stored = readStored(TAB_KEY);
   return stored === "note" ? "note" : "today";
+}
+
+const BACKLOG_WIDTH = { default: 360, min: 260, max: 640 } as const;
+
+function TodayColumns({ split, main, side }: { split: boolean; main: ReactNode; side: ReactNode }) {
+  const [width, setWidth] = useLayoutSize("today", "backlog", BACKLOG_WIDTH.default);
+  if (!split) {
+    return (
+      <div className="today__grid">
+        {main}
+        {side}
+      </div>
+    );
+  }
+  return (
+    <ResizableSplit
+      id="today-backlog"
+      className="today__split"
+      side="end"
+      defaultSize={BACKLOG_WIDTH.default}
+      minSize={BACKLOG_WIDTH.min}
+      maxSize={BACKLOG_WIDTH.max}
+      size={width}
+      onSizeChange={setWidth}
+      ariaLabel="Resize backlog panel"
+    >
+      {[main, side]}
+    </ResizableSplit>
+  );
 }
 
 function useNarrow(): boolean {
@@ -1381,8 +1412,9 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
       {effectiveTab !== "note" && failure === null && data === null && <p className="muted">Loading…</p>}
 
       {effectiveTab !== "note" && data !== null && (
-        <div className={`today__grid ${showMain && showSide ? "today__grid--split" : ""}`}>
-          {showMain && (
+        <TodayColumns
+          split={showMain && showSide}
+          main={showMain ? (
             <div className="today__main">
               {showStart ? (
                 <StartDayPanel
@@ -1623,9 +1655,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                 )}
               </details>
             </div>
-          )}
-
-          {showSide && (
+          ) : null}
+          side={showSide ? (
             <aside className="today__side">
               <BacklogPanel
                 tasks={boardTasks}
@@ -1646,8 +1677,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                 }}
               />
             </aside>
-          )}
-        </div>
+          ) : null}
+        />
       )}
 
       {drawerTask && board && (

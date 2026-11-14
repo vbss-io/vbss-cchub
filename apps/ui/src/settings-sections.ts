@@ -1,16 +1,5 @@
-import type { SettingsSection } from "./views/SettingsView";
+import { pluginSettingsTabs } from "./plugins/registry";
+import type { FeatureFlags } from "./plugins/types";
+import { buildSettingsTabs, type SettingsTabEntry } from "./settings-model";
 
-export const SETTINGS_SECTIONS: { key: SettingsSection; label: string }[] = [
-  { key: "support", label: "Support" },
-  { key: "general", label: "General" },
-  { key: "appearance", label: "Appearance" },
-  { key: "paths", label: "Paths" },
-  { key: "hooks", label: "Hooks" },
-  { key: "connect", label: "Connections" },
-  { key: "sharing", label: "Sharing" },
-  { key: "features", label: "Features" },
-  { key: "widget", label: "Widget" },
-  { key: "notifications", label: "Notifications" },
-  { key: "groups", label: "Groups" },
-  { key: "about", label: "About" },
-];
+export const settingsTabs = (features: FeatureFlags): SettingsTabEntry[] => buildSettingsTabs(pluginSettingsTabs(features));

@@ -1459,7 +1459,7 @@ h3 {
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(560px, 100%);
+  width: min(var(--drawer-w, 560px), 100%);
   background: var(--panel);
   border-left: 1px solid var(--border);
   box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
@@ -3495,7 +3495,7 @@ pre,
 }
 
 .shell--panel {
-  grid-template-columns: var(--nav-w) minmax(0, 1fr) min(560px, 42vw);
+  grid-template-columns: var(--nav-w) minmax(0, 1fr) minmax(0, min(var(--drawer-w, min(560px, 42vw)), calc(100vw - var(--nav-w) - 240px)));
 }
 
 .shell--panel .drawer {
@@ -3556,7 +3556,7 @@ pre,
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(560px, 100%);
+    width: min(var(--drawer-w, 560px), 100%);
     height: auto;
     box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
     z-index: 50;

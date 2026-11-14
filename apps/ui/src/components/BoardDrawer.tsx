@@ -20,6 +20,8 @@ import {
   type BoardNoteActions,
   type BoardTodayControls,
 } from "./BoardParts";
+import { useDrawerWidth, DRAWER_WIDTH } from "../use-layout-size";
+import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 
 export interface BoardOrganizeActions {
   onMove: (task: BoardTask, direction: MoveDirection) => void;
@@ -200,6 +202,7 @@ interface Props {
 export function BoardDrawer(props: Props) {
   const { task, tasks, project, breadcrumb, pending, organizing, suspended, inToday, addState, onClose } = props;
   const [full, setFull] = useState(false);
+  const drawerWidth = useDrawerWidth("task", full);
   const [editing, setEditing] = useState(false);
   const panelRef = useRef<HTMLElement | null>(null);
   const opener = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -259,7 +262,7 @@ export function BoardDrawer(props: Props) {
   return (
     <>
       {full && <div className="drawer__backdrop" onClick={() => setFull(false)} />}
-      <aside ref={panelRef} tabIndex={-1} className={`drawer board-drawer ${full ? "drawer--full" : ""}`} role="dialog" aria-label={`Details of ${task.title}`}>
+      <aside ref={panelRef} tabIndex={-1} className={`drawer board-drawer ${full ? "drawer--full" : ""}`} style={drawerWidth.style} role="dialog" aria-label={`Details of ${task.title}`}>
         <header className="drawer__header board-drawer__header">
           <div className="drawer__title">
             <div className="drawer__name">
@@ -387,6 +390,16 @@ export function BoardDrawer(props: Props) {
             </div>
           )}
         </div>
+        {drawerWidth.resizable && (
+          <ResizableDrawerEdge
+            width={drawerWidth.width}
+            minWidth={DRAWER_WIDTH.min}
+            maxWidth={drawerWidth.maxWidth}
+            defaultWidth={DRAWER_WIDTH.default}
+            onWidthChange={drawerWidth.setWidth}
+            ariaLabel="Resize task panel"
+          />
+        )}
       </aside>
     </>
   );

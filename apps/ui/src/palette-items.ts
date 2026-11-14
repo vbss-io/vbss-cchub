@@ -1,7 +1,8 @@
 import type { BoardProject, BoardTask, WorkspaceRecord } from "./delegation";
 import type { PaletteItem } from "./palette-model";
 import type { CodexSessionRecord, SessionRecord } from "./types";
-import { SETTINGS_SECTIONS } from "./settings-sections";
+import { SETTINGS_TAB_KEYWORDS, type SettingsTabEntry } from "./settings-model";
+import { settingsTabs } from "./settings-sections";
 import { shortFolder, workspaceOf } from "./wsmatch";
 
 export const PALETTE_SESSION_CAP = 80;
@@ -14,7 +15,7 @@ export interface PaletteViewSource {
   enabled: boolean;
 }
 
-export const buildViewItems = (views: PaletteViewSource[], go: (view: string, param?: string | null) => void): PaletteItem[] => {
+export const buildViewItems = (views: PaletteViewSource[], go: (view: string, param?: string | null) => void, tabs: SettingsTabEntry[] = settingsTabs(null)): PaletteItem[] => {
   const items: PaletteItem[] = [];
   for (const view of views) {
     if (!view.enabled) continue;
@@ -27,13 +28,13 @@ export const buildViewItems = (views: PaletteViewSource[], go: (view: string, pa
       run: () => go(view.key),
     });
   }
-  for (const section of SETTINGS_SECTIONS) {
+  for (const tab of tabs) {
     items.push({
-      id: `settings:${section.key}`,
+      id: `settings:${tab.key}`,
       kind: "view",
-      title: `Settings › ${section.label}`,
-      keywords: ["settings", "preferences", "options", section.label],
-      run: () => go("settings", section.key),
+      title: `Settings › ${tab.label}`,
+      keywords: ["settings", "preferences", "options", tab.label, ...(SETTINGS_TAB_KEYWORDS[tab.key] ?? [])],
+      run: () => go("settings", tab.key),
     });
   }
   return items;
@@ -179,7 +180,7 @@ export const buildCommandItems = (actions: CommandActions): PaletteItem[] => {
   items.push({ id: "command:backup-now", kind: "command", title: "Back up now", subtitle: "Hub data", keywords: ["backup", "snapshot", "save"], run: actions.backupNow });
   items.push({ id: "command:toggle-theme", kind: "command", title: "Toggle theme", subtitle: actions.themeHint, keywords: ["dark", "midnight", "dracula", "appearance", "color"], run: actions.toggleTheme });
   if (actions.toggleWidget) items.push({ id: "command:toggle-widget", kind: "command", title: "Show/hide widget", subtitle: "Desktop", keywords: ["tray", "overlay"], run: actions.toggleWidget });
-  items.push({ id: "command:install-hooks", kind: "command", title: "Install hooks…", subtitle: "Opens Settings › Hooks", keywords: ["hooks", "claude", "setup", "settings"], run: actions.installHooks });
+  items.push({ id: "command:install-hooks", kind: "command", title: "Install hooks…", subtitle: "Opens Settings › Connections", keywords: ["hooks", "claude", "setup", "settings"], run: actions.installHooks });
   return items;
 };
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { BoardProject, BoardTask, WorkspaceRecord } from "./delegation";
 import { buildCaptureItems, buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, CAPTURE_PREFILL, PALETTE_SESSION_CAP, parseCaptureQuery, type SessionActions } from "./palette-items";
-import { SETTINGS_SECTIONS } from "./settings-sections";
+import { settingsTabs } from "./settings-sections";
 import type { CodexSessionRecord, SessionRecord } from "./types";
 
 const ids = (items: { id: string }[]) => items.map((entry) => entry.id);
@@ -84,21 +84,44 @@ describe("buildViewItems", () => {
     { key: "settings", label: "Settings", subtitle: "cfg", enabled: true },
   ];
 
-  it("skips disabled views and lists every settings section", () => {
-    const items = buildViewItems(views, () => undefined);
+  it("skips disabled views and lists a settings item per tab", () => {
+    const tabs = settingsTabs({ daily: true, trail: false, usage: false, limits: false, tasks: false, share: false, widget: false });
+    const items = buildViewItems(views, () => undefined, tabs);
     assert.deepEqual(ids(items).slice(0, 2), ["view:sessions", "view:settings"]);
-    assert.equal(items.filter((entry) => entry.id.startsWith("settings:")).length, SETTINGS_SECTIONS.length);
+    assert.deepEqual(
+      ids(items).filter((id) => id.startsWith("settings:")),
+      ["settings:general", "settings:appearance", "settings:plugins", "settings:today", "settings:connections", "settings:notifications", "settings:groups", "settings:about"],
+    );
     assert.equal(items.every((entry) => entry.kind === "view"), true);
   });
 
-  it("navigates with the view key and the settings section", () => {
+  it("titles each settings item with its tab and keeps the old section names searchable", () => {
+    const items = buildViewItems(views, () => undefined, settingsTabs(null));
+    assert.equal(items.find((entry) => entry.id === "settings:connections")?.title, "Settings › Connections");
+    assert.equal(items.find((entry) => entry.id === "settings:connections")?.keywords?.includes("hooks"), true);
+    assert.equal(items.find((entry) => entry.id === "settings:general")?.keywords?.includes("paths"), true);
+    assert.equal(items.find((entry) => entry.id === "settings:about")?.keywords?.includes("support"), true);
+  });
+
+  it("only offers plugin tabs of enabled plugins", () => {
+    const off = ids(buildViewItems(views, () => undefined, settingsTabs({ daily: false, trail: false, usage: false, limits: false, tasks: false, share: false, widget: false })));
+    assert.equal(off.includes("settings:today"), false);
+    assert.equal(off.includes("settings:sharing"), false);
+    const on = ids(buildViewItems(views, () => undefined, settingsTabs({ daily: true, trail: true, usage: true, limits: true, tasks: true })));
+    assert.deepEqual(
+      on.filter((id) => id.startsWith("settings:")).slice(3, 9),
+      ["settings:today", "settings:tasks", "settings:usage", "settings:sharing", "settings:trail", "settings:widget"],
+    );
+  });
+
+  it("navigates with the view key and the settings tab", () => {
     const calls: [string, string | null | undefined][] = [];
-    const items = buildViewItems(views, (view, param) => calls.push([view, param]));
+    const items = buildViewItems(views, (view, param) => calls.push([view, param]), settingsTabs(null));
     items.find((entry) => entry.id === "view:sessions")?.run();
-    items.find((entry) => entry.id === "settings:hooks")?.run();
+    items.find((entry) => entry.id === "settings:connections")?.run();
     assert.deepEqual(calls, [
       ["sessions", undefined],
-      ["settings", "hooks"],
+      ["settings", "connections"],
     ]);
   });
 });

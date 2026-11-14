@@ -5,6 +5,8 @@ import { IconClose, IconExpand } from "../icons";
 import { relativeTime } from "../time";
 import type { CodexSessionRecord, TranscriptEntry } from "../types";
 import { Timeline } from "./SessionDrawer";
+import { useDrawerWidth, DRAWER_WIDTH } from "../use-layout-size";
+import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 
 interface Props {
   thread: CodexSessionRecord;
@@ -77,6 +79,7 @@ export function CodexDrawer({ thread, workspace, onClose, onOpenTask }: Props) {
   }, [detail]);
 
   const [full, setFull] = useState(false);
+  const drawerWidth = useDrawerWidth("codex", full, true);
   const panelRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -104,7 +107,7 @@ export function CodexDrawer({ thread, workspace, onClose, onOpenTask }: Props) {
   return (
     <>
       {full && <div className="drawer__backdrop" onClick={() => setFull(false)} />}
-      <aside ref={panelRef} className={`drawer ${full ? "drawer--full" : ""}`} role="dialog" aria-label={name}>
+      <aside ref={panelRef} className={`drawer ${full ? "drawer--full" : ""}`} style={drawerWidth.style} role="dialog" aria-label={name}>
         <header className="drawer__header">
           <div className="drawer__title">
             <div className="drawer__name">
@@ -199,6 +202,16 @@ export function CodexDrawer({ thread, workspace, onClose, onOpenTask }: Props) {
             </dl>
           )}
         </div>
+        {drawerWidth.resizable && (
+          <ResizableDrawerEdge
+            width={drawerWidth.width}
+            minWidth={DRAWER_WIDTH.min}
+            maxWidth={drawerWidth.maxWidth}
+            defaultWidth={DRAWER_WIDTH.default}
+            onWidthChange={drawerWidth.setWidth}
+            ariaLabel="Resize Codex panel"
+          />
+        )}
       </aside>
     </>
   );

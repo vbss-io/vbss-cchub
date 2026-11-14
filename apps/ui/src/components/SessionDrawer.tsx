@@ -9,6 +9,8 @@ import { prettyModel } from "./SessionCard";
 import { Markdown } from "../markdown";
 import { listTasksByOrigin, type TaskRecord } from "../delegation";
 import { TASK_STATUS_LABEL } from "./TaskCard";
+import { useDrawerWidth, DRAWER_WIDTH } from "../use-layout-size";
+import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 
 interface Props {
   session: SessionRecord;
@@ -169,6 +171,7 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
   }, [detail]);
 
   const [full, setFull] = useState(false);
+  const drawerWidth = useDrawerWidth("session", full, true);
   const panelRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -203,7 +206,7 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
   return (
     <>
     {full && <div className="drawer__backdrop" onClick={() => setFull(false)} />}
-    <aside ref={panelRef} className={`drawer ${full ? "drawer--full" : ""}`} role="dialog" aria-label={name}>
+    <aside ref={panelRef} className={`drawer ${full ? "drawer--full" : ""}`} style={drawerWidth.style} role="dialog" aria-label={name}>
       <header className="drawer__header">
         <div className="drawer__title">
           <div className="drawer__name">
@@ -419,6 +422,16 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
           </dl>
         )}
       </div>
+      {drawerWidth.resizable && (
+        <ResizableDrawerEdge
+          width={drawerWidth.width}
+          minWidth={DRAWER_WIDTH.min}
+          maxWidth={drawerWidth.maxWidth}
+          defaultWidth={DRAWER_WIDTH.default}
+          onWidthChange={drawerWidth.setWidth}
+          ariaLabel="Resize session panel"
+        />
+      )}
     </aside>
     </>
   );
