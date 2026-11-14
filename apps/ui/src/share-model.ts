@@ -113,10 +113,11 @@ export interface ReachMenuEntry {
   label: string;
 }
 
+export const tunnelIsUp = (tunnel: TunnelStatus | null): boolean =>
+  tunnel?.state === "running" || tunnel?.state === "installing" || tunnel?.state === "starting";
+
 export const reachMenuEntries = (tunnel: TunnelStatus | null, firewall: FirewallStatus | null): ReachMenuEntry[] => {
-  const on = tunnel?.state === "running";
-  const coming = tunnel?.state === "installing" || tunnel?.state === "starting";
-  const entries: ReachMenuEntry[] = [{ key: "tunnel", label: on || coming ? "Stop tunnel" : "Start tunnel" }];
+  const entries: ReachMenuEntry[] = [{ key: "tunnel", label: tunnelIsUp(tunnel) ? "Stop tunnel" : "Start tunnel" }];
   if (firewall?.supported && firewall.allowed === false) entries.push({ key: "firewall", label: "Allow LAN (admin)" });
   entries.push({ key: "settings", label: "Settings › Sharing" });
   return entries;

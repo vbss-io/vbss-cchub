@@ -1265,7 +1265,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   if (!enabled) {
     return (
       <div className="view">
-        <p className="hint">Today is off. Turn on Daily in Settings › Features to keep a diary entry for each day in your second brain.</p>
+        <p className="hint">Today is off. Turn on Daily in Settings › Plugins to keep a diary entry for each day in your second brain.</p>
       </div>
     );
   }
@@ -1393,7 +1393,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
       {data !== null && data.focusSource === "list" && (
         <p className="hint">Focus follows the list in the note (daily.focusSource is list), so scheduling does not change it.</p>
       )}
-      {!tasksEnabled && <p className="hint">Turn on Tasks in Settings › Features to schedule project tasks into the day.</p>}
+      {!tasksEnabled && <p className="hint">Turn on Tasks in Settings › Plugins to schedule project tasks into the day.</p>}
 
       <div className="today__note" hidden={effectiveTab !== "note"}>
         <DailyView

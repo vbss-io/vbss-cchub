@@ -122,6 +122,11 @@ export function ShareCard({ share, selected, files, onSelect, onCopy, onManage }
           <button className="act act--focus" disabled={!share.active} onClick={(event) => { stop(event); onCopy(link.url, `${link.kind} link`); }}>
             <IconCopy /> Copy link
           </button>
+          {!revealed && (
+            <code className="sharecard__mask" title={`${link.kind} link, key hidden`}>
+              {maskLink(link.url)}
+            </code>
+          )}
         </div>
       </div>
     </article>

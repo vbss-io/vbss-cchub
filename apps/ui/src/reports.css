@@ -2,16 +2,25 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 10px 12px;
+}
+
+.rep-bar .filters {
+  flex: 0 0 auto;
 }
 
 .rep-bar__right {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
   gap: 8px;
   min-width: 0;
+}
+
+.rep-bar__right > .toggletip {
+  flex-shrink: 0;
 }
 
 .rep-bar__ws {
@@ -95,8 +104,13 @@
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 899px) {
+  .rep-bar {
+    flex-wrap: wrap;
+  }
+
   .rep-bar__right {
+    flex-wrap: wrap;
     width: 100%;
   }
 

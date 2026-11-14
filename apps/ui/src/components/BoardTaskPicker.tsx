@@ -51,7 +51,7 @@ export function BoardTaskPicker({ newItemsText, carriedItems, wikilinks, onPick,
         <div className="board-picker__panel">
           {error && <span className="error small">{error}</span>}
           {!error && !board && <p className="muted small">Loading…</p>}
-          {board && !board.configured && <p className="muted small">The Tasks folder is not set up yet. Check Settings › Features › Tasks.</p>}
+          {board && !board.configured && <p className="muted small">The Tasks folder is not set up yet. Check Settings › Plugins › Tasks.</p>}
           {board && board.configured && (
             <>
               <select

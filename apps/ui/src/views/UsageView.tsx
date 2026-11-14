@@ -260,7 +260,9 @@ function LimitsPanel({ enabled, limits, error, now, refreshedAt }: LimitsPanelPr
     return (
       <section className="panel">
         <h3>Plan limits</h3>
-        <p className="hint">Turn on Limits in Settings › Features to see how much of your plan is left</p>
+        <p className="hint">
+          Turn on Limits in <a href="#/settings/plugins">Settings › Plugins</a> to see how much of your plan is left
+        </p>
       </section>
     );
   }
@@ -750,7 +752,7 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
     {
       id: "refresh-limits",
       label: limitsBusy ? "Refreshing..." : "Refresh plan limits",
-      title: limitsEnabled ? "Fetch the plan limits again" : "Turn on Limits in Settings › Features first",
+      title: limitsEnabled ? "Fetch the plan limits again" : "Turn on Limits in Settings › Plugins first",
       disabled: limitsBusy || !limitsEnabled || limits === null,
       onSelect: () => void refresh(),
     },

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { FirewallStatus, ShareState, TunnelStatus } from "./delegation";
-import { activitySummary, filterShares, isShareFilter, reachItems, reachMenuEntries, reachProblems, shareCounts, shareMenuEntries } from "./share-model";
+import { activitySummary, filterShares, isShareFilter, reachItems, reachMenuEntries, reachProblems, shareCounts, shareMenuEntries, tunnelIsUp } from "./share-model";
 
 const share = (label: string, state: ShareState, workspace = "preview", repo: string | null = null) => ({ label, state, workspace, repo });
 
@@ -145,11 +145,33 @@ describe("reachItems", () => {
   });
 });
 
+describe("tunnelIsUp", () => {
+  it("is true while the tunnel is running, installing or starting", () => {
+    assert.equal(tunnelIsUp(tunnel({ state: "running" })), true);
+    assert.equal(tunnelIsUp(tunnel({ state: "installing" })), true);
+    assert.equal(tunnelIsUp(tunnel({ state: "starting" })), true);
+  });
+
+  it("is false when stopped, failed or unknown", () => {
+    assert.equal(tunnelIsUp(tunnel({ state: "stopped" })), false);
+    assert.equal(tunnelIsUp(tunnel({ state: "error", error: "boom" })), false);
+    assert.equal(tunnelIsUp(null), false);
+  });
+
+  it("agrees with the menu label for every tunnel state", () => {
+    for (const state of ["stopped", "installing", "starting", "running", "error"] as const) {
+      const label = reachMenuEntries(tunnel({ state }), firewall())[0]?.label;
+      assert.equal(label, tunnelIsUp(tunnel({ state })) ? "Stop tunnel" : "Start tunnel");
+    }
+  });
+});
+
 describe("reachMenuEntries", () => {
   it("offers start tunnel, then stop tunnel once it is up or coming up", () => {
     assert.equal(reachMenuEntries(tunnel(), firewall())[0]?.label, "Start tunnel");
     assert.equal(reachMenuEntries(tunnel({ state: "running" }), firewall())[0]?.label, "Stop tunnel");
     assert.equal(reachMenuEntries(tunnel({ state: "starting" }), firewall())[0]?.label, "Stop tunnel");
+    assert.equal(reachMenuEntries(tunnel({ state: "installing" }), firewall())[0]?.label, "Stop tunnel");
   });
 
   it("adds Allow LAN only when the firewall blocks", () => {

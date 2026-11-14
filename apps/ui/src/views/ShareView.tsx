@@ -34,6 +34,7 @@ import {
   reachProblems,
   SHARE_FILTERS,
   shareCounts,
+  tunnelIsUp,
   type ReachMenuKey,
   type ShareFilter,
 } from "../share-model";
@@ -84,9 +85,15 @@ const saveFilter = (filter: ShareFilter) => {
 };
 
 interface PendingConfirm {
-  kind: "revoke" | "delete";
+  kind: "revoke" | "delete" | "rotate";
   share: ShareRecord;
 }
+
+const PENDING_COPY: Record<PendingConfirm["kind"], { title: (label: string) => string; body: string; confirm: string }> = {
+  revoke: { title: (label) => `Revoke ${label}?`, body: "Stops the link right away. It cannot be undone.", confirm: "Revoke" },
+  delete: { title: (label) => `Delete ${label}?`, body: "Removes the record and its files for good.", confirm: "Delete" },
+  rotate: { title: (label) => `Rotate the key for ${label}?`, body: "Rotate the key? The current link stops working.", confirm: "Rotate key" },
+};
 
 interface Draft {
   label: string;
@@ -493,7 +500,7 @@ export function ShareView(props: Props) {
   const toggleTunnel = async () => {
     setTunnelBusy(true);
     try {
-      const status = tunnel?.state === "running" || tunnel?.state === "starting" ? await stopTunnel() : await startTunnel();
+      const status = tunnelIsUp(tunnel) ? await stopTunnel() : await startTunnel();
       onTunnelChanged(status);
       if (status.state === "error") onError(status.error ?? "tunnel failed");
       else if (status.state === "running") onNotice(`tunnel on: ${status.publicUrl}`);
@@ -576,7 +583,6 @@ export function ShareView(props: Props) {
   const manage = (action: ShareManageAction, share: ShareRecord) => {
     if (action === "pause") void patch(share, { paused: true }, "share paused");
     else if (action === "resume") void patch(share, { paused: false }, "share resumed");
-    else if (action === "rotate") void patch(share, { rotate: true }, "new key generated; the old link no longer works");
     else setPending({ kind: action, share });
   };
 
@@ -729,7 +735,7 @@ export function ShareView(props: Props) {
             share={selected}
             onPause={(item) => void patch(item, { paused: true }, "share paused")}
             onResume={(item) => void patch(item, { paused: false }, "share resumed")}
-            onNewKey={(item) => void patch(item, { rotate: true }, "new key generated; the old link no longer works")}
+            onNewKey={(item) => setPending({ kind: "rotate", share: item })}
             onRevoke={(item) => void patch(item, { revoke: true }, "share revoked")}
             onDelete={(item) => void remove(item)}
           />
@@ -882,15 +888,16 @@ export function ShareView(props: Props) {
 
       {pending && (
         <ConfirmDialog
-          title={pending.kind === "revoke" ? `Revoke ${pending.share.label}?` : `Delete ${pending.share.label}?`}
-          body={pending.kind === "revoke" ? "Stops the link right away. It cannot be undone." : "Removes the record and its files for good."}
-          confirmLabel={pending.kind === "revoke" ? "Revoke" : "Delete"}
+          title={PENDING_COPY[pending.kind].title(pending.share.label)}
+          body={PENDING_COPY[pending.kind].body}
+          confirmLabel={PENDING_COPY[pending.kind].confirm}
           danger
           onCancel={() => setPending(null)}
           onConfirm={() => {
             const target = pending;
             setPending(null);
             if (target.kind === "revoke") void patch(target.share, { revoke: true }, "share revoked");
+            else if (target.kind === "rotate") void patch(target.share, { rotate: true }, "new key generated; the old link no longer works");
             else void remove(target.share);
           }}
         />

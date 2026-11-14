@@ -122,3 +122,18 @@
 .sharecard__meta {
   overflow-wrap: anywhere;
 }
+
+.card--share .card__open {
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 0;
+}
+
+.sharecard__mask {
+  flex: 1 1 200px;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}

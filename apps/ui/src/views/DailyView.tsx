@@ -1016,7 +1016,7 @@ export function DailyView({ settings, onOpenSession, onOpenTask, subscribeDaily,
   if (!enabled) {
     return (
       <div className="view">
-        <p className="hint">Daily is off. Turn it on in Settings › Features to keep a diary entry for each day in your second brain.</p>
+        <p className="hint">Daily is off. Turn it on in Settings › Plugins to keep a diary entry for each day in your second brain.</p>
       </div>
     );
   }
