@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FINISHED_OCCURRENCE_HINT, isSubtask, noteMoveAvailability, orderedChildren, taskMenuEntries, taskMoveAvailability, type MoveDirection } from "../board-model";
 import type { BoardChange, BoardCheckbox, BoardNoteItem, BoardProject, BoardStatus, BoardTask } from "../delegation";
-import { getToday, TodayUnavailableError } from "../delegation";
+import { getSettings } from "../delegation";
 import { IconClose, IconExpand, IconRun } from "../icons";
 import { focusFact, localDay } from "../today-model";
 import { BoardActionsMenu, type BoardMenuItem } from "./BoardActionsMenu";
@@ -30,36 +30,36 @@ type FocusMode = "scheduled" | "list";
 
 const FOCUS_MODE_TTL_MS = 30_000;
 
-let cachedFocusMode: { day: string; mode: FocusMode; at: number } | null = null;
+let cachedFocusMode: { mode: FocusMode; at: number } | null = null;
 
-function freshFocusMode(day: string): FocusMode | null {
-  return cachedFocusMode !== null && cachedFocusMode.day === day && Date.now() - cachedFocusMode.at < FOCUS_MODE_TTL_MS ? cachedFocusMode.mode : null;
+function freshFocusMode(): FocusMode | null {
+  return cachedFocusMode !== null && Date.now() - cachedFocusMode.at < FOCUS_MODE_TTL_MS ? cachedFocusMode.mode : null;
 }
 
-async function loadFocusMode(day: string): Promise<FocusMode> {
-  const known = freshFocusMode(day);
+async function loadFocusMode(): Promise<FocusMode> {
+  const known = freshFocusMode();
   if (known !== null) return known;
   try {
-    const data = await getToday(day);
-    cachedFocusMode = { day, mode: data.focusSource, at: Date.now() };
-    return data.focusSource;
-  } catch (err) {
-    return err instanceof TodayUnavailableError ? "list" : "scheduled";
+    const settings = await getSettings();
+    const mode: FocusMode = settings.daily.focusSource === "list" ? "list" : "scheduled";
+    cachedFocusMode = { mode, at: Date.now() };
+    return mode;
+  } catch {
+    return "scheduled";
   }
 }
 
 function useFocusMode(): FocusMode | null {
-  const day = localDay();
-  const [mode, setMode] = useState<FocusMode | null>(() => freshFocusMode(day));
+  const [mode, setMode] = useState<FocusMode | null>(() => freshFocusMode());
   useEffect(() => {
     let live = true;
-    void loadFocusMode(day).then((next) => {
+    void loadFocusMode().then((next) => {
       if (live) setMode(next);
     });
     return () => {
       live = false;
     };
-  }, [day]);
+  }, []);
   return mode;
 }
 

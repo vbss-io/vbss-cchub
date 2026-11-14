@@ -70,6 +70,7 @@ import {
   decodeDragTarget,
   describeDay,
   entryTaskIds,
+  insertAnchorOf,
   keepDismissed,
   linkTargetOfTask,
   linkTickInput,
@@ -87,7 +88,6 @@ import {
   rootNodeOf,
   START_DAY_EVENT,
   startPanelAuto,
-  stepsBelowAnchor,
   targetOfTask,
   taskOfOutOfSync,
   TODAY_DRAG_MIME,
@@ -1137,20 +1137,16 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
     withRefresh(async () => {
       const parent = parentOfTask(boardTasks, node.id);
       const covered = parent !== null && focusIds.has(parent.id);
-      const created = await createBoardItem({
+      const after = insertAnchorOf(boardTasks, node.id);
+      await createBoardItem({
         projectId: node.projectId,
         title,
         ...(fields.priority !== undefined && fields.priority !== null ? { priority: fields.priority } : {}),
         ...(fields.due !== undefined && fields.due !== null ? { due: fields.due } : {}),
         ...(covered ? {} : { scheduled: date }),
         ...(parent ? { parentLine: parent.line, parentRaw: parent.raw } : {}),
+        ...(after ? { after } : {}),
       });
-      let current = targetOfTask(created.task);
-      const steps = stepsBelowAnchor(boardTasks, node.id, created.task);
-      for (let step = 0; step < steps; step += 1) {
-        const moved = await moveBoardItem(current, "up");
-        current = targetOfTask(moved.task);
-      }
     });
 
   const onIndent = (node: OutlineNode) =>

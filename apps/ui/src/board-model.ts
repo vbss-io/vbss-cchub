@@ -453,9 +453,7 @@ function byDoneAtDesc(a: BoardTask, b: BoardTask): number {
 }
 
 export function orderDoneColumn(tasks: BoardTask[]): BoardTask[] {
-  const open = tasks.filter((task) => task.section !== "done");
-  const swept = tasks.filter((task) => task.section === "done").sort(byDoneAtDesc);
-  return [...open, ...swept];
+  return [...tasks].sort(byDoneAtDesc);
 }
 
 export function capDoneSection(tasks: BoardTask[], limit: number): { tasks: BoardTask[]; hidden: number } {

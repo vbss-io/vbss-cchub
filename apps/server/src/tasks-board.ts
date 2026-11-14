@@ -135,6 +135,7 @@ export interface BoardCreateInput {
   repeat?: string | null;
   parentLine?: number;
   parentRaw?: string;
+  after?: { line: number; raw: string };
 }
 
 export interface BoardCreateResult {
@@ -1695,6 +1696,20 @@ function composeTaskLine(indent: string, status: BoardStatus, title: string, rea
   return `${indent}- [${checkbox}] ${span}${joinReason(title, reason, config.reasonSeparator)}${token}${signifiers === "" ? "" : ` ${signifiers}`}`;
 }
 
+function insertAfterAnchor(doc: ParsedDoc, content: string, file: WalkedFile, config: TasksFeatureSettings, input: BoardCreateInput, compose: (indent: string) => string): number {
+  const after = input.after as { line: number; raw: string };
+  const anchor = checkFresh(content, file, config, after.line, after.raw);
+  if (anchor.section !== "open") throw new BadRequestError("the anchor task is not in the open section");
+  if (input.parentLine !== undefined) {
+    const parent = checkFresh(content, file, config, input.parentLine, input.parentRaw as string);
+    if (!parent.subtasks.some((subtask) => subtask.line === anchor.line)) throw new BadRequestError("the anchor task is not a subtask of the parent");
+  }
+  ensureNotOccurrence(parseBoardTasks(content, file.id, config), anchor.line, config);
+  const at = anchor.line + blockLength(doc, anchor.line);
+  doc.lines.splice(at, 0, docLine(compose(leadingSpace(anchor.raw))));
+  return at;
+}
+
 export function createBoardTask(settings: DelegationSettings, input: BoardCreateInput): BoardCreateResult {
   const title = cleanTitle(validateTitle(input.title), settings.tasks);
   const status = input.status ?? "todo";
@@ -1709,8 +1724,11 @@ export function createBoardTask(settings: DelegationSettings, input: BoardCreate
   const content = readProjectFile(file);
   const config = settings.tasks;
   const doc = openDoc(content);
+  if (input.after !== undefined && status === "done" && doneSectionName(config) !== null) throw new BadRequestError("a task created after another cannot start done");
   let at: number;
-  if (input.parentLine !== undefined) {
+  if (input.after !== undefined) {
+    at = insertAfterAnchor(doc, content, file, config, input, (indent) => composeTaskLine(indent, status, title, reason, priority, dates, config));
+  } else if (input.parentLine !== undefined) {
     const parent = checkFresh(content, file, config, input.parentLine, input.parentRaw as string);
     ensureNotOccurrence(parseBoardTasks(content, file.id, config), parent.line, config);
     const indent = childIndent(doc, parent.line);

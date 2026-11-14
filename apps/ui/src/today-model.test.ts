@@ -16,6 +16,7 @@ import {
   lineInNote,
   lineMatchesTitle,
   localDay,
+  insertAnchorOf,
   moveSteps,
   nextDay,
   outlineGroupsOf,
@@ -43,8 +44,6 @@ import {
   visibleOutOfSync,
   focusFact,
   recentlyDoneTasks,
-  siblingsAfter,
-  stepsBelowAnchor,
 } from "./today-model";
 
 const TODAY = "2026-11-12";
@@ -528,36 +527,29 @@ describe("focusFact", () => {
   });
 });
 
-describe("stepsBelowAnchor", () => {
-  it("counts the tasks after the anchor in the same section of a top-level list", () => {
-    const tasks = [task("a", "acme", 5), task("b", "acme", 6), task("c", "acme", 7), task("other", "bravo", 20), task("finished", "acme", 30, { section: "done" })];
-    assert.equal(siblingsAfter(tasks, "a"), 2);
-    assert.equal(siblingsAfter(tasks, "b"), 1);
-    assert.equal(siblingsAfter(tasks, "c"), 0);
-    assert.equal(stepsBelowAnchor(tasks, "a", { group: null }), 2);
-    assert.equal(stepsBelowAnchor(tasks, "c", { group: null }), 0);
+describe("insertAnchorOf", () => {
+  it("anchors a top-level task of the open section by its line and raw text", () => {
+    const tasks = [task("a", "acme", 5), task("b", "acme", 6)];
+    assert.deepEqual(insertAnchorOf(tasks, "b"), { line: 6, raw: tasks[1]?.raw });
   });
 
-  it("stays inside the anchor's group and gives up when the new task landed in another group", () => {
-    const tasks = [task("a", "acme", 5, { group: "Now" }), task("b", "acme", 6, { group: "Now" }), task("c", "acme", 9, { group: "Later" })];
-    assert.equal(siblingsAfter(tasks, "a"), 1);
-    assert.equal(stepsBelowAnchor(tasks, "a", { group: "Now" }), 1);
-    assert.equal(stepsBelowAnchor(tasks, "a", { group: "Later" }), 0);
+  it("anchors a nested subtask", () => {
+    const kid = task("kid", "acme", 2);
+    const tasks = [task("parent", "acme", 1, {}, [kid])];
+    assert.deepEqual(insertAnchorOf(tasks, "kid"), { line: 2, raw: kid.raw });
   });
 
-  it("counts subtasks and notes that follow the anchor under the same parent", () => {
-    const first = task("first", "acme", 2);
-    const second = task("second", "acme", 3);
-    const parent = task("parent", "acme", 1, { noteItems: [{ line: 4, raw: "  - note", text: "note" }] }, [first, second]);
-    const tasks = [parent, task("next", "acme", 8)];
-    assert.equal(siblingsAfter(tasks, "first"), 2);
-    assert.equal(siblingsAfter(tasks, "second"), 1);
-    assert.equal(stepsBelowAnchor(tasks, "first", { group: "ignored" }), 2);
-    assert.equal(siblingsAfter(tasks, "parent"), 1);
+  it("gives no anchor for a task in the done section or an unknown one", () => {
+    const tasks = [task("finished", "acme", 30, { section: "done" })];
+    assert.equal(insertAnchorOf(tasks, "finished"), null);
+    assert.equal(insertAnchorOf(tasks, "missing"), null);
   });
 
-  it("is zero for an unknown anchor", () => {
-    assert.equal(siblingsAfter([task("a", "acme", 1)], "missing"), 0);
-    assert.equal(stepsBelowAnchor([task("a", "acme", 1)], "missing", { group: null }), 0);
+  it("gives no anchor inside a finished occurrence of a recurring task", () => {
+    const kid = task("kid", "acme", 4);
+    const tasks = [task("weekly", "acme", 3, { repeat: "every week", doneAt: "2026-11-13" }, [kid]), task("live", "acme", 6, { repeat: "every week" })];
+    assert.equal(insertAnchorOf(tasks, "weekly"), null);
+    assert.equal(insertAnchorOf(tasks, "kid"), null);
+    assert.deepEqual(insertAnchorOf(tasks, "live"), { line: 6, raw: tasks[1]?.raw });
   });
 });

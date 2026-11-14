@@ -35,6 +35,7 @@ const FIXTURE_FILES = [
   "daily/2026-11-10.md",
   "daily/2026-11-11.md",
   "daily/2026-11-12.md",
+  "insert-after.md",
   "projects/_about.md",
   "projects/acme/acme.md",
   "projects/alex-personal.md",
@@ -377,6 +378,136 @@ describe("golden vault: a status write changes only the expected line", () => {
       for (const rel of others) assert.equal(digestOf(root)[rel], goldenDigest[rel], rel);
     });
   }
+});
+
+describe("golden vault: creating a task right after an anchor", () => {
+  const FIXTURE = "insert-after.md";
+  const PROJECT = "insert-after";
+  const insertVault = (): string => {
+    const root = freshVault();
+    cpSync(join(GOLDEN, FIXTURE), pathOf(root, PROJECT));
+    return root;
+  };
+  const spliceAt = (content: string, index: number, line: string): string => {
+    const lines = withEol(content);
+    lines.splice(index, 0, `${line}\n`);
+    return lines.join("");
+  };
+  const linesOf = (root: string): string[] => readFileSync(pathOf(root, PROJECT), "utf8").split("\n");
+
+  it("puts the sibling right below a top-level task even when a group heading follows the section tasks", () => {
+    const root = insertVault();
+    const original = readFileSync(pathOf(root, PROJECT), "utf8");
+    const anchor = taskNamed(root, PROJECT, "Review the budget");
+    const result = board.createBoardTask(settingsFor(root), { projectId: PROJECT, title: "Enter sibling probe", scheduled: "2026-11-14", after: { line: anchor.line, raw: anchor.raw } });
+    assert.equal(result.task.line, anchor.line + 1);
+    assert.equal(result.task.raw, "- [ ] Enter sibling probe ⏳ 2026-11-14");
+    assert.equal(result.task.group, null);
+    assert.equal(readFileSync(pathOf(root, PROJECT), "utf8"), spliceAt(original, anchor.line + 1, "- [ ] Enter sibling probe ⏳ 2026-11-14"));
+    for (const rel of listFiles(root).filter((entry) => entry !== `projects/${PROJECT}.md`)) assert.equal(digestOf(root)[rel], goldenDigest[rel], rel);
+  });
+
+  it("goes below the whole block of a task with subtasks and notes", () => {
+    const root = insertVault();
+    const original = readFileSync(pathOf(root, PROJECT), "utf8");
+    const anchor = taskNamed(root, PROJECT, "Plan the launch");
+    const result = board.createBoardTask(settingsFor(root), { projectId: PROJECT, title: "After the block", after: { line: anchor.line, raw: anchor.raw } });
+    assert.equal(result.task.line, anchor.line + 5);
+    assert.equal(result.task.depth, 0);
+    assert.equal(readFileSync(pathOf(root, PROJECT), "utf8"), spliceAt(original, anchor.line + 5, "- [ ] After the block"));
+    assert.equal(linesOf(root)[anchor.line + 4], "  - [ ] Book the venue");
+    assert.equal(linesOf(root)[anchor.line + 6], "- [-] Review the budget ⏳ 2026-11-14");
+  });
+
+  it("goes after the last top-level task of the section when a group heading follows it", () => {
+    const root = insertVault();
+    const original = readFileSync(pathOf(root, PROJECT), "utf8");
+    const anchor = taskNamed(root, PROJECT, "Call the vendor");
+    const result = board.createBoardTask(settingsFor(root), { projectId: PROJECT, title: "Tail probe", after: { line: anchor.line, raw: anchor.raw } });
+    assert.equal(result.task.line, anchor.line + 1);
+    assert.equal(result.task.group, null);
+    assert.equal(readFileSync(pathOf(root, PROJECT), "utf8"), spliceAt(original, anchor.line + 1, "- [ ] Tail probe"));
+  });
+
+  it("creates a sibling subtask below a subtask and below its notes when the parent is given", () => {
+    const root = insertVault();
+    const original = readFileSync(pathOf(root, PROJECT), "utf8");
+    const parent = taskNamed(root, PROJECT, "Plan the launch");
+    const anchor = taskNamed(root, PROJECT, "Draft the announcement");
+    const result = board.createBoardTask(settingsFor(root), {
+      projectId: PROJECT,
+      title: "Proofread",
+      parentLine: parent.line,
+      parentRaw: parent.raw,
+      after: { line: anchor.line, raw: anchor.raw },
+    });
+    assert.equal(result.task.line, anchor.line + 2);
+    assert.equal(result.task.raw, "  - [ ] Proofread");
+    assert.equal(result.task.depth, 1);
+    assert.equal(readFileSync(pathOf(root, PROJECT), "utf8"), spliceAt(original, anchor.line + 2, "  - [ ] Proofread"));
+    const listed = taskNamed(root, PROJECT, "Plan the launch");
+    assert.deepEqual(listed.subtasks.map((subtask) => subtask.title), ["Draft the announcement", "Proofread", "Book the venue"]);
+  });
+
+  it("creates a sibling at the indentation of a subtask anchor without a parent", () => {
+    const root = insertVault();
+    const original = readFileSync(pathOf(root, PROJECT), "utf8");
+    const anchor = taskNamed(root, PROJECT, "Book the venue");
+    const result = board.createBoardTask(settingsFor(root), { projectId: PROJECT, title: "Print the badges", after: { line: anchor.line, raw: anchor.raw } });
+    assert.equal(result.task.raw, "  - [ ] Print the badges");
+    assert.equal(readFileSync(pathOf(root, PROJECT), "utf8"), spliceAt(original, anchor.line + 1, "  - [ ] Print the badges"));
+  });
+
+  it("keeps the CRLF endings and the BOM of the files while inserting", () => {
+    for (const projectId of ["alex-personal", "initech"]) {
+      const root = freshVault();
+      const original = readFileSync(pathOf(root, projectId), "utf8");
+      const eol = original.includes("\r\n") ? "\r\n" : "\n";
+      const anchor = flatten(board.readBoard(settingsFor(root)).tasks).find((task) => task.projectId === projectId && task.depth === 0 && task.subtasks.length + task.noteItems.length > 0) as BoardTask;
+      const result = board.createBoardTask(settingsFor(root), { projectId, title: "Inserted", after: { line: anchor.line, raw: anchor.raw } });
+      const written = readFileSync(pathOf(root, projectId), "utf8");
+      const expected = withEol(original);
+      expected.splice(result.task.line, 0, `- [ ] Inserted${eol}`);
+      assert.equal(written, expected.join(""), projectId);
+      assert.equal(written.startsWith(BOM), original.startsWith(BOM), projectId);
+      assert.equal(result.task.line, anchor.line + 1 + anchor.noteItems.length + flatten(anchor.subtasks).length, projectId);
+    }
+  });
+
+  it("refuses a stale anchor without writing a byte", () => {
+    const root = insertVault();
+    const before = readFileSync(pathOf(root, PROJECT));
+    const anchor = taskNamed(root, PROJECT, "Review the budget");
+    assert.throws(
+      () => board.createBoardTask(settingsFor(root), { projectId: PROJECT, title: "Nope", after: { line: anchor.line, raw: `${anchor.raw} edited` } }),
+      (err: unknown) => err instanceof board.TaskConflictError,
+    );
+    assert.equal(readFileSync(pathOf(root, PROJECT)).equals(before), true);
+  });
+
+  it("refuses an anchor that is not a direct subtask of the given parent, a done anchor and a done status", () => {
+    const root = insertVault();
+    const before = readFileSync(pathOf(root, PROJECT));
+    const parent = taskNamed(root, PROJECT, "Plan the launch");
+    const other = taskNamed(root, PROJECT, "Review the budget");
+    const settings = settingsFor(root);
+    assert.throws(
+      () => board.createBoardTask(settings, { projectId: PROJECT, title: "X", parentLine: parent.line, parentRaw: parent.raw, after: { line: other.line, raw: other.raw } }),
+      /not a subtask of the parent/,
+    );
+    const finished = taskNamed(root, PROJECT, "Close the previous round");
+    assert.throws(() => board.createBoardTask(settings, { projectId: PROJECT, title: "X", after: { line: finished.line, raw: finished.raw } }), /open section/);
+    assert.throws(() => board.createBoardTask(settings, { projectId: PROJECT, title: "X", status: "done", after: { line: other.line, raw: other.raw } }), /cannot start done/);
+    assert.equal(readFileSync(pathOf(root, PROJECT)).equals(before), true);
+  });
+
+  it("leaves a create without an anchor exactly as before, at the end of the open section", () => {
+    const root = insertVault();
+    const original = readFileSync(pathOf(root, PROJECT), "utf8");
+    const result = board.createBoardTask(settingsFor(root), { projectId: PROJECT, title: "Plain create" });
+    assert.equal(result.task.group, "Later");
+    assert.equal(readFileSync(pathOf(root, PROJECT), "utf8"), spliceAt(original, taskNamed(root, PROJECT, "Renew the licence").line + 1, "- [ ] Plain create"));
+  });
 });
 
 describe("golden vault: signifier order on done lines", () => {

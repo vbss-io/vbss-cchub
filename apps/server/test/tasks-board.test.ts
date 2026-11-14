@@ -1895,6 +1895,35 @@ describe("tasks board round 2 routes", () => {
       assert.equal((await find("c1", "Kid two")).depth, 2);
     });
 
+    it("inserts right after the anchor block over HTTP, ahead of a group heading, and answers 409 and 400 for a stale or malformed anchor", async () => {
+      const doc = "## Open loops\n\n- [ ] One\n  - [ ] One a\n    - note\n- [ ] Two\n\n### Later\n\n- [ ] Deferred\n";
+      reset("create", { "c1.md": doc });
+      await configure("create");
+      const one = await find("c1", "One");
+      const res = await post({ title: "After one", scheduled: "2026-11-14", after: { line: one.line, raw: one.raw } });
+      assert.equal(res.status, 201);
+      assert.equal((res.json.task as WireTask).raw, "- [ ] After one ⏳ 2026-11-14");
+      assert.equal((res.json.task as WireTask).line, one.line + 3);
+      assert.equal(read("create/c1.md"), doc.replace("- [ ] Two\n", "- [ ] After one ⏳ 2026-11-14\n- [ ] Two\n"));
+      const two = await find("c1", "Two");
+      const sub = await find("c1", "One a");
+      const kid = await post({ title: "One b", parentLine: one.line, parentRaw: one.raw, after: { line: sub.line, raw: sub.raw } });
+      assert.equal(kid.status, 201);
+      assert.equal((kid.json.task as WireTask).raw, "  - [ ] One b");
+      const written = read("create/c1.md");
+      assert.ok(written.includes("    - note\n  - [ ] One b\n- [ ] After one"));
+      const stale = await post({ title: "x", after: { line: two.line + 1, raw: `${two.raw} edited` } });
+      assert.equal(stale.status, 409);
+      assert.equal(stale.json.error, "changed on disk");
+      for (const after of [5, "x", [], { raw: "x" }, { line: -1, raw: "x" }, { line: 1.5, raw: "x" }, { line: 2 }, { line: 2, raw: 4 }]) {
+        assert.equal((await post({ title: "x", after })).status, 400, JSON.stringify(after));
+      }
+      assert.equal(read("create/c1.md"), written);
+      const plain = await post({ title: "Plain", after: null });
+      assert.equal(plain.status, 201);
+      assert.ok(read("create/c1.md").endsWith("- [ ] Deferred\n- [ ] Plain\n"));
+    });
+
     it("creates the open section at the end of the document or before the done section when it is missing", async () => {
       reset("create", { "c1.md": "# No section\n\nsome text\n" });
       await configure("create");

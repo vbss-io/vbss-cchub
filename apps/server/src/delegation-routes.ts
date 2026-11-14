@@ -884,6 +884,13 @@ export function delegationRouter(): Router {
         throw new BadRequestError("parentLine must be a non-negative integer");
       }
       if (hasParent && typeof body.parentRaw !== "string") throw new BadRequestError("parentRaw required with parentLine");
+      const hasAfter = body.after !== undefined && body.after !== null;
+      const after = body.after as Record<string, unknown> | undefined;
+      if (hasAfter && (typeof after !== "object" || Array.isArray(after))) throw new BadRequestError("after must be an object with line and raw");
+      if (hasAfter && (typeof after?.line !== "number" || !Number.isInteger(after.line) || after.line < 0)) {
+        throw new BadRequestError("after.line must be a non-negative integer");
+      }
+      if (hasAfter && typeof after?.raw !== "string") throw new BadRequestError("after.raw required");
       res.status(201).json(
         createBoardTask(getSettings(), {
           projectId,
@@ -893,6 +900,7 @@ export function delegationRouter(): Router {
           ...(body.priority !== undefined ? { priority: body.priority as number | null } : {}),
           ...boardDates(body),
           ...(hasParent ? { parentLine: body.parentLine as number, parentRaw: body.parentRaw as string } : {}),
+          ...(hasAfter ? { after: { line: after?.line as number, raw: after?.raw as string } } : {}),
         }),
       );
     } catch (err) {

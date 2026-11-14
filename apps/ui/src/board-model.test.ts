@@ -464,15 +464,22 @@ test("supportsReason is true only for blocked, hold and archived", () => {
   assert.deepEqual((["blocked", "hold", "todo", "doing", "done", "archived"] as BoardStatus[]).filter(supportsReason), ["blocked", "hold", "archived"]);
 });
 
-test("orderDoneColumn lists open-section tasks first, then done-section tasks by doneAt desc with undated last", () => {
+test("orderDoneColumn orders every finished task by doneAt desc whatever its section, with undated last in input order", () => {
   const ordered = orderDoneColumn([
     doneTask(1, "old", "done", "2026-10-01"),
-    doneTask(2, "open-a", "open", null),
+    doneTask(2, "open-undated-a", "open", null),
     doneTask(3, "undated", "done", null),
     doneTask(4, "new", "done", "2026-10-20"),
-    doneTask(5, "open-b", "open", null),
+    doneTask(5, "open-mid", "open", "2026-10-10"),
+    doneTask(6, "open-undated-b", "open", null),
   ]);
-  assert.deepEqual(ordered.map((item) => item.title), ["open-a", "open-b", "new", "old", "undated"]);
+  assert.deepEqual(ordered.map((item) => item.title), ["new", "open-mid", "old", "open-undated-a", "undated", "open-undated-b"]);
+});
+
+test("orderDoneColumn does not mutate its input", () => {
+  const input = [doneTask(1, "a", "done", "2026-10-01"), doneTask(2, "b", "open", "2026-10-02")];
+  orderDoneColumn(input);
+  assert.deepEqual(input.map((item) => item.title), ["a", "b"]);
 });
 
 test("orderDoneColumn keeps the input order for equal dates", () => {
@@ -501,9 +508,11 @@ test("doneColumnView orders then slices to the newest, defaulting the page size 
   const many = Array.from({ length: 25 }, (_, index) => doneTask(index + 1, "t" + (index + 1), "done", "2026-10-" + String((index % 28) + 1).padStart(2, "0")));
   const view = doneColumnView([doneTask(99, "open", "open", null), ...many], DONE_SECTION_PAGE);
   assert.equal(view.tasks.length, 10);
-  assert.equal(view.tasks[0]?.title, "open");
-  assert.equal(view.tasks[1]?.title, "t25");
+  assert.equal(view.tasks[0]?.title, "t25");
+  assert.equal(view.tasks.some((item) => item.title === "open"), false);
   assert.equal(view.hidden, 16);
+  const fresh = doneColumnView([doneTask(99, "open-new", "open", "2026-12-01"), ...many], DONE_SECTION_PAGE);
+  assert.equal(fresh.tasks[0]?.title, "open-new");
   const all = doneColumnView(many, 40);
   assert.equal(all.tasks.length, 25);
   assert.equal(all.hidden, 0);

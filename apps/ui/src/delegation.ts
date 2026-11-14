@@ -70,6 +70,7 @@ export interface DailySettings {
   closedKey: string;
   wikilinks: boolean;
   projectOrder?: string[];
+  focusSource?: "scheduled" | "list";
 }
 
 export type TrailDetail = "light" | "medium" | "high";
@@ -1181,6 +1182,7 @@ export interface BoardCreateInput {
   repeat?: string;
   parentLine?: number;
   parentRaw?: string;
+  after?: { line: number; raw: string };
 }
 
 export const createBoardItem = (input: BoardCreateInput): Promise<{ task: BoardTask; updatedAt: number }> =>

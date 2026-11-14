@@ -347,19 +347,12 @@ export function focusFact(scheduled: string | null | undefined, today: string): 
   return scheduled === today ? "In today's focus" : `Scheduled ${scheduled}`;
 }
 
-export function siblingsAfter(tasks: readonly BoardTask[], id: string): number {
+export function insertAnchorOf(tasks: readonly BoardTask[], id: string): { line: number; raw: string } | null {
   const anchor = findBoardTask([...tasks], id);
-  if (anchor === null) return 0;
-  const parent = parentOfTask(tasks, id);
-  if (parent !== null) return parent.subtasks.filter((task) => task.line > anchor.line).length + parent.noteItems.filter((note) => note.line > anchor.line).length;
-  return tasks.filter((task) => task.projectId === anchor.projectId && task.section === anchor.section && task.group === anchor.group && task.line > anchor.line).length;
-}
-
-export function stepsBelowAnchor(tasks: readonly BoardTask[], anchorId: string, created: Pick<BoardTask, "group">): number {
-  const anchor = findBoardTask([...tasks], anchorId);
-  if (anchor === null) return 0;
-  if (parentOfTask(tasks, anchorId) === null && created.group !== anchor.group) return 0;
-  return siblingsAfter(tasks, anchorId);
+  if (anchor === null || anchor.section !== "open") return null;
+  const top = tasks.find((candidate) => flattenBoardTasks([candidate]).some((member) => member.id === id));
+  if (top !== undefined && (top.repeat ?? null) !== null && top.doneAt !== null) return null;
+  return { line: anchor.line, raw: anchor.raw };
 }
 
 export const START_DAY_EVENT = "cchub:daily-start-day";
