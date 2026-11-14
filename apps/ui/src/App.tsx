@@ -717,6 +717,9 @@ export function App() {
   const usageEnabled = isPluginEnabled("usage", features);
   const limitsEnabled = isPluginEnabled("limits", features);
   const boardEnabled = isPluginEnabled("tasks", features);
+  const delegatedEnabled = isPluginEnabled("delegated", features);
+  const announceDelegated = (taskId: string, title: string) =>
+    pushToast("ok", `Delegated "${title}".`, delegatedEnabled ? { label: "Open task", run: () => navigate("tasks", taskId) } : undefined);
   const effectiveView: View = isViewEnabled(route.view, features) ? route.view : "sessions";
   const current = viewItem(effectiveView) ?? SETTINGS_HEAD;
   const drawerSession = drawer ? (sessions[drawer] ?? null) : null;
@@ -1031,7 +1034,7 @@ export function App() {
                 onOpenTask={(id) => navigate("tasks", id)}
                 subscribeDaily={subscribeDaily}
                 subscribeBoard={subscribeBoard}
-                onDelegated={(taskId, title) => pushToast("ok", `Delegated "${title}".`, { label: "Open task", run: () => navigate("tasks", taskId) })}
+                onDelegated={announceDelegated}
                 onNotice={ok}
                 onError={fail}
               />
@@ -1045,7 +1048,7 @@ export function App() {
                 onOpenSettings={() => navigate("settings", "tasks")}
                 openTaskId={route.param}
                 onOpenTaskHandled={consumeBoardParam}
-                onDelegated={(taskId, title) => pushToast("ok", `Delegated "${title}".`, { label: "Open task", run: () => navigate("tasks", taskId) })}
+                onDelegated={announceDelegated}
                 onNotice={ok}
                 onError={fail}
               />
@@ -1167,7 +1170,7 @@ export function App() {
               codexSessions={codexSessions.filter((session) => session.status !== "ended").length}
               hubRunning={hubRunning}
               hubAttention={hubAttention}
-              onOpenHub={() => navigate("tasks")}
+              onOpenHub={delegatedEnabled ? () => navigate("tasks") : undefined}
               limits={limits}
               limitsEnabled={limitsEnabled}
               onOpenUsage={usageEnabled ? () => navigate("usage") : undefined}

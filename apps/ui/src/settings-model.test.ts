@@ -92,8 +92,8 @@ describe("pluginHints", () => {
     return found;
   };
 
-  it("hints at the Usage dependency of Limits", () => {
-    assert.deepEqual(pluginHints(plugin("limits"), enabledIn({ ...allOn, usage: false }), true), ["Needs Usage"]);
+  it("gives Limits no dependency hint when Usage is off", () => {
+    assert.deepEqual(pluginHints(plugin("limits"), enabledIn({ ...allOn, usage: false }), true), []);
     assert.deepEqual(pluginHints(plugin("limits"), enabledIn(allOn), true), []);
   });
 

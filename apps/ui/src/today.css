@@ -564,9 +564,11 @@
 }
 
 .backlog__row {
+  position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px 6px;
   min-width: 0;
   padding: 4px 8px;
   border: 1px solid transparent;
@@ -595,7 +597,7 @@
 }
 
 .backlog__title {
-  flex: 1 1 auto;
+  flex: 1 1 12rem;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -615,13 +617,19 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+  margin-left: auto;
 }
 
 .backlog__add {
-  flex: none;
+  position: absolute;
+  top: 50%;
+  right: 6px;
   padding: 2px 8px;
+  background: var(--panel-2);
   font-size: 12px;
   opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
 }
 
 .backlog__row:hover .backlog__add,
@@ -629,10 +637,18 @@
 .backlog__row:focus .backlog__add,
 .backlog__add:focus-visible {
   opacity: 1;
+  pointer-events: auto;
 }
 
 @media (hover: none) {
-  .backlog__add,
+  .backlog__add {
+    position: static;
+    flex: none;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+
   .today__ghost {
     opacity: 1;
   }
@@ -679,9 +695,5 @@
 
   .backlog__select {
     flex: 1 1 100%;
-  }
-
-  .backlog__row {
-    flex-wrap: wrap;
   }
 }

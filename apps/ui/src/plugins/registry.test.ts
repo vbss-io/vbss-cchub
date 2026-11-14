@@ -51,11 +51,13 @@ describe("enabledPlugins", () => {
     assert.deepEqual(keys(enabledViews(off)), ["sessions"]);
   });
 
-  it("hides Limits when Usage is off even if its own flag is on", () => {
+  it("keeps Limits on its own flag, independent of Usage", () => {
     const features = { ...allOn, usage: false };
-    assert.equal(isPluginEnabled("limits", features), false);
-    assert.equal(isPluginEnabled("limits", allOn), true);
-    assert.equal(enabledPlugins(features).some((plugin) => plugin.id === "limits"), false);
+    assert.equal(isPluginEnabled("limits", features), true);
+    assert.equal(isPluginEnabled("usage", features), false);
+    assert.equal(isPluginEnabled("limits", { ...allOn, limits: false }), false);
+    assert.equal(enabledPlugins(features).some((plugin) => plugin.id === "limits"), true);
+    assert.equal(PLUGINS.some((plugin) => (plugin.dependsOn ?? []).length > 0), false);
   });
 });
 
@@ -103,6 +105,20 @@ describe("sidebarModel", () => {
     assert.deepEqual(keys(model.more), ["sessions", "daily", "board", "tasks", "usage", "workspaces", "reports"]);
   });
 
+  it("falls back to pinning Sessions when nothing resolved is pinned", () => {
+    const onlyTasks = sidebarModel({ ...allOn, tasks: false }, { order: ["board", "sessions", "tasks", "flow"], pinned: ["board"] });
+    assert.deepEqual(keys(onlyTasks.pinned), ["sessions"]);
+    assert.equal(keys(onlyTasks.more).includes("sessions"), false);
+    assert.equal(keys(onlyTasks.more).includes("board"), false);
+    assert.equal(keys(onlyTasks.more).includes("flow"), true);
+    const empty = sidebarModel(allOn, { order: ["flow", "daily"], pinned: [] });
+    assert.deepEqual(keys(empty.pinned), ["sessions"]);
+    assert.deepEqual(keys(empty.more), ["flow", "daily", "board", "tasks", "usage", "workspaces", "reports", "share"]);
+    const unplaced = sidebarModel(allOn, { order: ["daily"], pinned: ["ghost"] });
+    assert.deepEqual(keys(unplaced.pinned), ["sessions"]);
+    assert.equal(keys(unplaced.more)[0], "daily");
+  });
+
   it("places pinned keys missing from the order after the ordered ones", () => {
     const model = sidebarModel(allOn, { order: ["flow"], pinned: ["reports", "flow"] });
     assert.deepEqual(keys(model.pinned), ["flow", "reports"]);
@@ -122,8 +138,14 @@ describe("pluginSettingsTabs", () => {
     ]);
   });
 
+  it("keeps the Usage tab reachable when only Limits is on, and drops it when both are off", () => {
+    assert.deepEqual(pluginSettingsTabs({ ...allOn, usage: false }).find((tab) => tab.key === "usage"), { key: "usage", label: "Usage", pluginIds: ["limits"] });
+    assert.deepEqual(pluginSettingsTabs({ ...allOn, limits: false }).find((tab) => tab.key === "usage"), { key: "usage", label: "Usage", pluginIds: ["usage"] });
+    assert.equal(pluginSettingsTabs({ ...allOn, usage: false, limits: false }).some((tab) => tab.key === "usage"), false);
+  });
+
   it("hides the tabs of disabled plugins", () => {
-    const tabs = pluginSettingsTabs({ ...allOn, usage: false, share: false, daily: false });
+    const tabs = pluginSettingsTabs({ ...allOn, usage: false, limits: false, share: false, daily: false });
     assert.deepEqual(keys(tabs), ["tasks", "trail", "widget"]);
   });
 });

@@ -28,6 +28,8 @@ export const PLUGINS: readonly HubPlugin[] = [
   widgetPlugin,
 ];
 
+const FALLBACK_PINNED: PluginViewKey = "sessions";
+
 export const DEFAULT_PINNED: readonly PluginViewKey[] = ["sessions", "daily", "board", "flow"];
 
 const OFF_WHEN_MISSING: ReadonlySet<FeatureKey> = new Set<FeatureKey>(["daily", "trail", "usage", "limits", "tasks"]);
@@ -102,8 +104,10 @@ export const sidebarModel = (features: FeatureFlags, prefs: SidebarPrefs | null 
     ordered.push(view);
   }
   const pinnedKeys = new Set(source.pinned);
-  const pinned = ordered.filter((view) => pinnedKeys.has(view.key));
-  const more = [...ordered.filter((view) => !pinnedKeys.has(view.key)), ...views.filter((view) => !placed.has(view.key))];
+  const resolved = ordered.filter((view) => pinnedKeys.has(view.key));
+  const pinned = resolved.length > 0 ? resolved : views.filter((view) => view.key === FALLBACK_PINNED);
+  const pinnedNow = new Set<string>(pinned.map((view) => view.key));
+  const more = [...ordered, ...views.filter((view) => !placed.has(view.key))].filter((view) => !pinnedNow.has(view.key));
   return { pinned, more };
 };
 

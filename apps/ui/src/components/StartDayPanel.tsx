@@ -234,8 +234,8 @@ export function StartDayPanel({ date, isToday, noteExists, data, tasks, busyIds,
             </button>
           )}
         </div>
-        {loading && <p className="today__empty">Loading…</p>}
-        {!loading && !hasOpen && <p className="today__empty">{yesterday === null && plan.done.length === 0 ? "Nothing from yesterday." : "Nothing left open from yesterday."}</p>}
+        {loading && !hasOpen && <p className="today__empty">Loading…</p>}
+        {!loading && !hasOpen && loadError === null && <p className="today__empty">{yesterday === null && plan.done.length === 0 ? "Nothing from yesterday." : "Nothing left open from yesterday."}</p>}
         {hasOpen && <ul className="today__list">{plan.open.map(renderItem)}</ul>}
         {plan.done.length > 0 && (
           <details className="startday__done">
@@ -292,6 +292,11 @@ export function StartDayPanel({ date, isToday, noteExists, data, tasks, busyIds,
           <button type="button" className="act act--focus startday__primary" disabled={creating || loading} onClick={() => void create()}>
             {creating ? "Creating…" : isToday ? "Create today's note" : "Create note"}
           </button>
+          {loading && (
+            <span className="hint" role="status">
+              Reading yesterday's note…
+            </span>
+          )}
           {createError !== null && (
             <span className="error small" role="alert">
               {createError}

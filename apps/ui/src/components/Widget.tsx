@@ -40,6 +40,7 @@ import "../widget.css";
 const inTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
 interface WidgetConfig {
+  enabled: boolean;
   edge: WidgetEdge;
   rings: { claude: boolean; codex: boolean };
   panel: WidgetPanel;
@@ -50,6 +51,7 @@ interface WidgetConfig {
 }
 
 const DEFAULT_CONFIG: WidgetConfig = {
+  enabled: true,
   edge: "right",
   rings: { claude: false, codex: false },
   panel: "sessions",
@@ -72,6 +74,7 @@ function configOf(settings: SettingsLike): WidgetConfig {
   const edge = EDGES.find((value) => value === widget?.edge) ?? DEFAULT_CONFIG.edge;
   const refresh = settings.limits?.refreshMinutes;
   return {
+    enabled: settings.features?.widget !== false,
     edge,
     rings: { claude: widget?.rings?.claude === true, codex: widget?.rings?.codex === true },
     panel: widget?.panel === "usage" ? "usage" : "sessions",
@@ -231,6 +234,11 @@ async function applyDock(edge: WidgetEdge, collapsed: boolean, showNow: boolean,
   await attempt(() => win.setFocusable(!collapsed));
   if (showNow) await attempt(() => win.show());
   return monitorKey(monitor);
+}
+
+async function hideWindow(): Promise<void> {
+  const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  await getCurrentWindow().hide();
 }
 
 const OPEN_ROTATION: Record<WidgetEdge, number> = { left: 0, right: 180, top: 90 };
@@ -451,6 +459,13 @@ export function Widget() {
     window.clearTimeout(applyTimer.current);
     applying.current = true;
     try {
+      if (!configRef.current.enabled) {
+        shown.current = false;
+        openRef.current = false;
+        setOpen(false);
+        await hideWindow();
+        return;
+      }
       const first = !shown.current;
       dockedRings.current = ringsRef.current;
       lastMonitor.current = await applyDock(configRef.current.edge, collapsed, first && configRef.current.autostart, ringsRef.current);
@@ -530,7 +545,7 @@ export function Widget() {
   useEffect(() => {
     if (!loaded) return;
     void dock(!openRef.current);
-  }, [loaded, config.edge, dock]);
+  }, [loaded, config.edge, config.enabled, dock]);
 
   useEffect(() => {
     if (!loaded || openRef.current || dockedRings.current === ringCount) return;
@@ -846,8 +861,10 @@ export function Widget() {
     </>
   );
 
+  if (!config.enabled) return <div data-widget-enabled="0" hidden />;
+
   return (
-    <div className="wgd" data-edge={config.edge} data-open={open ? "1" : "0"}>
+    <div className="wgd" data-edge={config.edge} data-open={open ? "1" : "0"} data-widget-enabled="1">
       {open ? (
         <section className="wgd-panel" onMouseEnter={onPanelEnter} onMouseMove={onPanelEnter} onMouseLeave={onPanelLeave}>
           <header className="wgd-head">

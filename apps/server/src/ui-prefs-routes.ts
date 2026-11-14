@@ -29,7 +29,10 @@ function viewKeys(value: unknown, field: string): string[] {
 
 function parseSidebar(value: unknown): UiSidebarPrefs {
   if (!isRecord(value)) throw new UiPrefsError("sidebar must be an object or null");
-  return { order: viewKeys(value.order, "sidebar.order"), pinned: viewKeys(value.pinned, "sidebar.pinned") };
+  const order = viewKeys(value.order, "sidebar.order");
+  const pinned = viewKeys(value.pinned, "sidebar.pinned");
+  if (pinned.length === 0) throw new UiPrefsError("sidebar.pinned needs at least one item");
+  return { order, pinned };
 }
 
 function parseLayout(value: unknown, current: UiLayoutPrefs): UiLayoutPrefs {

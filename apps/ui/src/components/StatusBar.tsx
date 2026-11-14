@@ -20,7 +20,7 @@ interface Props {
   codexSessions: number;
   hubRunning: number;
   hubAttention: number;
-  onOpenHub: () => void;
+  onOpenHub?: () => void;
   limits: LimitsSnapshot | null;
   limitsEnabled: boolean;
   onOpenUsage?: () => void;

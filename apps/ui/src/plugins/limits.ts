@@ -6,7 +6,6 @@ export const limitsPlugin: HubPlugin = {
   description: "Your 5-hour and weekly plan limits in the status bar and the widget.",
   core: false,
   featureKey: "limits",
-  dependsOn: ["usage"],
   views: [],
   settingsTab: { key: "usage", label: "Usage" },
 };
