@@ -90,7 +90,7 @@ describe("buildViewItems", () => {
     assert.deepEqual(ids(items).slice(0, 2), ["view:sessions", "view:settings"]);
     assert.deepEqual(
       ids(items).filter((id) => id.startsWith("settings:")),
-      ["settings:general", "settings:appearance", "settings:plugins", "settings:plugin-today", "settings:connections", "settings:notifications", "settings:groups", "settings:about"],
+      ["settings:general", "settings:appearance", "settings:plugins", "settings:plugin-sessions", "settings:plugin-today", "settings:connections", "settings:notifications", "settings:groups", "settings:about"],
     );
     assert.equal(items.every((entry) => entry.kind === "view"), true);
   });
@@ -109,8 +109,8 @@ describe("buildViewItems", () => {
     assert.equal(off.includes("settings:plugin-share"), false);
     const on = ids(buildViewItems(views, () => undefined, settingsTabs({ daily: true, trail: true, usage: true, limits: true, tasks: true })));
     assert.deepEqual(
-      on.filter((id) => id.startsWith("settings:")).slice(3, 9),
-      ["settings:plugin-today", "settings:plugin-tasks", "settings:plugin-usage", "settings:plugin-share", "settings:plugin-trail", "settings:plugin-widget"],
+      on.filter((id) => id.startsWith("settings:")).slice(3, 10),
+      ["settings:plugin-sessions", "settings:plugin-today", "settings:plugin-tasks", "settings:plugin-usage", "settings:plugin-share", "settings:plugin-trail", "settings:plugin-widget"],
     );
   });
 

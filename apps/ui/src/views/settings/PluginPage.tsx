@@ -3,6 +3,7 @@ import type { TunnelStatus } from "../../delegation";
 import { isPluginEnabled } from "../../plugins/registry";
 import type { FeatureFlags, PluginId } from "../../plugins/types";
 import type { SettingsPageEntry } from "../../settings-model";
+import { SessionsTab } from "./SessionsTab";
 import { ShareTab } from "./ShareTab";
 import { TasksTab } from "./TasksTab";
 import { TodayTab } from "./TodayTab";
@@ -42,6 +43,7 @@ export function PluginPage({ page, pluginId, features, tunnel, onTunnelSettings,
         </h2>
       </header>
       <div className="plugin-page__body" data-plugin-page={pluginId}>
+        {page.pluginIds.some((id) => id === "sessions") && <SessionsTab />}
         {page.pluginIds.some((id) => id === "today") && <TodayTab {...tabProps} />}
         {page.pluginIds.some((id) => id === "tasks") && <TasksTab {...tabProps} />}
         {page.pluginIds.some((id) => id === "trail") && <TrailTab {...tabProps} />}

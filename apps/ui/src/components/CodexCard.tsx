@@ -1,11 +1,12 @@
 import { focusCodexApp } from "../api";
 import { useState, type MouseEvent } from "react";
-import { ClientBadge, codexClient } from "../clients";
+import { codexClient } from "../clients";
 import { IconFocus } from "../icons";
 import { relativeTime } from "../time";
 import type { CodexSessionRecord } from "../types";
 import { shortFolder } from "../wsmatch";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
+import { MoreChip, RunChip } from "./RunChips";
 
 const STATUS_LABEL: Record<CodexSessionRecord["status"], string> = {
   active: "Active",
@@ -42,6 +43,7 @@ export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRenam
 
   const archived = session.archivedAt != null;
   const name = session.customTitle ?? session.title;
+  const clientInfo = codexClient(session.client);
 
   const stop = (event: MouseEvent) => event.stopPropagation();
   const menuItems: CardMenuItem[] = [
@@ -86,16 +88,12 @@ export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRenam
         <CardMenu menu={menu} items={menuItems} label={`Actions for ${name}`} />
       </div>
       <div className="card__badges">
-        <ClientBadge info={codexClient(session.client)} />
-        {workspace && <span className="chip chip--ws">{workspace}</span>}
+        <RunChip info={clientInfo} label={workspace ?? shortFolder(session.cwd)} title={`${clientInfo.label} · ${shortFolder(session.cwd)}`} />
+        <MoreChip extras={originLabel(session) ? [originLabel(session)] : []} />
       </div>
       <div className="card__line">
         <span className="card__model">
           {session.turns} turn{session.turns === 1 ? "" : "s"}
-        </span>
-        {originLabel(session) && <span className="card__ctx">{originLabel(session)}</span>}
-        <span className="card__folder" title={session.cwd ?? ""}>
-          {shortFolder(session.cwd)}
         </span>
         <time>{relativeTime(session.updatedAt)}</time>
       </div>

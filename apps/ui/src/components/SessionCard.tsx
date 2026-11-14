@@ -1,10 +1,11 @@
 import { useState, type MouseEvent } from "react";
-import { ClientBadge, claudeClient, sessionClient } from "../clients";
+import { sessionClient } from "../clients";
 import { IconFocus, IconStar } from "../icons";
 import { relativeTime } from "../time";
 import type { SessionRecord, SessionStatus } from "../types";
 import { shortFolder } from "../wsmatch";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
+import { MoreChip, RunChip } from "./RunChips";
 
 const statusLabel: Record<SessionStatus, string> = {
   active: "Active",
@@ -92,6 +93,19 @@ export function SessionCard({
   const level = pct < 60 ? "ok" : pct < 85 ? "warn" : "high";
   const agentsRunning = session.agentsRunning ?? 0;
   const agentsTotal = session.agentsTotal ?? 0;
+  const clientInfo = sessionClient(session);
+  const live = !archived && session.status !== "ended" && !stale;
+  const extras = [
+    ...(showSource && session.source ? [`from ${session.source}`] : []),
+    ...(agentsRunning > 0 ? [`${agentsRunning} subagent${agentsRunning === 1 ? "" : "s"} running · ${agentsTotal} spawned`] : []),
+    ...(peers > 0 && live ? [`${peers} more here: other live agents share this folder`] : []),
+    ...(claimsCount > 0 ? [`claims ${claimsCount} file${claimsCount === 1 ? "" : "s"}`] : []),
+    ...(session.forkOf ? [`fork of ${forkParentName ?? session.forkOf.slice(0, 8)}`] : []),
+    ...((session.forksLive ?? 0) > 0 ? [`${session.forksLive} live fork${session.forksLive === 1 ? "" : "s"} · ${session.remoteAsks ?? 0} asks`] : []),
+    ...((session.delegatedRunning ?? 0) > 0 ? [`${session.delegatedRunning} delegated running`] : []),
+    ...((session.helpersTotal ?? 0) > 0 ? [`${session.helpers ?? 0} helper${(session.helpers ?? 0) === 1 ? "" : "s"} folded in`] : []),
+    ...(session.helperOf ? [`helper of ${session.helperOf.slice(0, 8)}`] : []),
+  ];
 
   const stop = (event: MouseEvent) => event.stopPropagation();
   const menuItems: CardMenuItem[] = [
@@ -143,69 +157,21 @@ export function SessionCard({
       </div>
 
       <div className="card__badges">
-        <ClientBadge info={sessionClient(session)} />
-        {workspace && <span className="chip chip--ws">{workspace}</span>}
-        {showSource && session.source && <span className="src">{session.source}</span>}
-        {agentsRunning > 0 && (
-          <span className="chip chip--agents chip--agents-on" title={`${agentsRunning} subagent${agentsRunning === 1 ? "" : "s"} running now · ${agentsTotal} spawned this session`}>
-            {agentsRunning} running
-          </span>
-        )}
-        {peers > 0 && !archived && session.status !== "ended" && !stale && (
-          <span className="chip chip--peers" title="Other live agents share this folder right now; edits can collide. Delegate with isolation: worktree, or use the Agent tool worktree isolation.">
-            {peers} more here
-          </span>
-        )}
-        {claimsCount > 0 && (
-          <span className="chip chip--claims" title="Files this session has claimed; delegated tasks in this repo are told to keep off them">
-            claims {claimsCount}
-          </span>
-        )}
-        {session.forkOf && (
-          <span className="chip chip--fork" title={`forks ${session.forkOf}`}>
-            fork · {forkParentName ?? session.forkOf.slice(0, 8)}
-          </span>
-        )}
-        {(session.forksLive ?? 0) > 0 && (
-          <span className="chip chip--forks" title={`People asking this session through a share · ${session.remoteAsks ?? 0} ask${(session.remoteAsks ?? 0) === 1 ? "" : "s"} total`}>
-            {session.forksLive} live fork{session.forksLive === 1 ? "" : "s"}
-          </span>
-        )}
-        {(session.delegatedRunning ?? 0) > 0 && (
-          <span className="chip chip--delegated" title="Tasks this session delegated that are running now">
-            {session.delegatedRunning} delegated running
-          </span>
-        )}
-        {(session.helpersTotal ?? 0) > 0 && (
-          <span
-            className="chip chip--helpers"
-            title="Claude Desktop runs a short helper session per chat step; folded into this card"
-          >
-            {session.helpers ?? 0} helper{(session.helpers ?? 0) === 1 ? "" : "s"}
-          </span>
-        )}
-        {session.helperOf && (
-          <span className="chip chip--helper" title={`helper of ${session.helperOf}`}>
-            helper of {session.helperOf.slice(0, 8)}
-          </span>
-        )}
+        <RunChip info={clientInfo} label={workspace ?? shortFolder(session.cwd)} title={`${clientInfo.label} · ${shortFolder(session.cwd)}`} />
+        <MoreChip extras={extras} />
       </div>
 
       <div className="card__line">
-        <span className="card__model">{model ?? "—"}</span>
         <span
           className="card__ctx"
           data-level={level}
           title={
             context !== null
-              ? `context ${context.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")} tokens · ↓${formatTokens(session.tokensIn)} ↑${formatTokens(session.tokensOut)}`
-              : "context unavailable"
+              ? `${model ?? "model unknown"} · context ${context.toLocaleString("en-US")} / ${limit.toLocaleString("en-US")} tokens · ↓${formatTokens(session.tokensIn)} ↑${formatTokens(session.tokensOut)}`
+              : `${model ?? "model unknown"} · context unavailable`
           }
         >
           ctx {context !== null ? `${Math.round(pct)}%` : "—"}
-        </span>
-        <span className="card__folder" title={session.cwd ?? ""}>
-          {shortFolder(session.cwd)}
         </span>
         <time>{relativeTime(session.updatedAt)}</time>
       </div>

@@ -47,6 +47,7 @@ export const LEGACY_SECTION_TAB: Readonly<Record<string, string>> = {
 };
 
 const LEGACY_PLUGIN_SECTION: Readonly<Record<string, PluginId>> = {
+  sessions: "sessions",
   today: "today",
   daily: "today",
   tasks: "tasks",
@@ -62,6 +63,7 @@ export const SETTINGS_TAB_KEYWORDS: Readonly<Record<string, string[]>> = {
   general: ["paths", "autostart", "startup", "windows", "autonomy", "timeout", "editor", "workspaces root", "second brain", "vault"],
   appearance: ["theme", "dracula", "midnight", "sidebar", "navigation", "pinned", "more"],
   plugins: ["features", "plugins", "enable", "disable", "toggle", "flow", "delegated", "workspaces", "reports"],
+  "plugin-sessions": ["needs you", "on top", "band", "sessions", "plugin"],
   "plugin-today": ["daily", "diary", "template", "advanced", "plugin"],
   "plugin-tasks": ["board", "projects folder", "priority", "prefixes", "advanced", "plugin"],
   "plugin-trail": ["session trail", "summaries", "diary", "plugin"],

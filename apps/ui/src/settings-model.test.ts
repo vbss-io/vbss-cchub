@@ -37,6 +37,7 @@ describe("buildSettingsTabs", () => {
       "general",
       "appearance",
       "plugins",
+      "plugin-sessions",
       "plugin-today",
       "plugin-tasks",
       "plugin-usage",
@@ -50,18 +51,18 @@ describe("buildSettingsTabs", () => {
     ]);
   });
 
-  it("has only the core tabs at the top level", () => {
+  it("has only the core tabs and the core Sessions page at the top level", () => {
     assert.deepEqual(keys(coreSettingsTabs()), ["general", "appearance", "plugins", "connections", "notifications", "groups", "about"]);
-    assert.deepEqual(keys(buildSettingsTabs(pluginSettingsPages(coreOnly))), keys(coreSettingsTabs()));
+    assert.deepEqual(keys(buildSettingsTabs(pluginSettingsPages(coreOnly))), ["general", "appearance", "plugins", "plugin-sessions", "connections", "notifications", "groups", "about"]);
   });
 
   it("merges usage and limits into one Usage page", () => {
     const pages = pluginSettingsPages({ ...coreOnly, usage: true, limits: true });
-    assert.deepEqual(pages.map((page) => [page.key, page.label, page.pluginIds]), [["plugin-usage", "Usage", ["usage", "limits"]]]);
+    assert.deepEqual(pages.map((page) => [page.key, page.label, page.pluginIds]), [["plugin-sessions", "Sessions", ["sessions"]], ["plugin-usage", "Usage", ["usage", "limits"]]]);
   });
 
   it("keys the Usage page by Limits when only Limits is on", () => {
-    assert.deepEqual(keys(pluginSettingsPages({ ...coreOnly, limits: true })), ["plugin-limits"]);
+    assert.deepEqual(keys(pluginSettingsPages({ ...coreOnly, limits: true })), ["plugin-sessions", "plugin-limits"]);
   });
 });
 

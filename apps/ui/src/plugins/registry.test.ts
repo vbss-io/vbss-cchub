@@ -129,6 +129,7 @@ describe("sidebarModel", () => {
 describe("pluginSettingsTabs", () => {
   it("lists one tab per enabled plugin with settings and merges Usage and Limits", () => {
     assert.deepEqual(pluginSettingsTabs(allOn), [
+      { key: "sessions", label: "Sessions", pluginIds: ["sessions"] },
       { key: "today", label: "Today", pluginIds: ["today"] },
       { key: "tasks", label: "Tasks", pluginIds: ["tasks"] },
       { key: "usage", label: "Usage", pluginIds: ["usage", "limits"] },
@@ -146,7 +147,7 @@ describe("pluginSettingsTabs", () => {
 
   it("hides the tabs of disabled plugins", () => {
     const tabs = pluginSettingsTabs({ ...allOn, usage: false, limits: false, share: false, daily: false });
-    assert.deepEqual(keys(tabs), ["tasks", "trail", "widget"]);
+    assert.deepEqual(keys(tabs), ["sessions", "tasks", "trail", "widget"]);
   });
 });
 

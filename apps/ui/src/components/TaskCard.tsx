@@ -1,9 +1,15 @@
-import { type MouseEvent } from "react";
 import type { TaskRecord, TaskStatus } from "../delegation";
 import { taskArchivedAt, taskBranch, taskIsolation, taskMergedAt } from "../delegation-actions";
 import { IconCode, IconCodex } from "../icons";
+import { taskInFlight, taskNeedsYou, taskReadyToMerge } from "../runs-model";
 import { relativeTime } from "../time";
 import type { SessionRecord } from "../types";
+import type { RetryMode } from "../use-task-detail";
+import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
+import { MoreChip } from "./RunChips";
+import { contextLimitFor } from "./SessionCard";
+
+export type { RetryMode };
 
 export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   pending: "Pending",
@@ -15,9 +21,8 @@ export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   cancelled: "Cancelled",
 };
 
-export const inFlight = (status: TaskStatus): boolean => status === "pending" || status === "running";
-export const needsYou = (status: TaskStatus): boolean =>
-  status === "attention" || status === "failed" || status === "interrupted";
+export const inFlight = taskInFlight;
+export const needsYou = taskNeedsYou;
 
 export interface TaskOrigin {
   label: string;
@@ -33,8 +38,6 @@ export function taskOrigin(task: TaskRecord, sessions: Record<string, SessionRec
   if (task.originClient === "share") return { label: "via share", sessionId: null };
   return { label: `via ${task.createdBy ?? task.originClient ?? "mcp"}`, sessionId: null };
 }
-
-export type RetryMode = "autonomous" | "plain";
 
 export interface TaskWhy {
   headline: string;
@@ -60,15 +63,23 @@ function humanizeDuration(ms: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
-function durationLabel(task: TaskRecord): string {
+export function durationLabel(task: TaskRecord): string {
   const end = inFlight(task.status) ? Date.now() : task.updatedAt;
   const label = humanizeDuration(Math.max(0, end - task.createdAt));
   return inFlight(task.status) ? `running ${label}` : label;
 }
 
+export function worktreeLabel(task: TaskRecord): string | null {
+  if (taskIsolation(task) !== "worktree") return null;
+  const branch = taskBranch(task);
+  const base = taskMergedAt(task) != null ? "merged" : task.isolationReason === "busy-repo" ? "worktree · auto" : "worktree";
+  return branch ? `${base} · ${branch}` : base;
+}
+
 interface Props {
   task: TaskRecord;
   origin: TaskOrigin;
+  runSession: SessionRecord | null;
   selected: boolean;
   archiveSupported: boolean;
   busy: boolean;
@@ -80,28 +91,54 @@ interface Props {
   peers?: number;
 }
 
-export function TaskCard({ task, origin, selected, archiveSupported, busy, peers = 0, onSelect, onOpenSession, onCancel, onArchive, onRetry }: Props) {
-  const branch = taskBranch(task);
+export function TaskCard({ task, origin, runSession, selected, archiveSupported, busy, peers = 0, onSelect, onOpenSession, onCancel, onArchive, onRetry }: Props) {
+  const menu = useCardMenu();
   const isolated = taskIsolation(task) === "worktree";
-  const merged = taskMergedAt(task) != null;
-  const stop = (event: MouseEvent) => event.stopPropagation();
   const running = inFlight(task.status);
   const archived = taskArchivedAt(task) != null;
   const why = whyOf(task);
   const runnerLabel = task.runner === "codex" ? "Codex" : "Claude";
   const runnerFamily = task.runner === "codex" ? "codex" : "claude";
-  const chip = `${task.workspace}${task.repo ? ` / ${task.repo}` : ""}`;
+  const workspaceLabel = `${task.workspace}${task.repo ? ` / ${task.repo}` : ""}`;
+  const worktree = worktreeLabel(task);
+  const ready = taskReadyToMerge(task);
+  const context = runSession && typeof runSession.contextTokens === "number" ? runSession.contextTokens : null;
+  const pct = context !== null && runSession ? Math.min(100, Math.round((context / contextLimitFor(context, runSession.model)) * 100)) : null;
+
+  const extras: string[] = [
+    origin.label,
+    `${task.runsCount} run${task.runsCount === 1 ? "" : "s"}`,
+    ...(task.portBase != null && task.portEnd != null ? [`ports ${task.portBase}–${task.portEnd}`] : []),
+    ...(!isolated && peers > 0 ? [`${peers} more here: other live agents work in this folder`] : []),
+    ...(runSession ? [`hub session ${runSession.sessionId.slice(0, 8)} · ${runSession.status}`] : []),
+  ];
+
+  const menuItems: CardMenuItem[] = [
+    { key: "open", label: "Open", onSelect: () => onSelect(task.id) },
+    ...(why ? [{ key: "retry", label: why.retry === "autonomous" ? "Retry autonomous" : "Retry", onSelect: () => onRetry(task, why.retry) }] : []),
+    ...(why && why.retry === "autonomous" ? [{ key: "retry-plain", label: "Retry", onSelect: () => onRetry(task, "plain") }] : []),
+    ...(running ? [{ key: "cancel", label: "Cancel", danger: true, onSelect: () => onCancel(task.id) }] : []),
+    ...(!running && !archived && archiveSupported ? [{ key: "archive", label: "Archive", onSelect: () => onArchive(task.id) }] : []),
+    ...(runSession ? [{ key: "session", label: "Open session", onSelect: () => onOpenSession(runSession.sessionId) }] : []),
+    ...(origin.sessionId ? [{ key: "origin", label: "Open delegating session", onSelect: () => onOpenSession(origin.sessionId ?? "") }] : []),
+  ];
 
   return (
     <article
       className={`card card--task card--task-${task.status} ${selected ? "card--sel" : ""} ${archived ? "card--archived" : ""} card--clickable`}
       onClick={() => onSelect(task.id)}
+      aria-busy={busy}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        menu.openAt(event.clientX, event.clientY);
+      }}
     >
       <div className="card__head">
         <span className="card__name" title={task.title}>
           {task.title}
         </span>
-        <span className={`tag tag--${task.status}`}>{TASK_STATUS_LABEL[task.status]}</span>
+        <span className={`tag tag--${ready ? "unread" : task.status}`}>{ready ? "Ready to merge" : TASK_STATUS_LABEL[task.status]}</span>
+        <CardMenu menu={menu} items={menuItems} label={`Actions for ${task.title}`} />
       </div>
 
       <div className="card__badges">
@@ -110,106 +147,31 @@ export function TaskCard({ task, origin, selected, archiveSupported, busy, peers
           <span>{runnerLabel}</span>
         </span>
         <span className="chip chip--ws" title={task.cwd}>
-          {chip}
+          {workspaceLabel}
         </span>
-        {task.portBase != null && task.portEnd != null && (
-          <span className="chip chip--ports" title="Ports reserved for this task's dev servers and previews">
-            ports {task.portBase}–{task.portEnd}
+        {worktree && (
+          <span className={`chip chip--worktree ${taskMergedAt(task) != null ? "chip--worktree-merged" : ""}`} title="Works in its own git worktree and branch; merge it from the task panel">
+            {worktree}
           </span>
         )}
-        {isolated && (
-          <span
-            className={`chip chip--worktree ${merged ? "chip--worktree-merged" : ""}`}
-            title={
-              merged
-                ? "Worked in its own git worktree; branch already merged"
-                : task.isolationReason === "busy-repo"
-                  ? "Isolated automatically: the repo already had a task running"
-                  : "Works in its own git worktree and branch; merge it from the detail pane"
-            }
-          >
-            {merged ? "merged" : task.isolationReason === "busy-repo" ? "worktree · auto" : "worktree"}
-            {branch ? ` · ${branch}` : ""}
-          </span>
-        )}
-        {!isolated && peers > 0 && (
-          <span className="chip chip--peers" title="Other live agents are working in the same folder right now; edits can collide. Delegate with isolation: worktree to avoid it.">
-            {peers} more here
-          </span>
-        )}
-        {origin.sessionId ? (
-          <button
-            className="chip chip--origin chip--link"
-            title="Open the session that delegated this"
-            onClick={(event) => {
-              stop(event);
-              onOpenSession(origin.sessionId!);
-            }}
-          >
-            {origin.label}
-          </button>
-        ) : (
-          <span className="chip chip--origin">{origin.label}</span>
-        )}
+        <MoreChip extras={extras} />
       </div>
 
       {why && (
-        <div className="why" onClick={stop}>
+        <div className="why why--compact">
           <span className="why__headline">{why.headline}</span>
           {why.detail && <span className="why__detail">{why.detail}</span>}
-          <div className="why__actions">
-            <button className="act act--focus" disabled={busy} onClick={() => onRetry(task, why.retry)}>
-              {why.retry === "autonomous" ? "Retry autonomous" : "Retry"}
-            </button>
-            <button
-              className="act"
-              disabled={busy || !archiveSupported}
-              title={archiveSupported ? undefined : "archive arrives with the server update"}
-              onClick={() => onArchive(task.id)}
-            >
-              Archive
-            </button>
-          </div>
         </div>
       )}
 
       <div className="card__line">
-        <span>started {relativeTime(task.createdAt)}</span>
         <span className="card__dur">{durationLabel(task)}</span>
-        <span className="card__folder">
-          {task.runsCount} run{task.runsCount === 1 ? "" : "s"}
-        </span>
-      </div>
-
-      <div className="card__actions">
-        <div className="card__open">
-          <button
-            className="act act--focus"
-            onClick={(event) => {
-              stop(event);
-              onSelect(task.id);
-            }}
-          >
-            Open
-          </button>
-        </div>
-        <div className="card__manage">
-          {running && (
-            <button className="act act--danger" disabled={busy} onClick={(event) => { stop(event); onCancel(task.id); }}>
-              Cancel
-            </button>
-          )}
-          {!running && (
-            <button
-              className="act"
-              disabled={busy || !archiveSupported}
-              title={archiveSupported ? undefined : "archive arrives with the server update"}
-              onClick={(event) => { stop(event); onArchive(task.id); }}
-            >
-              Archive
-            </button>
-          )}
-        </div>
+        {pct !== null && (
+          <span className="card__ctx" title={`hub session context ${context?.toLocaleString("en-US") ?? ""} tokens`}>
+            ctx {pct}%
+          </span>
+        )}
+        <time>{relativeTime(task.updatedAt)}</time>
       </div>
     </article>
   );

@@ -6,6 +6,8 @@ import { BrandMark, Wordmark } from "./components/BrandMark";
 import { CodexDrawer } from "./components/CodexDrawer";
 import { CommandPalette } from "./components/CommandPalette";
 import { SessionDrawer } from "./components/SessionDrawer";
+import { TaskDrawer } from "./components/TaskDrawer";
+import { needsYouOnTop, parseOrigin, runsRouteOf, type Origin } from "./runs-model";
 import { StatusBar } from "./components/StatusBar";
 import { WhatsNew } from "./components/WhatsNew";
 import { addCapture, configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getUiPrefs, putUiPrefs, UiPrefsUnavailableError, type UiPrefs, type UiPrefsPatch, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
@@ -33,7 +35,6 @@ import { SessionsView } from "./views/SessionsView";
 import { settingsTabs } from "./settings-sections";
 import { SettingsView, type NotifSettings, type SettingsSection, type ThemeName } from "./views/SettingsView";
 import { ShareView } from "./views/ShareView";
-import { TasksView } from "./views/TasksView";
 import { UsageView, type UsageEvent } from "./views/UsageView";
 import { WorkspacesView } from "./views/WorkspacesView";
 import { canToggleWidget, toggleWidgetWindow } from "./widget-toggle";
@@ -79,6 +80,24 @@ function loadNotif(): NotifSettings {
     };
   } catch {
     return DEFAULT_NOTIF;
+  }
+}
+
+const SESSIONS_ORIGIN_KEY = "hub.sessions.origin";
+
+function loadSessionsOrigin(): Origin {
+  try {
+    return parseOrigin(localStorage.getItem(SESSIONS_ORIGIN_KEY));
+  } catch {
+    return "all";
+  }
+}
+
+function saveSessionsOrigin(origin: Origin): void {
+  try {
+    localStorage.setItem(SESSIONS_ORIGIN_KEY, origin);
+  } catch {
+    void 0;
   }
 }
 
@@ -242,6 +261,8 @@ export function App() {
   const [seenVersion, setSeenVersion] = useState(() => localStorage.getItem("hub.seenVersion"));
   const [drawer, setDrawer] = useState<string | null>(null);
   const [codexDrawer, setCodexDrawer] = useState<string | null>(null);
+  const [taskDrawer, setTaskDrawer] = useState<string | null>(null);
+  const [sessionsOrigin, setSessionsOriginState] = useState<Origin>(loadSessionsOrigin);
   const [shareTick, setShareTick] = useState(0);
   const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
   const [autostart, setAutostartState] = useState<AutostartStatus | null>(null);
@@ -289,13 +310,26 @@ export function App() {
     return () => window.removeEventListener("cchub:goto-hash", onGoto);
   }, [goToHash]);
 
+  const setSessionsOrigin = useCallback((origin: Origin) => {
+    setSessionsOriginState(origin);
+    saveSessionsOrigin(origin);
+  }, []);
+
+  const openTask = useCallback((id: string) => {
+    setDrawer(null);
+    setCodexDrawer(null);
+    setTaskDrawer(id);
+  }, []);
+
   const openSession = useCallback((id: string) => {
     setCodexDrawer(null);
+    setTaskDrawer(null);
     setDrawer(id);
   }, []);
 
   const openCodex = useCallback((id: string) => {
     setDrawer(null);
+    setTaskDrawer(null);
     setCodexDrawer(id);
   }, []);
 
@@ -742,7 +776,9 @@ export function App() {
   const delegatedEnabled = isPluginEnabled("delegated", features);
   const announceDelegated = (taskId: string, title: string) =>
     pushToast("ok", `Delegated "${title}".`, delegatedEnabled ? { label: "Open task", run: () => navigate("tasks", taskId) } : undefined);
-  const effectiveView: View = isViewEnabled(route.view, features) ? route.view : "sessions";
+  const routedView: View = route.view === "tasks" && delegatedEnabled ? "sessions" : route.view;
+  const effectiveView: View = isViewEnabled(routedView, features) ? routedView : "sessions";
+  const needsYouTop = needsYouOnTop(uiPrefs.layout);
   const featuresRef = useRef(features);
   featuresRef.current = features;
   const settingsLoaded = settings !== null;
@@ -809,7 +845,20 @@ export function App() {
   useEffect(() => {
     setDrawer(null);
     setCodexDrawer(null);
+    setTaskDrawer(null);
   }, [effectiveView]);
+
+  const runsReady = settingsLoaded || !hubEnabled || isMock;
+  useEffect(() => {
+    if (!runsReady || !delegatedEnabled) return;
+    const target = runsRouteOf(route.view, route.param);
+    if (!target) return;
+    if (target.origin) setSessionsOrigin(target.origin);
+    if (target.taskId) openTask(target.taskId);
+    else setTaskDrawer(null);
+    history.replaceState(null, "", "#/sessions");
+    setRoute({ view: "sessions", param: null });
+  }, [route, runsReady, delegatedEnabled, setSessionsOrigin, openTask]);
 
   useEffect(() => {
     viewRef.current = effectiveView;
@@ -958,7 +1007,7 @@ export function App() {
 
   return (
     <UiPrefsProvider value={uiPrefsValue}>
-      <div className={`shell ${drawerSession || codexDrawerThread || sharePanel ? "shell--panel" : ""}`}>
+      <div className={`shell ${drawerSession || codexDrawerThread || taskDrawer || sharePanel ? "shell--panel" : ""}`}>
         {connection.offline && !isMock && <HubOfflineBanner />}
         <nav className="nav" aria-label="Main">
           <div className="nav__brand">
@@ -1057,6 +1106,18 @@ export function App() {
                 onArchiveCodex={(id) => void archiveCodexThread(id)}
                 onUnarchiveCodex={(id) => void unarchiveCodexThread(id)}
                 onDeleteCodex={(id) => void deleteCodexThread(id)}
+                tasks={tasks}
+                delegatedEnabled={delegatedEnabled}
+                hubEnabled={hubEnabled}
+                hubTick={hubTick}
+                origin={sessionsOrigin}
+                onOrigin={setSessionsOrigin}
+                needsYouTop={needsYouTop}
+                selectedTaskId={taskDrawer}
+                onOpenTask={openTask}
+                onTasksChanged={loadHub}
+                onOpenSettings={() => navigate("settings", "connect")}
+                onError={fail}
               />
             )}
             {effectiveView === "daily" && dailyEnabled && (
@@ -1101,21 +1162,6 @@ export function App() {
                 onOpenCodex={openCodex}
                 onFocus={(id) => void focusSession(id)}
                 onOpenWorkspace={(name) => void openWorkspace(name)}
-              />
-            )}
-            {effectiveView === "tasks" && (
-              <TasksView
-                tasks={tasks}
-                sessions={sessions}
-                enabled={hubEnabled}
-                selectedId={route.param}
-                tick={hubTick}
-                onSelect={(id) => navigate("tasks", id)}
-                onOpenSession={openSession}
-                subscribeRunEvents={subscribeRunEvents}
-                onRefresh={loadHub}
-                onOpenSettings={() => navigate("settings", "connect")}
-                onError={fail}
               />
             )}
             {effectiveView === "workspaces" && (
@@ -1239,6 +1285,22 @@ export function App() {
               setCodexDrawer(null);
               navigate("tasks", id);
             }}
+          />
+        )}
+        {taskDrawer && delegatedEnabled && (
+          <TaskDrawer
+            taskId={taskDrawer}
+            tasks={tasks}
+            sessions={sessions}
+            codexSessions={codexSessions}
+            workspace={workspaceOf(workspaces, tasks.find((task) => task.id === taskDrawer)?.cwd ?? null)}
+            tick={hubTick}
+            subscribeRunEvents={subscribeRunEvents}
+            onRefresh={loadHub}
+            onError={fail}
+            onClose={() => setTaskDrawer(null)}
+            onOpenSession={openSession}
+            onOpenCodex={openCodex}
           />
         )}
         {showWhatsNew && <WhatsNew onClose={() => setShowWhatsNew(false)} />}
