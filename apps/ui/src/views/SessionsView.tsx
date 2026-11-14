@@ -29,6 +29,7 @@ import {
   type OriginEntry,
 } from "../runs-model";
 import { countsOf, isExtraFilter, LIVE_BUCKETS, matchesFilter, type Bucket, type FilterKey } from "../sessions-filter";
+import type { SessionsMode } from "../sessions-mode";
 import { isEmpty, isStale } from "../stale";
 import type { CodexSessionRecord, GroupRecord, SessionRecord, SessionStatus } from "../types";
 import { retryPermission, useArchiveSupport } from "../use-task-detail";
@@ -115,6 +116,12 @@ type Item =
   | (ItemBase & { kind: "codex"; thread: CodexSessionRecord })
   | (ItemBase & { kind: "task"; task: TaskRecord });
 
+export interface MapControls {
+  query: string;
+  onQuery: (query: string) => void;
+  origin: Origin;
+}
+
 function loadCollapsedGroups(): string[] {
   try {
     const stored: unknown = JSON.parse(localStorage.getItem("hub.collapsedGroups") ?? "[]");
@@ -146,7 +153,9 @@ interface Props {
   origin: Origin;
   needsYouTop: boolean;
   selectedTaskId: string | null;
+  mode: SessionsMode;
   modeSwitch?: ReactNode;
+  renderMap?: (controls: MapControls) => ReactNode;
   tick: number;
   onOrigin: (origin: Origin) => void;
   onOpen: (sessionId: string) => void;
@@ -180,7 +189,9 @@ export function SessionsView({
   origin: requestedOrigin,
   needsYouTop,
   selectedTaskId,
+  mode,
   modeSwitch,
+  renderMap,
   tick,
   onOrigin,
   onOpen,
@@ -469,7 +480,7 @@ export function SessionsView({
     <>
       <strong>Origin</strong> picks what runs here: Claude Code sessions, Codex threads{delegatedEnabled ? " or work delegated to the hub" : ""}.{" "}
       {delegatedEnabled && "A delegated task folds the hub session that runs it. "}
-      Hub runs are headless sessions launched by delegated tasks; they never notify and stay out of All. Share forks answer people through your share links. Codex threads are read from
+      {delegatedEnabled ? "Hub runs are headless sessions launched by delegated tasks" : "Hub runs are headless sessions the hub launches"}; they never notify and stay out of All. Share forks answer people through your share links. Codex threads are read from
       ~/.codex/sessions and are read-only here. Client and sort live under Filters.
     </>
   );
@@ -477,8 +488,10 @@ export function SessionsView({
   const noFilters = filter === "all" && effectiveClient === "all" && query.trim().length === 0;
   const emptyLabel = origin === "codex" ? "Codex threads" : origin === "delegated" ? "delegated tasks" : origin === "claude" ? "Claude sessions" : "sessions";
 
+  const mapMode = mode === "map" && renderMap !== undefined;
+
   return (
-    <div className="view view--runs">
+    <div className={`view view--runs ${mapMode ? "view--runs-map" : ""}`}>
       <div className="runs-head">
         <div className="runs-origin" role="group" aria-label="Origin">
           {originOptions(delegatedEnabled).map((key) => (
@@ -497,13 +510,19 @@ export function SessionsView({
           ))}
         </div>
         <div className="runs-head__right">
-          <Toggletip label="About this view" align="end">
-            {help}
-          </Toggletip>
+          {!mapMode && (
+            <Toggletip label="About this view" align="end">
+              {help}
+            </Toggletip>
+          )}
           {modeSwitch && <div className="runs-head__mode">{modeSwitch}</div>}
         </div>
       </div>
 
+      {mapMode && renderMap({ query, onQuery: setQuery, origin })}
+
+      {!mapMode && (
+      <>
       <div className="toolbar runs-toolbar">
         <div className="filters">
           <button className={`pill ${filter === "all" ? "pill--on" : ""}`} onClick={() => setFilter("all")}>
@@ -611,6 +630,8 @@ export function SessionsView({
         </p>
       )}
       {list.length === 0 && !(filter === "all" && query.trim().length === 0) && <p className="empty">Nothing matches this filter.</p>}
+      </>
+      )}
     </div>
   );
 }

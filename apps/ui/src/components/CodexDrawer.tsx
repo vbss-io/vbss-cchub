@@ -1,18 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchCodexLive } from "../api";
-import { ClientBadge, codexClient } from "../clients";
-import { IconClose, IconExpand } from "../icons";
-import { relativeTime } from "../time";
+import { codexClient } from "../clients";
+import { codexMenuKeys, codexPrimaryAction, type CodexMenuKey } from "../drawer-model";
+import { IconClose, IconExpand, IconFocus } from "../icons";
 import type { CodexSessionRecord, TranscriptEntry } from "../types";
+import { shortFolder } from "../wsmatch";
 import { Timeline } from "./SessionDrawer";
 import { useDrawerWidth, DRAWER_WIDTH } from "../use-layout-size";
+import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
+import { RunChip } from "./RunChips";
+import { Toggletip } from "./Toggletip";
 
 interface Props {
   thread: CodexSessionRecord;
   workspace: string | null;
+  delegatedEnabled: boolean;
+  codexAppRunning: boolean;
   onClose: () => void;
   onOpenTask: (taskId: string) => void;
+  onFocusApp: () => void;
+  onArchive: (id: string) => void;
+  onUnarchive: (id: string) => void;
 }
 
 type Tab = "activity" | "details";
@@ -28,10 +37,11 @@ const sourceLabel = (thread: CodexSessionRecord): string => {
   return thread.threadSource ? (THREAD_SOURCE[thread.threadSource] ?? thread.threadSource.replace(/_/g, " ")) : "—";
 };
 
-export function CodexDrawer({ thread, workspace, onClose, onOpenTask }: Props) {
+export function CodexDrawer({ thread, workspace, delegatedEnabled, codexAppRunning, onClose, onOpenTask, onFocusApp, onArchive, onUnarchive }: Props) {
   const [tab, setTab] = useState<Tab>("activity");
   const [entries, setEntries] = useState<TranscriptEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const menu = useCardMenu();
 
   useEffect(() => {
     let mounted = true;
@@ -95,14 +105,27 @@ export function CodexDrawer({ thread, workspace, onClose, onOpenTask }: Props) {
   useEffect(() => {
     if (full) return;
     const onDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (target && panelRef.current && !panelRef.current.contains(target)) onClose();
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (panelRef.current?.contains(target) || target.closest(".card-menu")) return;
+      onClose();
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [full, onClose]);
 
   const name = thread.customTitle ?? thread.title;
+  const clientInfo = codexClient(thread.client);
+  const primary = codexPrimaryAction({ status: thread.status, appRunning: codexAppRunning });
+  const hubTaskId = thread.hubTaskId;
+  const menuAction: Record<CodexMenuKey, CardMenuItem> = {
+    task: { key: "task", label: "Open in Delegated", onSelect: () => hubTaskId && onOpenTask(hubTaskId) },
+    large: { key: "large", label: full ? "Back to the side panel" : "Open in a large view", onSelect: () => setFull((value) => !value) },
+    archive: { key: "archive", label: "Archive", onSelect: () => onArchive(thread.id) },
+    unarchive: { key: "unarchive", label: "Unarchive", onSelect: () => onUnarchive(thread.id) },
+  };
+  const menuItems = codexMenuKeys({ hubTask: hubTaskId !== null, delegatedOn: delegatedEnabled, archived: thread.archivedAt != null }).map((key) => menuAction[key]);
+  const live = thread.status === "active" || thread.status === "idle";
 
   return (
     <>
@@ -122,23 +145,29 @@ export function CodexDrawer({ thread, workspace, onClose, onOpenTask }: Props) {
               <h2 title={name}>{name}</h2>
             </div>
             <div className="card__badges">
-              <ClientBadge info={codexClient(thread.client)} />
               <span className={`tag tag--${thread.status}`}>{thread.status}</span>
-              {workspace && <span className="chip chip--ws">{workspace}</span>}
+              <RunChip info={clientInfo} label={workspace ?? shortFolder(thread.cwd)} title={`${clientInfo.label} · ${shortFolder(thread.cwd)}`} />
+              {thread.archivedAt != null && <span className="tag tag--muted">archived</span>}
             </div>
           </div>
           <div className="drawer__actions">
+            {primary === "focus-app" && (
+              <button className="act act--focus" onClick={onFocusApp} title="Bring the Codex app to the front (it has no per-thread target)">
+                <IconFocus /> Focus app
+              </button>
+            )}
+            <CardMenu menu={menu} items={menuItems} label={`Actions for ${name}`} />
             <button className="act act--icon" onClick={onClose} aria-label="Close">
               <IconClose />
             </button>
           </div>
         </header>
 
-        <div className="drawer__tabs">
-          <button className={`pill ${tab === "activity" ? "pill--on" : ""}`} onClick={() => setTab("activity")}>
+        <div className="drawer__tabs" role="tablist">
+          <button role="tab" aria-selected={tab === "activity"} className={`pill ${tab === "activity" ? "pill--on" : ""}`} onClick={() => setTab("activity")}>
             Activity
           </button>
-          <button className={`pill ${tab === "details" ? "pill--on" : ""}`} onClick={() => setTab("details")}>
+          <button role="tab" aria-selected={tab === "details"} className={`pill ${tab === "details" ? "pill--on" : ""}`} onClick={() => setTab("details")}>
             Details
           </button>
         </div>
@@ -148,9 +177,7 @@ export function CodexDrawer({ thread, workspace, onClose, onOpenTask }: Props) {
           {tab === "activity" && (
             <>
               <div className="timeline__bar">
-                <p className="hint">
-                  Read from the Codex rollout. {thread.status === "active" || thread.status === "idle" ? "Refreshes every 5 seconds." : "This thread has ended."}
-                </p>
+                <Toggletip label="About this activity">Read from the Codex rollout. {live ? "Refreshes every 5 seconds." : "This thread has ended."}</Toggletip>
                 <div className="pillpair">
                   <button className={`pill ${detail ? "" : "pill--on"}`} onClick={() => setDetail(false)}>
                     Conversation
@@ -175,6 +202,8 @@ export function CodexDrawer({ thread, workspace, onClose, onOpenTask }: Props) {
               <dd>
                 <code>{thread.id}</code>
               </dd>
+              <dt>Client</dt>
+              <dd>{clientInfo.label}</dd>
               <dt>Working directory</dt>
               <dd className="path">{thread.cwd ?? "—"}</dd>
               <dt>Rollout file</dt>
@@ -189,13 +218,17 @@ export function CodexDrawer({ thread, workspace, onClose, onOpenTask }: Props) {
               <dd>{new Date(thread.startedAt).toLocaleString()}</dd>
               <dt>Updated</dt>
               <dd>{new Date(thread.updatedAt).toLocaleString()}</dd>
-              {thread.hubTaskId && (
+              {hubTaskId && (
                 <>
                   <dt>Hub task</dt>
                   <dd>
-                    <button className="act" onClick={() => onOpenTask(thread.hubTaskId!)}>
-                      Open in Delegated
-                    </button>
+                    {delegatedEnabled ? (
+                      <button className="linklike" onClick={() => onOpenTask(hubTaskId)} title="Open in Delegated">
+                        <code>{hubTaskId}</code>
+                      </button>
+                    ) : (
+                      <code>{hubTaskId}</code>
+                    )}
                   </dd>
                 </>
               )}

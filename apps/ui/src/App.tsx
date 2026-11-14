@@ -8,6 +8,8 @@ import { CommandPalette } from "./components/CommandPalette";
 import { SessionDrawer } from "./components/SessionDrawer";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { needsYouOnTop, parseOrigin, runsRouteOf, type Origin } from "./runs-model";
+import { SessionsModeSwitch } from "./components/SessionsModeSwitch";
+import { mapScope, parseSessionsMode, resolveSessionsMode, SESSIONS_MODE_KEY, sessionsModeRouteOf, sessionsSubtitle, type SessionsMode } from "./sessions-mode";
 import { StatusBar } from "./components/StatusBar";
 import { WhatsNew } from "./components/WhatsNew";
 import { addCapture, configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getUiPrefs, putUiPrefs, UiPrefsUnavailableError, type UiPrefs, type UiPrefsPatch, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
@@ -96,6 +98,22 @@ function loadSessionsOrigin(): Origin {
 function saveSessionsOrigin(origin: Origin): void {
   try {
     localStorage.setItem(SESSIONS_ORIGIN_KEY, origin);
+  } catch {
+    void 0;
+  }
+}
+
+function loadSessionsMode(): SessionsMode {
+  try {
+    return parseSessionsMode(localStorage.getItem(SESSIONS_MODE_KEY));
+  } catch {
+    return "list";
+  }
+}
+
+function saveSessionsMode(mode: SessionsMode): void {
+  try {
+    localStorage.setItem(SESSIONS_MODE_KEY, mode);
   } catch {
     void 0;
   }
@@ -263,6 +281,7 @@ export function App() {
   const [codexDrawer, setCodexDrawer] = useState<string | null>(null);
   const [taskDrawer, setTaskDrawer] = useState<string | null>(null);
   const [sessionsOrigin, setSessionsOriginState] = useState<Origin>(loadSessionsOrigin);
+  const [sessionsMode, setSessionsModeState] = useState<SessionsMode>(loadSessionsMode);
   const [shareTick, setShareTick] = useState(0);
   const [tunnel, setTunnel] = useState<TunnelStatus | null>(null);
   const [autostart, setAutostartState] = useState<AutostartStatus | null>(null);
@@ -313,6 +332,11 @@ export function App() {
   const setSessionsOrigin = useCallback((origin: Origin) => {
     setSessionsOriginState(origin);
     saveSessionsOrigin(origin);
+  }, []);
+
+  const setSessionsMode = useCallback((mode: SessionsMode) => {
+    setSessionsModeState(mode);
+    saveSessionsMode(mode);
   }, []);
 
   const openTask = useCallback((id: string) => {
@@ -774,9 +798,11 @@ export function App() {
   const limitsEnabled = isPluginEnabled("limits", features);
   const boardEnabled = isPluginEnabled("tasks", features);
   const delegatedEnabled = isPluginEnabled("delegated", features);
+  const flowEnabled = isPluginEnabled("flow", features);
+  const runsMode = resolveSessionsMode(sessionsMode, flowEnabled);
   const announceDelegated = (taskId: string, title: string) =>
     pushToast("ok", `Delegated "${title}".`, delegatedEnabled ? { label: "Open task", run: () => navigate("tasks", taskId) } : undefined);
-  const routedView: View = route.view === "tasks" && delegatedEnabled ? "sessions" : route.view;
+  const routedView: View = (route.view === "tasks" && delegatedEnabled) || (route.view === "flow" && flowEnabled) ? "sessions" : route.view;
   const effectiveView: View = isViewEnabled(routedView, features) ? routedView : "sessions";
   const needsYouTop = needsYouOnTop(uiPrefs.layout);
   const featuresRef = useRef(features);
@@ -790,7 +816,8 @@ export function App() {
     if (name === null) return;
     pushToast("error", `${name} is off.`, { label: "Turn on in Settings", run: () => navigate("settings", "plugins") });
   }, [route, settingsLoaded, pushToast, navigate]);
-  const current = viewItem(effectiveView) ?? SETTINGS_HEAD;
+  const currentItem = viewItem(effectiveView);
+  const current = currentItem ? { ...currentItem, subtitle: effectiveView === "sessions" ? sessionsSubtitle(delegatedEnabled) : currentItem.subtitle } : SETTINGS_HEAD;
   const drawerSession = drawer ? (sessions[drawer] ?? null) : null;
   const codexDrawerThread = codexDrawer ? (codexSessions.find((thread) => thread.id === codexDrawer) ?? null) : null;
   const headRef = useRef<HTMLElement | null>(null);
@@ -859,6 +886,15 @@ export function App() {
     history.replaceState(null, "", "#/sessions");
     setRoute({ view: "sessions", param: null });
   }, [route, runsReady, delegatedEnabled, setSessionsOrigin, openTask]);
+
+  useEffect(() => {
+    if (!runsReady) return;
+    const mode = sessionsModeRouteOf(route.view, flowEnabled);
+    if (!mode) return;
+    setSessionsMode(mode);
+    history.replaceState(null, "", "#/sessions");
+    setRoute({ view: "sessions", param: null });
+  }, [route, runsReady, flowEnabled, setSessionsMode]);
 
   useEffect(() => {
     viewRef.current = effectiveView;
@@ -971,7 +1007,7 @@ export function App() {
   const paletteItems = useMemo(() => {
     if (!paletteOpen) return [];
     const views = [
-      ...enabledViews(features).map((item) => ({ key: item.key, label: item.label, subtitle: item.subtitle, enabled: true })),
+      ...enabledViews(features).map((item) => ({ key: item.key, label: item.label, subtitle: item.key === "sessions" ? sessionsSubtitle(delegatedEnabled) : item.subtitle, enabled: true })),
       { key: "settings", label: SETTINGS_HEAD.label, subtitle: SETTINGS_HEAD.subtitle, enabled: true },
     ];
     const toggleWidget = canToggleWidget()
@@ -1003,7 +1039,7 @@ export function App() {
       ...(boardEnabled && paletteBoard ? buildTaskItems(paletteBoard.tasks, paletteBoard.projects, (id) => navigate("board", encodeURIComponent(id))) : []),
     ];
     return items;
-  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, features, theme, tick, navigate, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, startCapture, openSession, openCodex, fail]);
+  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, features, delegatedEnabled, theme, tick, navigate, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, startCapture, openSession, openCodex, fail]);
 
   return (
     <UiPrefsProvider value={uiPrefsValue}>
@@ -1113,6 +1149,30 @@ export function App() {
                 origin={sessionsOrigin}
                 onOrigin={setSessionsOrigin}
                 needsYouTop={needsYouTop}
+                mode={runsMode}
+                modeSwitch={flowEnabled ? <SessionsModeSwitch mode={runsMode} onMode={setSessionsMode} /> : undefined}
+                renderMap={
+                  flowEnabled
+                    ? (controls) => (
+                        <FlowView
+                          sessions={sessions}
+                          codexSessions={codexSessions}
+                          tasks={tasks}
+                          workspaces={workspaces}
+                          groups={groups}
+                          onOpenSession={openSession}
+                          onOpenTask={(id) => navigate("tasks", id)}
+                          onOpenCodex={openCodex}
+                          onFocus={(id) => void focusSession(id)}
+                          onOpenWorkspace={(name) => void openWorkspace(name)}
+                          query={controls.query}
+                          onQuery={controls.onQuery}
+                          scope={mapScope(controls.origin, delegatedEnabled)}
+                          delegatedEnabled={delegatedEnabled}
+                        />
+                      )
+                    : undefined
+                }
                 selectedTaskId={taskDrawer}
                 onOpenTask={openTask}
                 onTasksChanged={loadHub}
@@ -1149,20 +1209,6 @@ export function App() {
             )}
             {effectiveView === "usage" && usageEnabled && (
               <UsageView settings={settings} sessions={sessions} onOpenSession={openSession} subscribeUsage={subscribeUsage} />
-            )}
-            {effectiveView === "flow" && (
-              <FlowView
-                sessions={sessions}
-                codexSessions={codexSessions}
-                tasks={tasks}
-                workspaces={workspaces}
-                groups={groups}
-                onOpenSession={openSession}
-                onOpenTask={(id) => navigate("tasks", id)}
-                onOpenCodex={openCodex}
-                onFocus={(id) => void focusSession(id)}
-                onOpenWorkspace={(name) => void openWorkspace(name)}
-              />
             )}
             {effectiveView === "workspaces" && (
               <WorkspacesView
@@ -1264,8 +1310,13 @@ export function App() {
             session={drawerSession}
             workspace={workspaceOf(workspaces, drawerSession.cwd)}
             claims={claims.filter((claim) => claim.sessionId === drawerSession.sessionId)}
+            delegatedEnabled={delegatedEnabled}
             onReleaseClaim={(id) => void releaseClaim(id)}
             onClose={() => setDrawer(null)}
+            onArchive={(id) => {
+              setDrawer(null);
+              void archiveSession(id);
+            }}
             onShare={(id) => {
               setDrawer(null);
               navigate("share", `new:${id}`);
@@ -1280,6 +1331,11 @@ export function App() {
           <CodexDrawer
             thread={codexDrawerThread}
             workspace={workspaceOf(workspaces, codexDrawerThread.cwd)}
+            delegatedEnabled={delegatedEnabled}
+            codexAppRunning={runtimes?.codexApp.running ?? false}
+            onFocusApp={() => void focusFromPalette(focusCodexApp)}
+            onArchive={(id) => void archiveCodexThread(id)}
+            onUnarchive={(id) => void unarchiveCodexThread(id)}
             onClose={() => setCodexDrawer(null)}
             onOpenTask={(id) => {
               setCodexDrawer(null);

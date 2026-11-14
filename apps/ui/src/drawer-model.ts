@@ -1,0 +1,58 @@
+import type { CodexSessionRecord, SessionStatus } from "./types";
+
+export type SessionTab = "activity" | "agents" | "asks" | "delegated" | "details";
+
+export interface DrawerTab<K extends string> {
+  key: K;
+  label: string;
+  count?: string;
+}
+
+export type SessionPrimary = "focus" | null;
+
+export const sessionPrimaryAction = ({ status, stale }: { status: SessionStatus; stale: boolean }): SessionPrimary => (status !== "ended" && !stale ? "focus" : null);
+
+export interface SessionTabInput {
+  agentsTotal: number;
+  agentsRunning: number;
+  asks: number;
+  forks: number;
+  delegated: number;
+  delegatedOn: boolean;
+}
+
+export function sessionTabs({ agentsTotal, agentsRunning, asks, forks, delegated, delegatedOn }: SessionTabInput): DrawerTab<SessionTab>[] {
+  const tabs: DrawerTab<SessionTab>[] = [{ key: "activity", label: "Activity" }];
+  if (agentsTotal > 0) tabs.push({ key: "agents", label: "Subagents", count: agentsRunning > 0 ? `${agentsRunning}/${agentsTotal}` : String(agentsTotal) });
+  if (asks > 0 || forks > 0) tabs.push(asks > 0 ? { key: "asks", label: "Asks", count: String(asks) } : { key: "asks", label: "Asks" });
+  if (delegatedOn && delegated > 0) tabs.push({ key: "delegated", label: "Delegated", count: String(delegated) });
+  tabs.push({ key: "details", label: "Details" });
+  return tabs;
+}
+
+export const visibleTab = <K extends string>(tab: K, tabs: readonly DrawerTab<K>[], fallback: K): K => (tabs.some((item) => item.key === tab) ? tab : fallback);
+
+export type SessionMenuKey = "share" | "large" | "archive";
+
+export function sessionMenuKeys({ canShare, archived }: { canShare: boolean; archived: boolean }): SessionMenuKey[] {
+  const keys: SessionMenuKey[] = [];
+  if (canShare) keys.push("share");
+  keys.push("large");
+  if (!archived) keys.push("archive");
+  return keys;
+}
+
+export type CodexPrimary = "focus-app" | null;
+
+export const codexPrimaryAction = ({ status, appRunning }: { status: CodexSessionRecord["status"]; appRunning: boolean }): CodexPrimary =>
+  appRunning && (status === "active" || status === "idle") ? "focus-app" : null;
+
+export type CodexMenuKey = "task" | "large" | "archive" | "unarchive";
+
+export function codexMenuKeys({ hubTask, delegatedOn, archived }: { hubTask: boolean; delegatedOn: boolean; archived: boolean }): CodexMenuKey[] {
+  const keys: CodexMenuKey[] = [];
+  if (hubTask && delegatedOn) keys.push("task");
+  keys.push("large");
+  keys.push(archived ? "unarchive" : "archive");
+  return keys;
+}

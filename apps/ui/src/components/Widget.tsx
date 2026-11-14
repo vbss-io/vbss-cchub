@@ -11,7 +11,6 @@ import {
   type LimitsSnapshot,
   type ProviderUsage,
   type TaskRecord,
-  type TaskStatus,
   type UsageSummary,
   type WidgetEdge,
   type WidgetPanel,
@@ -29,10 +28,9 @@ import {
   offsetFromPosition,
   resetCountdown,
   ringTone,
-  urgencyTone,
   type Rect,
 } from "../widget-layout";
-import { splitSessions } from "../widget-model";
+import { pipTone, sessionTone, splitSessions, taskTone } from "../widget-model";
 import { BrandMark } from "./BrandMark";
 import { inFlight, needsYou } from "./TaskCard";
 import "../widget.css";
@@ -99,13 +97,6 @@ const elapsedLabel = (ms: number): string => {
   const rest = minutes % 60;
   if (hours < 24) return rest > 0 ? `${hours}h${rest}m` : `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
-};
-
-const taskDotTone = (status: TaskStatus): string => {
-  if (status === "attention") return "pend";
-  if (status === "failed" || status === "interrupted") return "hold";
-  if (status === "completed") return "ok";
-  return "go";
 };
 
 const TASK_ATTENTION_SUB: Record<string, string> = {
@@ -718,6 +709,7 @@ export function Widget() {
       delegated,
       doneRecent,
       needYou: waiting.length + attentionTasks.length,
+      failed: attentionTasks.filter((t) => t.status === "failed" || t.status === "interrupted").length,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, tasks, tick]);
@@ -760,8 +752,8 @@ export function Widget() {
     );
   };
 
-  const taskRow = (task: TaskRecord, tone: string, sub: string, pill?: ReactNode) => (
-    <button key={task.id} className="wg-row" title={task.title} onClick={() => goMain(`#/tasks/${task.id}`)}>
+  const taskRow = (task: TaskRecord, tone: string, sub: string, pill?: ReactNode, muted = false) => (
+    <button key={task.id} className={muted ? "wg-row wg-row--muted" : "wg-row"} title={task.title} onClick={() => goMain(`#/tasks/${task.id}`)}>
       <span className="wg-ico">{task.runner === "codex" ? <IconCodex /> : <IconCode />}</span>
       <span className={`wg-dot wg-dot--${tone}`} />
       <span className="wg-title">{task.title}</span>
@@ -773,7 +765,7 @@ export function Widget() {
   const hasRows =
     model.waiting.length + model.attentionTasks.length + model.running.length + model.idle.length + model.delegated.length + model.doneRecent.length > 0;
 
-  const tone = urgencyTone({ needYou: model.needYou, delegated: model.delegated.length, live: model.live.length });
+  const tone = pipTone({ failed: model.failed, needYou: model.needYou, running: model.running.length + model.delegated.length });
   const claudeWeek = config.rings.claude ? limits?.claude?.sevenDay ?? null : null;
   const codexWeek = config.rings.codex ? limits?.codex?.secondary ?? null : null;
 
@@ -784,8 +776,8 @@ export function Widget() {
           <div className="wg-sec-h">
             Needs you <span className="wg-sec-n">{model.needYou}</span>
           </div>
-          {model.waiting.map((session) => (session.status === "waiting" ? sessionRow(session, "pend", "input") : sessionRow(session, "unread", "done")))}
-          {model.attentionTasks.map((task) => taskRow(task, taskDotTone(task.status), TASK_ATTENTION_SUB[task.status] ?? "needs you"))}
+          {model.waiting.map((session) => sessionRow(session, sessionTone(session), session.status === "waiting" ? "input" : "done"))}
+          {model.attentionTasks.map((task) => taskRow(task, taskTone(task.status), TASK_ATTENTION_SUB[task.status] ?? "needs you"))}
         </section>
       )}
 
@@ -794,7 +786,7 @@ export function Widget() {
           <div className="wg-sec-h">
             Running <span className="wg-sec-n">{model.running.length}</span>
           </div>
-          {model.running.map((session) => sessionRow(session, "go", "active"))}
+          {model.running.map((session) => sessionRow(session, sessionTone(session), "active"))}
         </section>
       )}
 
@@ -803,7 +795,7 @@ export function Widget() {
           <div className="wg-sec-h">
             Idle <span className="wg-sec-n">{model.idle.length}</span>
           </div>
-          {model.idle.slice(0, IDLE_ROW_LIMIT).map((session) => sessionRow(session, "idle", elapsedLabel(now - session.updatedAt), true))}
+          {model.idle.slice(0, IDLE_ROW_LIMIT).map((session) => sessionRow(session, sessionTone(session), elapsedLabel(now - session.updatedAt), true))}
           {model.idle.length > IDLE_ROW_LIMIT && <div className="wg-more">+{model.idle.length - IDLE_ROW_LIMIT} more</div>}
         </section>
       )}
@@ -820,7 +812,7 @@ export function Widget() {
                 {branch}
               </span>
             ) : undefined;
-            return taskRow(task, "go", elapsedLabel(Date.now() - task.createdAt), pill);
+            return taskRow(task, taskTone(task.status), elapsedLabel(Date.now() - task.createdAt), pill);
           })}
         </section>
       )}
@@ -830,7 +822,7 @@ export function Widget() {
           <div className="wg-sec-h">
             Recently done <span className="wg-sec-n">{model.doneRecent.length}</span>
           </div>
-          {model.doneRecent.map((task) => taskRow(task, "ok", elapsedLabel(Date.now() - task.updatedAt)))}
+          {model.doneRecent.map((task) => taskRow(task, taskTone(task.status), elapsedLabel(Date.now() - task.updatedAt), undefined, true))}
         </section>
       )}
 
@@ -916,7 +908,7 @@ export function Widget() {
           aria-label="Open CC Hub widget"
         >
           <Arrow edge={config.edge} closing={false} />
-          <span className={`wgd-pip wgd-pip--${tone}`} title={model.needYou > 0 ? `${model.needYou} need you` : "CC Hub"}>
+          <span className={`wgd-pip wgd-pip--${tone} ${model.needYou > 0 ? "wgd-pip--count" : ""}`} title={model.needYou > 0 ? `${model.needYou} need you` : "CC Hub"}>
             {model.needYou > 0 ? model.needYou : null}
           </span>
           {(claudeWeek || codexWeek) && (

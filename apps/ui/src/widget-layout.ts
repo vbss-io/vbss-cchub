@@ -78,19 +78,6 @@ export function ringTone(utilization: number): Exclude<Tone, "muted"> {
   return "go";
 }
 
-export interface UrgencyCounts {
-  needYou: number;
-  delegated: number;
-  live: number;
-}
-
-export function urgencyTone(counts: UrgencyCounts): Tone {
-  if (counts.needYou > 0) return "hold";
-  if (counts.delegated > 0) return "pend";
-  if (counts.live > 0) return "go";
-  return "muted";
-}
-
 export const clampPercent = (value: number): number => (Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0);
 
 export function resetsAtMs(resetsAt: number | null): number | null {

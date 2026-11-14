@@ -4,7 +4,10 @@ import { attentionCount, needsYou } from "../attention";
 import { claudeClient, codexClient, isHubRun, sessionClient } from "../clients";
 import type { TaskRecord, WorkspaceRecord } from "../delegation";
 import { FlowInspector } from "../components/FlowInspector";
+import { RunsFilters, type RunsFilterOption } from "../components/RunsFilters";
+import { Toggletip } from "../components/Toggletip";
 import { buildFlow, relatives, type FlowNode, type Orientation } from "../flow-layout";
+import { mapSummaryLine, type MapScope } from "../sessions-mode";
 import { IconCode, IconCodex, IconDesktop, IconFlow, IconHub, IconSearch, IconTasks, IconTerminal, IconWorkspaces } from "../icons";
 import { isEmpty, isStale } from "../stale";
 import type { AgentRecord, CodexSessionRecord, GroupRecord, SessionRecord } from "../types";
@@ -20,19 +23,23 @@ interface Props {
   onOpenCodex: (id: string) => void;
   onFocus: (sessionId: string) => void;
   onOpenWorkspace: (name: string) => void;
+  query: string;
+  onQuery: (query: string) => void;
+  scope: MapScope;
+  delegatedEnabled: boolean;
 }
 
 type Pill = "live" | "subagents" | "tasks" | "needsyou";
 type ClientFilter = "all" | "terminal" | "vscode" | "claude-desktop" | "wsl" | "hub" | "share" | "codex";
 
-const PILLS: { key: Pill; label: string }[] = [
-  { key: "live", label: "Live" },
-  { key: "subagents", label: "With subagents" },
-  { key: "tasks", label: "With tasks" },
-  { key: "needsyou", label: "Needs you" },
+const PILLS: { key: Pill; label: string; tone: string }[] = [
+  { key: "live", label: "Live", tone: "" },
+  { key: "needsyou", label: "Needs you", tone: "pill--needs" },
+  { key: "subagents", label: "With subagents", tone: "" },
+  { key: "tasks", label: "With tasks", tone: "" },
 ];
 
-const CLIENT_FILTERS: { key: ClientFilter; label: string }[] = [
+const CLIENT_FILTERS: readonly RunsFilterOption<ClientFilter>[] = [
   { key: "all", label: "All clients" },
   { key: "terminal", label: "Claude Code · terminal" },
   { key: "vscode", label: "Claude Code · VS Code" },
@@ -82,9 +89,16 @@ const PERIODS: { key: Period; label: string; ms: number }[] = [
   { key: "all", label: "All time", ms: Infinity },
 ];
 
+const DEFAULT_PERIOD: Period = "7d";
+
 const loadPeriod = (): Period => {
   const stored = localStorage.getItem("hub.flow.period");
-  return PERIODS.some((item) => item.key === stored) ? (stored as Period) : "7d";
+  return PERIODS.some((item) => item.key === stored) ? (stored as Period) : DEFAULT_PERIOD;
+};
+
+const clientsForScope = (scope: MapScope): RunsFilterOption<ClientFilter>[] => {
+  if (!scope.sessions) return [];
+  return scope.codex ? [...CLIENT_FILTERS] : CLIENT_FILTERS.filter((item) => item.key !== "codex");
 };
 
 const periodMs = (period: Period): number => PERIODS.find((item) => item.key === period)?.ms ?? Infinity;
@@ -181,12 +195,17 @@ export function FlowView(props: Props) {
   );
 }
 
-function FlowCanvasView({ sessions, codexSessions, tasks, workspaces, groups, onOpenSession, onOpenTask, onOpenCodex, onFocus, onOpenWorkspace }: Props) {
+function FlowCanvasView({ sessions: allSessions, codexSessions: allCodex, tasks: allTasks, workspaces, groups, onOpenSession, onOpenTask, onOpenCodex, onFocus, onOpenWorkspace, query, onQuery, scope, delegatedEnabled }: Props) {
+  const sessions = useMemo(() => (scope.sessions ? allSessions : {}), [scope.sessions, allSessions]);
+  const codexSessions = useMemo(() => (scope.codex ? allCodex : []), [scope.codex, allCodex]);
+  const tasks = useMemo(() => (scope.tasks ? allTasks : []), [scope.tasks, allTasks]);
   const [view, setView] = useState({ x: 0, y: 0, k: 1 });
   const [orientation, setOrientation] = useState<Orientation>(loadOrientation);
-  const [pill, setPill] = useState<Pill>("live");
-  const [clientFilter, setClientFilter] = useState<ClientFilter>("all");
-  const [query, setQuery] = useState("");
+  const [pickedPill, setPill] = useState<Pill>("live");
+  const pill: Pill = pickedPill === "tasks" && !scope.tasks ? "live" : pickedPill;
+  const [pickedClient, setClientFilter] = useState<ClientFilter>("all");
+  const clientOptions = clientsForScope(scope);
+  const clientFilter: ClientFilter = clientOptions.some((item) => item.key === pickedClient) ? pickedClient : "all";
   const [showEnded, setShowEnded] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [period, setPeriod] = useState<Period>(loadPeriod);
@@ -382,8 +401,9 @@ function FlowCanvasView({ sessions, codexSessions, tasks, workspaces, groups, on
     const subagents = baseLive.reduce((sum, s) => sum + (s.agentsRunning ?? 0), 0);
     const running = tasks.filter((t) => t.status === "running" || t.status === "pending").length;
     const need = attentionCount(baseLive.filter((s) => !isEmpty(s)));
-    return { live, subagents, running, need };
-  }, [baseLive, tasks]);
+    return mapSummaryLine({ live, subagents, tasks: running, needYou: need }, delegatedEnabled);
+  }, [baseLive, tasks, delegatedEnabled]);
+  const activeFilters = (clientFilter === "all" ? 0 : 1) + (period === DEFAULT_PERIOD ? 0 : 1) + (showEnded ? 1 : 0) + (showCompleted && scope.tasks ? 1 : 0);
 
   const fit = useCallback(() => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -498,77 +518,84 @@ function FlowCanvasView({ sessions, codexSessions, tasks, workspaces, groups, on
 
   return (
     <div className={`view view--flow flow--${orientation}`}>
-      <div className="flow__bar">
-        <div className="flow__filters">
-          {PILLS.map((item) => (
-            <button key={item.key} className={`pill ${pill === item.key ? "pill--on" : ""}`} onClick={() => setPill(item.key)}>
+      <div className="toolbar runs-toolbar flow-toolbar">
+        <div className="filters">
+          {PILLS.filter((item) => item.key !== "tasks" || scope.tasks).map((item) => (
+            <button key={item.key} className={`pill ${item.tone} ${pill === item.key ? "pill--on" : ""}`} aria-pressed={pill === item.key} onClick={() => setPill(item.key)}>
               {item.label}
             </button>
           ))}
+        </div>
+        <div className="toolbar__right">
           <label className="search">
             <IconSearch />
-            <input className="in" placeholder="search title or folder" value={query} onChange={(event) => setQuery(event.target.value)} />
+            <input className="in" placeholder="search title or folder" value={query} onChange={(event) => onQuery(event.target.value)} />
           </label>
-          <select className="select" value={clientFilter} onChange={(event) => setClientFilter(event.target.value as ClientFilter)}>
-            {CLIENT_FILTERS.map((item) => (
-              <option key={item.key} value={item.key}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="select"
-            value={period}
-            onChange={(event) => setPeriod(event.target.value as Period)}
-            title="Live items always show; ended sessions/threads and completed tasks show only when their toggle is on and they updated within this period"
-          >
-            {PERIODS.map((item) => (
-              <option key={item.key} value={item.key}>
-                {item.label}
-              </option>
-            ))}
-          </select>
-          <label className="flow__toggle">
-            <input type="checkbox" checked={showEnded} onChange={(event) => setShowEnded(event.target.checked)} /> show ended ({toggleCounts.ended})
-          </label>
-          <label className="flow__toggle">
-            <input type="checkbox" checked={showCompleted} onChange={(event) => setShowCompleted(event.target.checked)} /> show completed tasks ({toggleCounts.completed})
-          </label>
+          <RunsFilters clients={clientOptions} client={clientFilter} onClient={setClientFilter} active={activeFilters}>
+            <label className="rf__field">
+              <span>Period</span>
+              <select
+                className="select"
+                value={period}
+                onChange={(event) => setPeriod(event.target.value as Period)}
+                title="Live items always show; ended sessions/threads and completed tasks show only when their toggle is on and they updated within this period"
+              >
+                {PERIODS.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="rf__field">
+              <span>Orientation</span>
+              <div className="pillpair">
+                <button className={`pill ${orientation === "horizontal" ? "pill--on" : ""}`} onClick={() => setOrientation("horizontal")}>
+                  Horizontal
+                </button>
+                <button className={`pill ${orientation === "vertical" ? "pill--on" : ""}`} onClick={() => setOrientation("vertical")}>
+                  Vertical
+                </button>
+              </div>
+            </div>
+            <label className="rf__check">
+              <input type="checkbox" checked={showEnded} onChange={(event) => setShowEnded(event.target.checked)} /> Show ended ({toggleCounts.ended})
+            </label>
+            {scope.tasks && (
+              <label className="rf__check">
+                <input type="checkbox" checked={showCompleted} onChange={(event) => setShowCompleted(event.target.checked)} /> Show completed tasks ({toggleCounts.completed})
+              </label>
+            )}
+          </RunsFilters>
         </div>
-        <p className="flow__summary">
-          {summary.live} live sessions · {summary.subagents} subagents running · {summary.running} tasks running · {summary.need} need you
-        </p>
       </div>
 
       <div className="flow__controls">
-        <div className="flow__legend">
-          {LEGEND_SHAPES.map((item) => (
-            <span key={item.key} className="legend legend--kind">
-              <span className="flow__legend-icon">{item.icon}</span> {item.label}
-            </span>
-          ))}
-          {LEGEND_TONES.map((item) => (
-            <span key={item.tone} className="legend">
-              <i className={`legend__dot legend__dot--${item.tone}`} /> {item.label}
-            </span>
-          ))}
-          <span className="legend legend--badge">
-            <i className="legend__badge" /> client badge
-          </span>
-          <span className="legend">
-            <i className="legend__dash" /> delegated by
-          </span>
-        </div>
+        <p className="runs-summary flow__summary">{summary}</p>
         <div className="flow__buttons">
-          <span className="flow__hint">{hoverPath ?? "click a node to inspect · double-click to open · Esc clears"}</span>
-          <div className="pillpair">
-            <button className={`pill ${orientation === "horizontal" ? "pill--on" : ""}`} onClick={() => setOrientation("horizontal")}>
-              Horizontal
-            </button>
-            <button className={`pill ${orientation === "vertical" ? "pill--on" : ""}`} onClick={() => setOrientation("vertical")}>
-              Vertical
-            </button>
-          </div>
+          <Toggletip label="Map legend" align="end">
+            <span className="flow__legend">
+              {LEGEND_SHAPES.filter((item) => item.key !== "task" || delegatedEnabled).map((item) => (
+                <span key={item.key} className="legend legend--kind">
+                  <span className="flow__legend-icon">{item.icon}</span> {item.label}
+                </span>
+              ))}
+              {LEGEND_TONES.map((item) => (
+                <span key={item.tone} className="legend">
+                  <i className={`legend__dot legend__dot--${item.tone}`} /> {item.label}
+                </span>
+              ))}
+              <span className="legend legend--badge">
+                <i className="legend__badge" /> client badge
+              </span>
+              {delegatedEnabled && (
+                <span className="legend">
+                  <i className="legend__dash" /> delegated by
+                </span>
+              )}
+            </span>
+            <span className="flow__help">Click a node to inspect · double-click to open · Esc clears. Hover a node to see its path.</span>
+          </Toggletip>
           <button className="act" onClick={fit}>
             Fit
           </button>
@@ -679,6 +706,7 @@ function FlowCanvasView({ sessions, codexSessions, tasks, workspaces, groups, on
           </svg>
         )}
         {graph.nodes.length <= 1 && <p className="empty">Nothing matches this filter. Start a session or clear the filters.</p>}
+        {hoverPath && <span className="flow__path">{hoverPath}</span>}
         {selectedNode && (
           <FlowInspectorPanel
             node={selectedNode}

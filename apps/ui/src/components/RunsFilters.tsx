@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 export interface RunsFilterOption<K extends string> {
   key: K;
@@ -9,15 +9,16 @@ interface Props<C extends string, S extends string> {
   clients: readonly RunsFilterOption<C>[];
   client: C;
   onClient: (key: C) => void;
-  sorts: readonly RunsFilterOption<S>[];
-  sort: S;
-  onSort: (key: S) => void;
+  sorts?: readonly RunsFilterOption<S>[];
+  sort?: S;
+  onSort?: (key: S) => void;
   active: number;
+  children?: ReactNode;
 }
 
 const VIEWPORT_GUTTER = 8;
 
-export function RunsFilters<C extends string, S extends string>({ clients, client, onClient, sorts, sort, onSort, active }: Props<C, S>) {
+export function RunsFilters<C extends string, S extends string = string>({ clients, client, onClient, sorts, sort, onSort, active, children }: Props<C, S>) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -80,16 +81,19 @@ export function RunsFilters<C extends string, S extends string>({ clients, clien
               </select>
             </label>
           )}
-          <label className="rf__field">
-            <span>Sort</span>
-            <select className="select" value={sort} onChange={(event) => onSort(event.target.value as S)}>
-              {sorts.map((item) => (
-                <option key={item.key} value={item.key}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {sorts && sort !== undefined && onSort && (
+            <label className="rf__field">
+              <span>Sort</span>
+              <select className="select" value={sort} onChange={(event) => onSort(event.target.value as S)}>
+                {sorts.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {children}
         </div>
       )}
     </div>

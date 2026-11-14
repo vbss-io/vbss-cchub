@@ -8,7 +8,6 @@ import {
   offsetFromPosition,
   resetCountdown,
   ringTone,
-  urgencyTone,
   type Rect,
 } from "./widget-layout";
 
@@ -133,15 +132,6 @@ describe("ringTone", () => {
 
   it("falls back to go for a non-finite value", () => {
     assert.equal(ringTone(Number.NaN), "go");
-  });
-});
-
-describe("urgencyTone", () => {
-  it("prioritises needing you, then delegated, then live, then muted", () => {
-    assert.equal(urgencyTone({ needYou: 1, delegated: 3, live: 5 }), "hold");
-    assert.equal(urgencyTone({ needYou: 0, delegated: 2, live: 5 }), "pend");
-    assert.equal(urgencyTone({ needYou: 0, delegated: 0, live: 2 }), "go");
-    assert.equal(urgencyTone({ needYou: 0, delegated: 0, live: 0 }), "muted");
   });
 });
 

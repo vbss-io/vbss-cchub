@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchSessionLive, focusSession, markSessionSeen, type ClaimRecord } from "../api";
-import { ClientBadge, claudeClient, sessionClient } from "../clients";
-import { IconClose, IconExpand, IconFocus, IconShare } from "../icons";
+import { claudeClient, sessionClient } from "../clients";
+import { IconClose, IconExpand, IconFocus } from "../icons";
 import { fetchSessionAsks, type SessionAsks } from "../api";
 import { relativeTime } from "../time";
 import type { SessionLive, SessionRecord, TranscriptEntry } from "../types";
@@ -11,18 +11,23 @@ import { listTasksByOrigin, type TaskRecord } from "../delegation";
 import { TASK_STATUS_LABEL } from "./TaskCard";
 import { useDrawerWidth, DRAWER_WIDTH } from "../use-layout-size";
 import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
+import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
+import { RunChip } from "./RunChips";
+import { Toggletip } from "./Toggletip";
+import { sessionMenuKeys, sessionPrimaryAction, sessionTabs, visibleTab, type SessionMenuKey, type SessionTab } from "../drawer-model";
+import { shortFolder } from "../wsmatch";
 
 interface Props {
   session: SessionRecord;
   workspace: string | null;
   claims?: ClaimRecord[];
+  delegatedEnabled: boolean;
   onReleaseClaim?: (id: string) => void;
   onClose: () => void;
   onShare?: (sessionId: string) => void;
+  onArchive?: (sessionId: string) => void;
   onOpenTask?: (taskId: string) => void;
 }
-
-type Tab = "activity" | "agents" | "asks" | "delegated" | "details";
 
 const ROLE_LABEL: Record<TranscriptEntry["role"], string> = {
   user: "you",
@@ -87,8 +92,20 @@ export function Timeline({ entries, empty, detail, onShowDetail, assistantLabel 
   );
 }
 
-export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim, onClose, onShare, onOpenTask }: Props) {
-  const [tab, setTab] = useState<Tab>("activity");
+export function SessionDrawer({ session, workspace, claims = [], delegatedEnabled, onReleaseClaim, onClose, onShare, onArchive, onOpenTask }: Props) {
+  const [pickedTab, setTab] = useState<SessionTab>("activity");
+  const [live, setLive] = useState<SessionLive | null>(null);
+  const liveAgents = live?.agents ?? [];
+  const tabs = sessionTabs({
+    agentsTotal: Math.max(liveAgents.length, session.agentsTotal ?? 0),
+    agentsRunning: live ? liveAgents.filter((agent) => agent.status === "running").length : (session.agentsRunning ?? 0),
+    asks: session.remoteAsks ?? 0,
+    forks: session.forks ?? 0,
+    delegated: session.delegatedTasks ?? 0,
+    delegatedOn: delegatedEnabled,
+  });
+  const tab = visibleTab(pickedTab, tabs, "activity");
+  const menu = useCardMenu();
   const [delegated, setDelegated] = useState<TaskRecord[] | null>(null);
   useEffect(() => {
     if (tab !== "delegated") return;
@@ -113,7 +130,6 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
       clearInterval(timer);
     };
   }, [tab, session.sessionId]);
-  const [live, setLive] = useState<SessionLive | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const markedRef = useRef<{ id: string; unread: boolean } | null>(null);
@@ -187,8 +203,10 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
   useEffect(() => {
     if (full) return;
     const onDown = (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (target && panelRef.current && !panelRef.current.contains(target)) onClose();
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (panelRef.current?.contains(target) || target.closest(".card-menu")) return;
+      onClose();
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
@@ -197,11 +215,19 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
   const current = live?.session ?? session;
   const finished = current.unread === true && current.status === "idle";
   const name = current.customTitle ?? current.title ?? current.sessionId.slice(0, 8);
-  const agents = live?.agents ?? [];
-  const running = agents.filter((agent) => agent.status === "running").length;
+  const agents = liveAgents;
   const silentAgents = agents.filter((agent) => agent.status !== "running" && agent.transcript.length === 0);
   const shownAgents = agents.filter((agent) => !silentAgents.includes(agent));
   const silentGroups = [...silentAgents.reduce((map, agent) => map.set(agent.agentType ?? "agent", (map.get(agent.agentType ?? "agent") ?? 0) + 1), new Map<string, number>())];
+  const primary = sessionPrimaryAction({ status: current.status, stale: current.stale === true });
+  const clientInfo = sessionClient(current);
+  const canShare = !!onShare && !!workspace && current.status !== "ended";
+  const menuAction: Record<SessionMenuKey, CardMenuItem> = {
+    share: { key: "share", label: "Share", onSelect: () => onShare?.(current.sessionId) },
+    large: { key: "large", label: full ? "Back to the side panel" : "Open in a large view", onSelect: () => setFull((value) => !value) },
+    archive: { key: "archive", label: "Archive", onSelect: () => onArchive?.(current.sessionId) },
+  };
+  const menuItems = sessionMenuKeys({ canShare, archived: current.archivedAt != null || !onArchive }).map((key) => menuAction[key]);
 
   return (
     <>
@@ -216,45 +242,30 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
             <h2 title={name}>{name}</h2>
           </div>
           <div className="card__badges">
-            <ClientBadge info={sessionClient(current)} />
             <span className={`tag tag--${finished ? "unread" : current.status}`}>{finished ? "finished" : current.stale ? "inactive" : current.status}</span>
-            {workspace && <span className="chip chip--ws">{workspace}</span>}
-            {prettyModel(current.model) && <span className="chip">{prettyModel(current.model)}</span>}
+            <RunChip info={clientInfo} label={workspace ?? shortFolder(current.cwd)} title={`${clientInfo.label} · ${shortFolder(current.cwd)}`} />
           </div>
         </div>
         <div className="drawer__actions">
-          {current.status !== "ended" && !current.stale && (
+          {primary === "focus" && (
             <button className="act act--focus" onClick={() => void focusSession(current.sessionId)}>
               <IconFocus /> Focus
             </button>
           )}
-          {onShare && workspace && current.status !== "ended" && (
-            <button className="act" onClick={() => onShare(current.sessionId)} title="Create a link so someone else can ask this session">
-              <IconShare size={14} /> Share
-            </button>
-          )}
+          <CardMenu menu={menu} items={menuItems} label={`Actions for ${name}`} />
           <button className="act act--icon" onClick={onClose} aria-label="Close">
             <IconClose />
           </button>
         </div>
       </header>
 
-      <div className="drawer__tabs">
-        <button className={`pill ${tab === "activity" ? "pill--on" : ""}`} onClick={() => setTab("activity")}>
-          Activity
-        </button>
-        <button className={`pill ${tab === "agents" ? "pill--on" : ""}`} onClick={() => setTab("agents")}>
-          Subagents {agents.length > 0 && <span className="pill__count">{running > 0 ? `${running}/${agents.length}` : agents.length}</span>}
-        </button>
-        <button className={`pill ${tab === "asks" ? "pill--on" : ""}`} onClick={() => setTab("asks")}>
-          Asks {(current.remoteAsks ?? 0) > 0 && <span className="pill__count">{current.remoteAsks}</span>}
-        </button>
-        <button className={`pill ${tab === "delegated" ? "pill--on" : ""}`} onClick={() => setTab("delegated")}>
-          Delegated {(current.delegatedTasks ?? 0) > 0 && <span className="pill__count">{current.delegatedTasks}</span>}
-        </button>
-        <button className={`pill ${tab === "details" ? "pill--on" : ""}`} onClick={() => setTab("details")}>
-          Details
-        </button>
+      <div className="drawer__tabs" role="tablist">
+        {tabs.map((item) => (
+          <button key={item.key} role="tab" aria-selected={tab === item.key} className={`pill ${tab === item.key ? "pill--on" : ""}`} onClick={() => setTab(item.key)}>
+            {item.label}
+            {item.count !== undefined && <span className="pill__count">{item.count}</span>}
+          </button>
+        ))}
       </div>
 
       <div className="drawer__body">
@@ -262,9 +273,9 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
         {tab === "activity" && (
           <>
             <div className="timeline__bar">
-              <p className="hint">
+              <Toggletip label="About this activity">
                 Last turns read from the session transcript. Refreshes every {current.status === "ended" ? "15" : "3"} seconds.
-              </p>
+              </Toggletip>
               <div className="pillpair">
                 <button className={`pill ${detail ? "" : "pill--on"}`} onClick={() => setDetail(false)}>
                   Conversation
@@ -284,7 +295,7 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
         )}
         {tab === "agents" && (
           <>
-            {agents.length === 0 && <p className="hint">This session has not spawned subagents.</p>}
+            {agents.length === 0 && <p className="hint">{live ? "This session has not spawned subagents." : "Loading subagents…"}</p>}
             {shownAgents.map((agent) => (
               <section key={agent.agentId} className={`agent agent--${agent.status}`}>
                 <header className="agent__head">
@@ -309,12 +320,15 @@ export function SessionDrawer({ session, workspace, claims = [], onReleaseClaim,
         )}
         {tab === "asks" && (
           <>
-            <p className="hint">Questions other people asked this session through a share, each in its own fork (the original stays untouched).</p>
+            <div className="timeline__bar">
+              <Toggletip label="About asks">Questions other people asked this session through a share, each in its own fork (the original stays untouched).</Toggletip>
+            </div>
+            {asks === null && <p className="hint">Loading asks…</p>}
             {asks && asks.forks.length > 0 && (
               <ul className="plainlist">
                 {asks.forks.map((fork) => (
-                  <li key={`${fork.shareId}-${fork.asker}`}>
-                    <strong>{fork.asker}</strong> · {fork.questions} question{fork.questions === 1 ? "" : "s"} · last {relativeTime(fork.lastUsedAt)} · fork <code>{fork.sessionId.slice(0, 8)}</code>
+                  <li key={`${fork.shareId}-${fork.asker}`} title={`fork ${fork.sessionId}`}>
+                    <strong>{fork.asker}</strong> · {fork.questions} question{fork.questions === 1 ? "" : "s"} · last {relativeTime(fork.lastUsedAt)}
                   </li>
                 ))}
               </ul>

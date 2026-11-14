@@ -119,6 +119,9 @@ html.widget-window #root {
 
 .wgd-pip--hold {
   background: var(--hold);
+}
+
+.wgd-pip--count {
   width: 20px;
   height: 20px;
   margin: 0;
@@ -197,8 +200,8 @@ html.widget-window #root {
 .wgd-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 5px 10px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   user-select: none;
@@ -226,7 +229,7 @@ html.widget-window #root {
 }
 
 .wgd-state .wgd-state-attn {
-  color: var(--hold);
+  color: var(--pend);
 }
 
 .wgd-collapse {
@@ -254,7 +257,7 @@ html.widget-window #root {
 .wgd-tabs {
   display: flex;
   gap: 2px;
-  padding: 4px 12px 0;
+  padding: 0 10px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -267,9 +270,9 @@ html.widget-window #root {
   border: none;
   border-bottom: 3px solid transparent;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  padding: 6px 12px 7px;
+  padding: 5px 10px 5px;
   cursor: pointer;
 }
 
@@ -286,7 +289,7 @@ html.widget-window #root {
   min-width: 18px;
   padding: 0 5px;
   border-radius: 999px;
-  background: var(--hold);
+  background: var(--pend);
   color: #1b1c26;
   font-size: 12px;
   line-height: 18px;
@@ -306,7 +309,7 @@ html.widget-window #root {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 10px;
   background: var(--panel);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
@@ -465,7 +468,7 @@ html.widget-window #root {
 }
 
 .wg-sec {
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .wg-sec:first-child {
@@ -476,7 +479,7 @@ html.widget-window #root {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px 2px;
+  padding: 5px 12px 1px;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -505,13 +508,13 @@ html.widget-window #root {
   align-items: center;
   gap: 10px;
   width: 100%;
-  min-height: 34px;
+  min-height: 30px;
   background: transparent;
   border: none;
   border-radius: 6px;
-  padding: 4px 12px;
+  padding: 3px 12px;
   color: var(--text);
-  font-size: 14px;
+  font-size: 13.5px;
   cursor: pointer;
   text-align: left;
 }
@@ -559,10 +562,6 @@ html.widget-window #root {
   background: var(--hold);
 }
 
-.wg-dot--ok {
-  background: var(--ok);
-}
-
 .wg-dot--idle {
   background: var(--ended);
 }
@@ -608,8 +607,7 @@ html.widget-window #root {
 }
 
 .wg-pill--branch {
-  color: var(--brand);
-  border-color: var(--border-2);
+  color: var(--muted);
 }
 
 .wg-pill--agents {
@@ -617,7 +615,7 @@ html.widget-window #root {
 }
 
 .wg-pill--peers {
-  color: var(--amber);
+  color: var(--muted);
 }
 
 .wg-more {
@@ -635,7 +633,7 @@ html.widget-window #root {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  padding: 7px 12px;
+  padding: 5px 12px;
 }
 
 .wg-open:hover {
