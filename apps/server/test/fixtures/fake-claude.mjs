@@ -21,7 +21,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function emitStartup(sessionId, model) {
   const startup = process.env.CLAUDE_CODE_SIMPLE === "1" ? "bare" : (process.env.FAKE_CLAUDE_INIT ?? "full");
   if (startup === "none") return;
-  if (startup === "full") {
+  if (startup === "full" || startup === "nomcp" || startup === "nokey") {
     emit({ type: "system", subtype: "hook_started", hook_id: "h1", hook_name: "SessionStart:startup", hook_event: "SessionStart", session_id: sessionId });
     emit({ type: "system", subtype: "hook_response", hook_id: "h1", hook_name: "SessionStart:startup", hook_event: "SessionStart", output: "", stdout: "", stderr: "", exit_code: 0, outcome: "success", session_id: sessionId });
   }
@@ -34,7 +34,7 @@ function emitStartup(sessionId, model) {
     cwd: process.cwd(),
     apiKeySource: "none",
     tools: bare ? ["Bash", "Read", "Edit"] : ["Bash", "Read", "Edit", "Glob", "Grep", "mcp__cchub__hub_overview"],
-    mcp_servers: bare ? [] : [{ name: "cchub", status: "connected" }],
+    mcp_servers: bare || startup === "nomcp" ? [] : [{ name: "cchub", status: "connected" }],
     permissionMode: flag("--permission-mode") ?? "default",
   };
   if (startup === "nokey") delete init.apiKeySource;

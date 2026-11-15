@@ -343,6 +343,8 @@ describe("claude source routes", () => {
     configDir = join(box.home, "claude-config");
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, "settings.json"), original);
+    mkdirSync(join(box.home, ".claude"), { recursive: true });
+    writeFileSync(join(box.home, ".claude", "settings.json"), original);
     const credentials = join(box.tmp, "credentials.json");
     writeFileSync(credentials, JSON.stringify({ claudeAiOauth: { accessToken: "sk-ant-oat01-FAKE-ROUTE-TOKEN", expiresAt: Date.now() + 10 * 3_600_000 } }));
     hub = await startServer(box, {
@@ -391,8 +393,9 @@ describe("claude source routes", () => {
     assert.equal(again.privateFallback, false);
   });
 
-  it("installs and removes the statusline only on request, against CLAUDE_CONFIG_DIR, restoring the original bytes", async () => {
-    const settingsPath = join(configDir, "settings.json");
+  it("installs and removes the statusline only on request, inside the HUB_HOME Claude dir even with CLAUDE_CONFIG_DIR set, restoring the original bytes", async () => {
+    const settingsPath = join(box.home, ".claude", "settings.json");
+    const decoy = join(configDir, "settings.json");
     const before = (await http("GET", "/delegation/limits/claude-source")).json as { statusline: { state: string; settingsPath: string } };
     assert.equal(before.statusline.state, "not-installed");
     assert.equal(before.statusline.settingsPath, settingsPath);
@@ -403,6 +406,7 @@ describe("claude source routes", () => {
     assert.equal(installed.statusline.previousCommand, "echo previous");
     const command = (JSON.parse(readFileSync(settingsPath, "utf8")) as { statusLine: { command: string } }).statusLine.command;
     assert.match(command, /statusline-cchub\.mjs" --previous /);
+    assert.equal(readFileSync(decoy, "utf8"), original);
 
     const removed = (await http("POST", "/delegation/limits/claude-source/uninstall")).json as { statusline: { state: string } };
     assert.equal(removed.statusline.state, "not-installed");

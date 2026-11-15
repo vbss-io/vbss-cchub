@@ -32,11 +32,13 @@ const group = (pids: number[]): RuntimeGroup => ({ running: pids.length > 0, cou
 const isElectronChild = (commandLine: string): boolean => /--type=/.test(commandLine);
 
 const CODEX_APP_DIRS: readonly RegExp[] = [/[\\/]windowsapps[\\/]openai\.codex_[^\\/]*[\\/]/, /[\\/]codex\.app[\\/]contents[\\/]/];
-const CODEX_APP_MAIN: readonly RegExp[] = [/[\\/]windowsapps[\\/]openai\.codex_[^\\/]*[\\/]app[\\/]codex\.exe$/, /[\\/]codex\.app[\\/]contents[\\/]macos[\\/]codex$/];
+const CODEX_APP_MAIN: readonly RegExp[] = [/[\\/]windowsapps[\\/]openai\.codex_[^\\/]*[\\/]app[\\/](codex|chatgpt)\.exe$/, /[\\/]codex\.app[\\/]contents[\\/]macos[\\/]codex$/];
 
 const inCodexAppDir = (exe: string): boolean => CODEX_APP_DIRS.some((pattern) => pattern.test(exe));
 
 const isCodexAppMain = (exe: string): boolean => CODEX_APP_MAIN.some((pattern) => pattern.test(exe));
+
+const isCodexProcessName = (name: string): boolean => name === "codex.exe" || name === "codex" || name === "chatgpt.exe";
 
 function descendantsOf(rows: ProcessRow[], rootPid: number | undefined): Set<number> {
   const found = new Set<number>();
@@ -61,6 +63,7 @@ export function classify(rows: ProcessRow[], scannedAt: number, hubPid?: number)
   const codexApp: number[] = [];
   const codexCli: number[] = [];
   const hubOwned = descendantsOf(rows, hubPid);
+  const appMains: ProcessRow[] = [];
   let headless = 0;
   for (const row of rows) {
     const name = row.name.toLowerCase();
@@ -76,14 +79,17 @@ export function classify(rows: ProcessRow[], scannedAt: number, hubPid?: number)
       if (/\s(-p|--print)(\s|$)/.test(cmd)) headless += 1;
       continue;
     }
-    if (name !== "codex.exe" && name !== "codex") continue;
+    if (!isCodexProcessName(name)) continue;
     if (hubOwned.has(row.pid)) continue;
     if (inCodexAppDir(exe)) {
-      if (isCodexAppMain(exe) && !isElectronChild(cmd)) codexApp.push(row.pid);
+      if (isCodexAppMain(exe) && !isElectronChild(cmd)) appMains.push(row);
       continue;
     }
+    if (name === "chatgpt.exe") continue;
     if (!/\s(app-server|mcp-server)(\s|$)/.test(cmd)) codexCli.push(row.pid);
   }
+  const launchers = new Set(appMains.map((row) => row.parentPid));
+  for (const row of appMains) if (!launchers.has(row.pid)) codexApp.push(row.pid);
   return {
     claudeCode: { ...group(claudeCode), headless },
     claudeDesktop: group(claudeDesktop),
@@ -104,7 +110,7 @@ interface CimRow {
 
 async function scanWindows(): Promise<ProcessRow[]> {
   const script =
-    "Get-CimInstance Win32_Process -Filter \"Name LIKE 'claude%' OR Name LIKE 'codex%'\" | " +
+    "Get-CimInstance Win32_Process -Filter \"Name LIKE 'claude%' OR Name LIKE 'codex%' OR Name = 'ChatGPT.exe'\" |" +
     "Select-Object ProcessId,ParentProcessId,Name,CommandLine,ExecutablePath | ConvertTo-Json -Compress";
   const { stdout } = await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
     timeout: 10_000,

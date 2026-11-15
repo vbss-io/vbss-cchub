@@ -42,8 +42,8 @@ interface RpcRequest {
 const base = (process.env.HUB_URL ?? `http://127.0.0.1:${config.port}`).replace(/\/$/, "");
 
 const originClientHint = (): "claude-code" | "codex" | undefined => {
-  if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) return "claude-code";
   if (process.env.CODEX_SANDBOX || process.env.CODEX_SANDBOX_NETWORK_DISABLED) return "codex";
+  if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) return "claude-code";
   return undefined;
 };
 
@@ -53,7 +53,7 @@ const asString = (value: unknown): string | undefined =>
 const originFields = (): { originPid: number; originClient?: string; originEnvSessionId?: string } => ({
   originPid: process.ppid,
   originClient: originClientHint(),
-  originEnvSessionId: asString(process.env.CLAUDE_CODE_SESSION_ID),
+  originEnvSessionId: originClientHint() === "codex" ? undefined : asString(process.env.CLAUDE_CODE_SESSION_ID),
 });
 
 const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };

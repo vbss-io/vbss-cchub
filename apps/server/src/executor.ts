@@ -67,6 +67,7 @@ const TURN_EVENT_TYPES = new Set(["assistant", "user", "stream_event"]);
 export interface StartupExpectations {
   hubMcp: boolean;
   sessionStartHook: boolean;
+  guardHooks: boolean;
 }
 
 export interface StartupGuard {
@@ -75,6 +76,13 @@ export interface StartupGuard {
   sessionStartHook: boolean;
   checked: boolean;
   error: string | null;
+  warning: string | null;
+  warningSent: boolean;
+}
+
+export interface StartupVerdict {
+  error: string | null;
+  warning: string | null;
 }
 
 interface StreamState {
@@ -146,33 +154,45 @@ export interface StartupOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
   hooksViaSettings: boolean;
+  guardHooks?: boolean;
   strictMcpConfig?: boolean;
   restricted?: boolean;
 }
 
 export function startupExpectations(options: StartupOptions): StartupExpectations {
   const userConfig = !options.restricted;
+  const sessionStartHook = options.env.HUB_TRACK_SDK === "1" && (options.hooksViaSettings || (userConfig && sessionStartHookConfigured()));
   return {
     hubMcp: userConfig && !options.strictMcpConfig && hubMcpRegistered(options.cwd),
-    sessionStartHook: options.env.HUB_TRACK_SDK === "1" && (options.hooksViaSettings || (userConfig && sessionStartHookConfigured())),
+    sessionStartHook,
+    guardHooks: sessionStartHook && options.guardHooks === true,
   };
 }
 
 export function createStartupGuard(expected: StartupExpectations): StartupGuard {
-  return { expected, init: null, sessionStartHook: false, checked: false, error: null };
+  return { expected, init: null, sessionStartHook: false, checked: false, error: null, warning: null, warningSent: false };
 }
 
 const mcpServerNames = (value: unknown): string[] =>
   Array.isArray(value) ? value.map((item) => asObject(item)?.name).filter(isString) : [];
 
-export function startupProblem(guard: StartupGuard): string | null {
+export function startupVerdict(guard: StartupGuard): StartupVerdict {
   const init = guard.init;
-  if (!init) return `${BARE_MODE_ERROR} No system/init event arrived before the first turn.`;
-  const missing: string[] = [];
-  if (!isString(init.apiKeySource)) missing.push("auth source");
-  if (guard.expected.hubMcp && !mcpServerNames(init.mcp_servers).includes(HUB_MCP_NAME)) missing.push(`${HUB_MCP_NAME} MCP server`);
-  if (guard.expected.sessionStartHook && !guard.sessionStartHook) missing.push("SessionStart hooks");
-  return missing.length > 0 ? `${BARE_MODE_ERROR} Missing: ${missing.join(", ")}.` : null;
+  if (!init) return { error: `${BARE_MODE_ERROR} No system/init event arrived before the first turn.`, warning: null };
+  const mcpMissing = guard.expected.hubMcp && !mcpServerNames(init.mcp_servers).includes(HUB_MCP_NAME);
+  const hookMissing = guard.expected.sessionStartHook && !guard.sessionStartHook;
+  const missing = [...(mcpMissing ? [`${HUB_MCP_NAME} MCP server`] : []), ...(hookMissing ? ["SessionStart hooks"] : [])];
+  if (missing.length === 0) return { error: null, warning: null };
+  if ((mcpMissing && hookMissing) || (hookMissing && guard.expected.guardHooks)) {
+    return { error: `${BARE_MODE_ERROR} Missing: ${missing.join(", ")}.`, warning: null };
+  }
+  return { error: null, warning: `startup check: the ${missing.join(", ")} did not load; the run continues without it` };
+}
+
+export function takeStartupWarning(guard: StartupGuard): string | null {
+  if (!guard.checked || guard.warningSent || guard.warning === null) return null;
+  guard.warningSent = true;
+  return guard.warning;
 }
 
 export function observeStartup(guard: StartupGuard, event: Json): string | null {
@@ -185,7 +205,9 @@ export function observeStartup(guard: StartupGuard, event: Json): string | null 
   if (!isInit && !(isString(event.type) && TURN_EVENT_TYPES.has(event.type))) return null;
   if (isInit) guard.init = event;
   guard.checked = true;
-  guard.error = startupProblem(guard);
+  const verdict = startupVerdict(guard);
+  guard.error = verdict.error;
+  guard.warning = verdict.warning;
   return guard.error;
 }
 
@@ -363,7 +385,14 @@ function claudeSpec(req: RunRequest): ProcessSpec {
   if (req.disallowedTools && req.disallowedTools.length > 0) args.push("--disallowedTools", ...req.disallowedTools);
   for (const dir of req.addDirs) args.push("--add-dir", dir);
   const env = withRunIds(req.guard ? shareEnv(req.guard === "shell", req.shareLabel ?? "share") : hubEnv(), req);
-  const expected = startupExpectations({ cwd: req.cwd, env, hooksViaSettings: Boolean(req.guard), strictMcpConfig: req.strictMcpConfig, restricted: req.restricted });
+  const expected = startupExpectations({
+    cwd: req.cwd,
+    env,
+    hooksViaSettings: Boolean(req.guard),
+    guardHooks: Boolean(req.guard),
+    strictMcpConfig: req.strictMcpConfig,
+    restricted: req.restricted,
+  });
   return {
     bin: config.claudeBin,
     args: [...config.claudeArgsPrefix, ...args],
@@ -460,6 +489,8 @@ function execute(spec: ProcessSpec, req: RunRequest): Promise<ExecutorResult> {
       } catch {
         droppedOutput = true;
       }
+      const warning = state.guard ? takeStartupWarning(state.guard) : null;
+      if (warning) state.emit({ kind: "status", text: `warning: ${clip(warning, MAX_TOOL_TEXT)}` });
       stopOnGuard();
     };
 

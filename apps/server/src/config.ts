@@ -79,7 +79,11 @@ function claudeUsageUrl(raw: string | undefined): string {
 }
 
 const codexHome = process.env.CODEX_HOME ?? join(homeDir, ".codex");
-const claudeConfigDir = process.env.HUB_HOME ? null : process.env.CLAUDE_CONFIG_DIR || null;
+export function claudeConfigDirFrom(env: NodeJS.ProcessEnv): string | null {
+  return env.HUB_HOME ? null : env.CLAUDE_CONFIG_DIR || null;
+}
+
+const claudeConfigDir = claudeConfigDirFrom(process.env);
 const claudeHome = claudeConfigDir ?? join(homeDir, ".claude");
 const claudeJsonPath = join(claudeConfigDir ?? homeDir, ".claude.json");
 

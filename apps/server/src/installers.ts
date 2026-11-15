@@ -458,16 +458,106 @@ function writeMcpFile(client: McpClient, action: ConnectAction, path: string, en
   writeFileSync(path, `${JSON.stringify(json, null, 2)}\n`);
 }
 
-function registerWithCli(client: McpClient, action: ConnectAction, tool: CliTool, entry: McpServerEntry): void {
-  if (mcpStatus(client).inFile) runCli(tool, cliRemoveArgs(client));
-  if (action === "install") runCli(tool, cliAddArgs(client, entry));
+type McpSnapshot = { kind: "json"; value: unknown } | { kind: "toml"; block: string };
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isJsonObject(value)) {
+    const keys = Object.keys(value).sort((a, b) => a.localeCompare(b));
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function mcpSnapshot(client: McpClient, path: string): McpSnapshot | null {
+  if (client === "codex") {
+    const text = readText(path);
+    if (!/^\[mcp_servers\.cchub\]/m.test(text)) return null;
+    const match = CODEX_BLOCK.exec(text);
+    return match ? { kind: "toml", block: match[0].trim() } : null;
+  }
+  const servers = readJsonObject(path)?.mcpServers;
+  return isJsonObject(servers) && MCP_NAME in servers ? { kind: "json", value: servers[MCP_NAME] } : null;
+}
+
+function sameSnapshot(a: McpSnapshot | null, b: McpSnapshot | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.kind === "toml" && b.kind === "toml") return a.block.replace(/\r\n/g, "\n") === b.block.replace(/\r\n/g, "\n");
+  if (a.kind === "json" && b.kind === "json") return canonicalJson(a.value) === canonicalJson(b.value);
+  return false;
+}
+
+function cliRestoreArgs(client: McpClient, previous: McpSnapshot): string[] | null {
+  if (previous.kind === "json") return ["mcp", "add-json", "-s", "user", MCP_NAME, JSON.stringify(previous.value)];
+  const entry = codexRegisteredEntry(previous.block);
+  return entry ? cliAddArgs(client, entry) : null;
+}
+
+function writeSnapshot(path: string, previous: McpSnapshot): void {
+  mkdirSync(dirname(path), { recursive: true });
+  if (previous.kind === "toml") {
+    const current = readText(path).replace(CODEX_BLOCK, "");
+    backupConfig(path);
+    writeFileSync(path, `${current.trimEnd()}\n\n${previous.block}\n`);
+    return;
+  }
+  const json = readJsonObject(path);
+  if (json === null) throw new Error(`${path} is not valid JSON; fix it by hand first`);
+  const servers = isJsonObject(json.mcpServers) ? { ...json.mcpServers } : {};
+  servers[MCP_NAME] = previous.value;
+  json.mcpServers = servers;
+  backupConfig(path);
+  writeFileSync(path, `${JSON.stringify(json, null, 2)}\n`);
+}
+
+const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+function reAddWithCli(client: McpClient, path: string, tool: CliTool, args: string[]): boolean {
+  try {
+    if (mcpSnapshot(client, path) !== null) runCli(tool, cliRemoveArgs(client));
+    runCli(tool, args);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function restoreSnapshot(client: McpClient, path: string, tool: CliTool, previous: McpSnapshot): string {
+  if (sameSnapshot(mcpSnapshot(client, path), previous)) return "the previous cchub entry was kept";
+  const args = cliRestoreArgs(client, previous);
+  if (args && reAddWithCli(client, path, tool, args) && sameSnapshot(mcpSnapshot(client, path), previous)) {
+    return "the previous cchub entry was restored through the CLI";
+  }
+  try {
+    writeSnapshot(path, previous);
+  } catch (err) {
+    return `restoring the previous cchub entry failed: ${messageOf(err)}`;
+  }
+  return sameSnapshot(mcpSnapshot(client, path), previous)
+    ? `the previous cchub entry was written back to ${path} (copy in ${path}.bak)`
+    : "restoring the previous cchub entry failed: the file did not keep it";
+}
+
+function registerWithCli(client: McpClient, action: ConnectAction, tool: CliTool, entry: McpServerEntry, path: string): void {
+  const previous = mcpSnapshot(client, path);
+  if (action === "uninstall") {
+    if (previous !== null) runCli(tool, cliRemoveArgs(client));
+    return;
+  }
+  try {
+    if (previous !== null) runCli(tool, cliRemoveArgs(client));
+    runCli(tool, cliAddArgs(client, entry));
+  } catch (err) {
+    if (previous === null) throw err;
+    throw new Error(`${messageOf(err)}; ${restoreSnapshot(client, path, tool, previous)}`);
+  }
 }
 
 export function configureMcp(client: McpClient, action: ConnectAction): McpStatus {
   const path = mcpConfigPath(client);
   const entry = mcpServerEntry();
   const tool = cliFor(client);
-  if (tool) registerWithCli(client, action, tool, entry);
+  if (tool) registerWithCli(client, action, tool, entry, path);
   else writeMcpFile(client, action, path, entry);
   setSetting(registrationKey(client), action === "install" ? String(Date.now()) : null);
   return mcpStatus(client);

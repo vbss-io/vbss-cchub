@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { createStartupGuard, observeStartup, shareEnv, shareSettingsJson, startupExpectations, type StartupGuard } from "./executor.js";
+import { createStartupGuard, observeStartup, shareEnv, shareSettingsJson, startupExpectations, takeStartupWarning, type StartupGuard } from "./executor.js";
 import type { RunProfile } from "./share-types.js";
 
 const MAX_LINE_CHARS = 4_000_000;
@@ -156,7 +156,14 @@ export class ShareRunner {
     for (const dir of target.addDirs) args.push("--add-dir", dir);
     const env = shareEnv(target.profile.guard === "shell", target.label, target.profile.guard === null, target.profile.artifactWrites ? target.artifactsRoot : null);
     this.startup = createStartupGuard(
-      startupExpectations({ cwd: target.cwd, env, hooksViaSettings: true, strictMcpConfig: target.profile.strictMcpConfig, restricted: target.profile.restricted }),
+      startupExpectations({
+        cwd: target.cwd,
+        env,
+        hooksViaSettings: true,
+        guardHooks: target.profile.guard !== null,
+        strictMcpConfig: target.profile.strictMcpConfig,
+        restricted: target.profile.restricted,
+      }),
     );
     const child = spawn(config.claudeBin, args, {
       cwd: target.cwd,
@@ -246,6 +253,8 @@ export class ShareRunner {
       else this.kill(startupError);
       return;
     }
+    const startupWarning = this.pending && this.startup ? takeStartupWarning(this.startup) : null;
+    if (startupWarning) this.pending?.onEvent({ kind: "status", text: `warning: ${startupWarning}` });
     if (isString(event.session_id) && event.session_id.length > 0) this.sessionId = event.session_id;
     const pending = this.pending;
     if (event.type === "system" && event.subtype === "init") {

@@ -632,11 +632,23 @@ describe("backlog priority and in-Today filters", () => {
   });
 
   it("keeps a saved choice and only treats the new default as untouched", () => {
-    assert.deepEqual(parseBacklogFilters('{"statuses":["todo"],"hiddenPriorities":[],"showInToday":true}').hiddenPriorities, []);
+    assert.deepEqual(parseBacklogFilters('{"v":2,"statuses":["todo"],"hiddenPriorities":[],"showInToday":true}').hiddenPriorities, []);
     assert.deepEqual(parseBacklogFilters('{"statuses":["todo"],"hiddenPriorities":[3]}').hiddenPriorities, [3]);
     assert.equal(hasCustomBacklogFilters(DEFAULT_BACKLOG_FILTERS), false);
     assert.equal(hasCustomBacklogFilters(SHOW_ALL), true);
     assert.equal(hasCustomBacklogFilters({ ...DEFAULT_BACKLOG_FILTERS, hiddenPriorities: [null, 3] }), true);
+  });
+
+  it("migrates an unversioned value that saved the old empty default to hide No priority, keeping the rest, and stores the version", () => {
+    const legacy = parseBacklogFilters('{"projectId":"a","statuses":["todo","hold"],"hiddenPriorities":[],"showInToday":false}');
+    assert.deepEqual(legacy, { search: "", projectId: "a", statuses: ["todo", "hold"], hiddenPriorities: [null], showInToday: false });
+    assert.deepEqual(parseBacklogFilters('{"projectId":null,"statuses":["todo"]}').hiddenPriorities, [null]);
+    assert.deepEqual(parseBacklogFilters('{"statuses":["todo"],"hiddenPriorities":[null,2]}').hiddenPriorities, [null, 2]);
+    const saved = JSON.parse(serializeBacklogFilters(legacy)) as { v: number; hiddenPriorities: (number | null)[] };
+    assert.equal(saved.v, 2);
+    assert.deepEqual(saved.hiddenPriorities, [null]);
+    const shownAgain = serializeBacklogFilters({ ...legacy, hiddenPriorities: [] });
+    assert.deepEqual(parseBacklogFilters(shownAgain).hiddenPriorities, []);
   });
 
   it("shows the tasks already in Today by default and hides them when the toggle is off, carried ones always out", () => {

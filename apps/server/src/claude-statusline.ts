@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { config } from "./config.js";
+import { claudeConfigDirFrom, config } from "./config.js";
 
 export const STATUSLINE_SCRIPT_NAME = "statusline-cchub.mjs";
 
@@ -38,8 +38,7 @@ const PREVIOUS_RE = /\s--previous\s+([A-Za-z0-9_-]+)/;
 const isObject = (value: unknown): value is Json => typeof value === "object" && value !== null && !Array.isArray(value);
 
 export function claudeSettingsPath(env: NodeJS.ProcessEnv = process.env): string {
-  const dir = env.CLAUDE_CONFIG_DIR && env.CLAUDE_CONFIG_DIR.length > 0 ? env.CLAUDE_CONFIG_DIR : join(config.homeDir, ".claude");
-  return join(dir, "settings.json");
+  return join(claudeConfigDirFrom(env) ?? join(config.homeDir, ".claude"), "settings.json");
 }
 
 export function defaultStatuslinePaths(): StatuslinePaths {

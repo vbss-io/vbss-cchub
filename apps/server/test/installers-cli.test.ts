@@ -169,6 +169,93 @@ describe("MCP registration through the official CLIs", () => {
   });
 });
 
+function withFailing<T>(match: string, run: () => T): T {
+  process.env.FAKE_CLI_FAIL_MATCH = match;
+  try {
+    return run();
+  } finally {
+    delete process.env.FAKE_CLI_FAIL_MATCH;
+  }
+}
+
+const claudeEntry = (): unknown => (JSON.parse(readFileSync(config.claudeConfigPath, "utf8")) as { mcpServers?: Record<string, unknown> }).mcpServers?.cchub ?? null;
+
+const OLD_CLAUDE = { type: "stdio", command: "old-node", args: ["old-mcp.cjs"], env: { HUB_PORT: "9999" }, timeout: 5 };
+
+const OLD_CODEX_CLI = ['[mcp_servers.cchub]', 'command = "old-node"', 'args = ["old-mcp.cjs"]', "", "[mcp_servers.cchub.env]", 'HUB_PORT = "1"'].join("\n");
+
+const OLD_CODEX_HAND = ["[mcp_servers.cchub]", "command = 'old-node'", "args = ['old-mcp.cjs']", "startup_timeout_sec = 30", "", "[mcp_servers.cchub.env]", 'HUB_PORT = "1"'].join("\n");
+
+describe("a failed MCP update never leaves the user without the cchub entry", () => {
+  beforeEach(() => {
+    rmSync(`${config.claudeConfigPath}.bak`, { force: true });
+    rmSync(`${config.codexConfigPath}.bak`, { force: true });
+  });
+
+  it("re-adds the previous Claude Code entry through the CLI when add-json fails", () => {
+    writeFileSync(config.claudeConfigPath, JSON.stringify({ numStartups: 3, mcpServers: { cchub: OLD_CLAUDE, other: { command: "o" } } }));
+    assert.throws(() => withFailing("4317", () => installers.configureMcp("claude-code", "install")), /mcp add-json failed: simulated failure.*restored through the CLI/s);
+    assert.deepEqual(claudeEntry(), OLD_CLAUDE);
+    assert.deepEqual(
+      calls().map((call) => call.argv.slice(0, 2).join(" ")),
+      ["mcp remove", "mcp add-json", "mcp add-json"],
+    );
+    assert.deepEqual(JSON.parse(calls()[2]?.argv[5] ?? "null"), OLD_CLAUDE);
+    assert.equal((JSON.parse(readFileSync(config.claudeConfigPath, "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers.other !== undefined, true);
+  });
+
+  it("writes the previous Claude Code entry back to the file, with a .bak, when the CLI cannot re-add it", () => {
+    writeFileSync(config.claudeConfigPath, JSON.stringify({ numStartups: 3, mcpServers: { cchub: OLD_CLAUDE } }));
+    assert.throws(() => withFailing("add-json", () => installers.configureMcp("claude-code", "install")), /mcp add-json failed: simulated failure.*written back to .*\.bak/s);
+    assert.deepEqual(claudeEntry(), OLD_CLAUDE);
+    assert.equal(existsSync(`${config.claudeConfigPath}.bak`), true);
+    assert.equal((JSON.parse(readFileSync(config.claudeConfigPath, "utf8")) as { numStartups: number }).numStartups, 3);
+    assert.equal(installers.mcpStatus("claude-code").installed, true);
+  });
+
+  it("keeps the previous Claude Code entry untouched when remove fails, without trying to add", () => {
+    const before = JSON.stringify({ mcpServers: { cchub: OLD_CLAUDE } });
+    writeFileSync(config.claudeConfigPath, before);
+    assert.throws(() => withFailing("remove", () => installers.configureMcp("claude-code", "install")), /mcp remove failed: simulated failure.*previous cchub entry was kept/s);
+    assert.equal(readFileSync(config.claudeConfigPath, "utf8"), before);
+    assert.deepEqual(calls().map((call) => call.argv.slice(0, 2).join(" ")), ["mcp remove"]);
+  });
+
+  it("surfaces a failed first install without inventing an entry", () => {
+    writeFileSync(config.claudeConfigPath, JSON.stringify({ numStartups: 1 }));
+    assert.throws(() => withFailing("add-json", () => installers.configureMcp("claude-code", "install")), /^Error: mcp add-json failed: simulated failure/);
+    assert.equal(claudeEntry(), null);
+  });
+
+  it("re-adds the previous Codex entry through the CLI when codex mcp add fails", () => {
+    mkdirSync(config.codexHome, { recursive: true });
+    writeFileSync(config.codexConfigPath, `model = "gpt-x"\n\n${OLD_CODEX_CLI}\n`);
+    assert.throws(() => withFailing("4317", () => installers.configureMcp("codex", "install")), /mcp add failed: simulated failure.*restored through the CLI/s);
+    const text = readFileSync(config.codexConfigPath, "utf8");
+    assert.match(text, /^model = "gpt-x"/);
+    assert.ok(text.includes(OLD_CODEX_CLI));
+    assert.deepEqual(installers.codexRegisteredEntry(text), { command: "old-node", args: ["old-mcp.cjs"], env: { HUB_PORT: "1" } });
+    assert.deepEqual(calls().map((call) => call.argv.slice(0, 2).join(" ")), ["mcp remove", "mcp add", "mcp add"]);
+  });
+
+  it("writes the exact previous Codex block back when the CLI cannot re-add it", () => {
+    writeFileSync(config.codexConfigPath, `model = "gpt-x"\n\n${OLD_CODEX_HAND}\n\n[profiles.fast]\nmodel = "y"\n`);
+    assert.throws(() => withFailing("mcp add", () => installers.configureMcp("codex", "install")), /mcp add failed: simulated failure.*written back to .*\.bak/s);
+    const text = readFileSync(config.codexConfigPath, "utf8");
+    assert.ok(text.includes(OLD_CODEX_HAND));
+    assert.match(text, /^model = "gpt-x"/);
+    assert.match(text, /\[profiles\.fast\]\nmodel = "y"/);
+    assert.equal(existsSync(`${config.codexConfigPath}.bak`), true);
+    assert.equal(installers.mcpStatus("codex").installed, true);
+  });
+
+  it("replaces the Codex entry when the update succeeds", () => {
+    const status = installers.configureMcp("codex", "install");
+    assert.equal(status.updateAvailable, false);
+    assert.deepEqual(installers.codexRegisteredEntry(readFileSync(config.codexConfigPath, "utf8")), { command: config.nodeBin, args: [config.mcpEntry], env: { HUB_PORT: "4317" } });
+  });
+});
+
 describe("Codex config parsing", () => {
   it("reads basic and literal strings, inline env tables, multi-line arrays and comments", () => {
     const text = [

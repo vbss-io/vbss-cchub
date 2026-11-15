@@ -66,6 +66,15 @@ describe("CLAUDE_CONFIG_DIR", () => {
   });
 });
 
+describe("statusline settings path", () => {
+  it("follows the config rule: CLAUDE_CONFIG_DIR, except when HUB_HOME pins the hub home", async () => {
+    const { claudeSettingsPath } = await import("../src/claude-statusline.js");
+    assert.equal(claudeSettingsPath({ CLAUDE_CONFIG_DIR: configDir }), join(configDir, "settings.json"));
+    assert.equal(claudeSettingsPath({ CLAUDE_CONFIG_DIR: configDir, HUB_HOME: home }), join(home, ".claude", "settings.json"));
+    assert.equal(claudeSettingsPath({}), join(home, ".claude", "settings.json"));
+  });
+});
+
 describe("live transcript lookup", () => {
   it("guesses the transcript inside the configured projects dir", async () => {
     const { guessTranscriptIn } = await import("../src/live.js");

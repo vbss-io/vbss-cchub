@@ -134,6 +134,32 @@ describe("delegation origin from CLAUDE_CODE_SESSION_ID", () => {
     assert.equal(created.task.originClient, "claude-code");
   });
 
+  const delegate = async (body: Record<string, unknown>): Promise<{ originSessionId: string | null; originClient: string | null }> => {
+    const res = await fetch(`${hub.base}/delegation/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspace: "pilot", source: "mcp", originPid: 2_000_000_000, ...body }),
+    });
+    const created = (await res.json()) as { task?: { originSessionId: string | null; originClient: string | null }; error?: string };
+    assert.ok(created.task, created.error ?? `status ${res.status}`);
+    return created.task;
+  };
+
+  it("lets a Codex hint win over a CLAUDE_CODE_SESSION_ID inherited from a Claude shell", async () => {
+    const task = await delegate({ prompt: "codex under a claude shell", originClient: "codex", originEnvSessionId: "env-session-3" });
+    assert.equal(task.originSessionId, null);
+    assert.equal(task.originClient, "codex");
+  });
+
+  it("uses the environment session id when the hint is claude-code or absent", async () => {
+    const hinted = await delegate({ prompt: "claude hinted", originClient: "claude-code", originEnvSessionId: "env-session-4" });
+    assert.equal(hinted.originSessionId, "env-session-4");
+    assert.equal(hinted.originClient, "claude-code");
+    const bare = await delegate({ prompt: "no hint", originEnvSessionId: "env-session-5" });
+    assert.equal(bare.originSessionId, "env-session-5");
+    assert.equal(bare.originClient, "claude-code");
+  });
+
   it("falls back to the PID guess without the variable", async () => {
     const client = startMcp();
     await client.send("initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "test", version: "1" } });

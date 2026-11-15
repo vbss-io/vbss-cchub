@@ -93,10 +93,46 @@ describe("startup guard against bare mode", () => {
     assert.match(outcome.error ?? "", /No system\/init event arrived before the first turn/);
   });
 
-  it("fails when init carries no auth source", async () => {
+  it("does not fail a run whose init carries no apiKeySource", async () => {
+    installHubContext();
     const outcome = await withEnv({ FAKE_CLAUDE_INIT: "nokey" }, () => executor.runTask(request()));
-    assert.equal(outcome.status, "failed");
-    assert.match(outcome.error ?? "", /Missing: auth source\./);
+    assert.equal(outcome.status, "completed", outcome.error ?? "");
+  });
+
+  it("keeps the run going with a visible warning when only the hub MCP server is missing", async () => {
+    installHubContext();
+    const events: string[] = [];
+    const outcome = await withEnv({ FAKE_CLAUDE_INIT: "nomcp" }, () => executor.runTask(request({ onEvent: (event) => events.push(`${event.kind}:${event.text}`) })));
+    assert.equal(outcome.status, "completed", outcome.error ?? "");
+    assert.equal(outcome.result, "handled: hello");
+    assert.deepEqual(events.filter((line) => line.startsWith("status:warning")), ["status:warning: startup check: the cchub MCP server did not load; the run continues without it"]);
+  });
+
+  it("keeps the run going with a visible warning when only the SessionStart hook never fired", async () => {
+    installHubContext();
+    const events: string[] = [];
+    const outcome = await withEnv({ FAKE_CLAUDE_INIT: "nohook" }, () => executor.runTask(request({ onEvent: (event) => events.push(`${event.kind}:${event.text}`) })));
+    assert.equal(outcome.status, "completed", outcome.error ?? "");
+    assert.deepEqual(events.filter((line) => line.startsWith("status:warning")), ["status:warning: startup check: the SessionStart hooks did not load; the run continues without it"]);
+  });
+
+  it("emits no startup warning when both signals arrive", async () => {
+    installHubContext();
+    const events: string[] = [];
+    const outcome = await executor.runTask(request({ onEvent: (event) => events.push(`${event.kind}:${event.text}`) }));
+    assert.equal(outcome.status, "completed", outcome.error ?? "");
+    assert.equal(events.some((line) => line.startsWith("status:warning")), false);
+  });
+
+  it("warns instead of failing when the hub MCP is not registered and the expected hook never fired", async () => {
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "node notify.mjs" }] }] } }),
+    );
+    const events: string[] = [];
+    const outcome = await withEnv({ FAKE_CLAUDE_INIT: "bare" }, () => executor.runTask(request({ onEvent: (event) => events.push(`${event.kind}:${event.text}`) })));
+    assert.equal(outcome.status, "completed", outcome.error ?? "");
+    assert.ok(events.includes("status:warning: startup check: the SessionStart hooks did not load; the run continues without it"), events.join("\n"));
   });
 
   it("expects only what the run loads: no hub MCP under --strict-mcp-config, none when nothing is installed", async () => {
@@ -122,6 +158,13 @@ describe("startup guard against bare mode", () => {
     );
     const outcome = await withEnv({ FAKE_CLAUDE_INIT: "bare" }, () => executor.runTask(request({ resumeSessionId: "s-resume" })));
     assert.equal(outcome.status, "completed", outcome.error ?? "");
+  });
+
+  it("still fails a guarded run when its own --settings hooks never fired, even with the hub MCP loaded", async () => {
+    installHubContext();
+    const outcome = await withEnv({ FAKE_CLAUDE_INIT: "nohook", HUB_SHARE_ENV_PASSTHROUGH: "FAKE_CLAUDE_INIT" }, () => executor.runTask(request({ guard: "readonly" })));
+    assert.equal(outcome.status, "failed");
+    assert.match(outcome.error ?? "", /Missing: SessionStart hooks\./);
   });
 
   it("expects the SessionStart hooks of a guarded run, which come from --settings", async () => {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ClaudeLimitsSource, ClaudeStatuslineStatus } from "../../delegation";
+import type { ClaudeLimitsSource, ClaudeStatuslineStatus } from "./delegation";
 import { claudeSourceRow } from "./claude-source";
 
 const source = (statusline: Partial<ClaudeStatuslineStatus>): ClaudeLimitsSource => ({

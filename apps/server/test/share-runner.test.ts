@@ -164,6 +164,22 @@ describe("persistent share runner", () => {
       process.env.HUB_SHARE_ENV_PASSTHROUGH = "FAKE_CLAUDE_CAPTURE,FAKE_CLAUDE_DELAY_MS,FAKE_CLAUDE_MODE";
     }
   });
+
+  it("answers with a startup warning when an unguarded runner misses only the SessionStart hook", async () => {
+    process.env.HUB_SHARE_ENV_PASSTHROUGH = "FAKE_CLAUDE_CAPTURE,FAKE_CLAUDE_DELAY_MS,FAKE_CLAUDE_MODE,FAKE_CLAUDE_INIT";
+    process.env.FAKE_CLAUDE_INIT = "nohook";
+    try {
+      const runner = runners.runnerFor("s7:Bo", { cwd: tmp, addDirs: [], resumeSessionId: null, forkSession: false, artifactsRoot: null, profile: types.askProfile("total"), systemPrompt: "g", model: null, label: "Bo" }, null, 60_000, 10_000);
+      const events: string[] = [];
+      const answer = await runner.ask("hello", (event) => events.push(`${event.kind}:${event.text}`));
+      assert.equal(answer.ok, true, answer.error ?? "");
+      assert.deepEqual(events.filter((line) => line.startsWith("status:warning")), ["status:warning: startup check: the SessionStart hooks did not load; the run continues without it"]);
+      runner.kill("done");
+    } finally {
+      delete process.env.FAKE_CLAUDE_INIT;
+      process.env.HUB_SHARE_ENV_PASSTHROUGH = "FAKE_CLAUDE_CAPTURE,FAKE_CLAUDE_DELAY_MS,FAKE_CLAUDE_MODE";
+    }
+  });
 });
 
 after(async () => {

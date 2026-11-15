@@ -1,4 +1,4 @@
-import type { ClaudeLimitsSource } from "../../delegation";
+import type { ClaudeLimitsSource } from "./delegation";
 
 export interface StatuslineButton {
   label: string;

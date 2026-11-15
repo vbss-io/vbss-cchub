@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Toggletip } from "../../components/Toggletip";
 import { changeClaudeStatusline, fetchClaudeLimitsSource, saveClaudeLimitsSource, type ClaudeLimitsSource } from "../../delegation";
 import { timeAgo } from "../../usage-format";
-import { FALLBACK_HELP, STATUSLINE_HELP, claudeSourceRow, type StatuslineButton } from "./claude-source";
+import { FALLBACK_HELP, STATUSLINE_HELP, claudeSourceRow, type StatuslineButton } from "../../claude-source";
 import type { SettingsTabProps } from "./types";
 
 interface Props extends SettingsTabProps {

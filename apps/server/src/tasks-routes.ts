@@ -16,7 +16,7 @@ async function resolveOrigin(
   hint: OriginClient | null,
   envSessionId: string | null = null,
 ): Promise<{ originSessionId: string | null; originClient: OriginClient | null }> {
-  if (envSessionId && SESSION_ID_RE.test(envSessionId)) {
+  if (envSessionId && hint !== "codex" && SESSION_ID_RE.test(envSessionId)) {
     const known = getSession(envSessionId);
     return { originSessionId: envSessionId, originClient: known?.client === "share" ? "share" : "claude-code" };
   }

@@ -45,15 +45,21 @@ export const DEFAULT_BACKLOG_FILTERS: BacklogFilters = { search: "", projectId: 
 
 export const BACKLOG_FILTERS_KEY = "hub.today.backlogFilters";
 
+export const BACKLOG_FILTERS_VERSION = 2;
+
+const legacyDefaultHidden = (record: Record<string, unknown>): boolean =>
+  record.v !== BACKLOG_FILTERS_VERSION && (!Array.isArray(record.hiddenPriorities) || record.hiddenPriorities.length === 0);
+
 export function parseBacklogFilters(raw: string): BacklogFilters {
   try {
     const value: unknown = JSON.parse(raw);
     if (typeof value !== "object" || value === null || Array.isArray(value)) return DEFAULT_BACKLOG_FILTERS;
     const record = value as Record<string, unknown>;
     const statuses = Array.isArray(record.statuses) ? BACKLOG_STATUSES.filter((status) => (record.statuses as unknown[]).includes(status)) : [...DEFAULT_BACKLOG_FILTERS.statuses];
-    const hidden = Array.isArray(record.hiddenPriorities)
+    const stored = Array.isArray(record.hiddenPriorities)
       ? record.hiddenPriorities.filter((item): item is number | null => item === null || (typeof item === "number" && Number.isInteger(item) && item >= 0 && item <= 9))
       : [];
+    const hidden = legacyDefaultHidden(record) ? [...(DEFAULT_BACKLOG_FILTERS.hiddenPriorities ?? [])] : stored;
     return {
       search: "",
       projectId: typeof record.projectId === "string" && record.projectId !== "" ? record.projectId : null,
@@ -67,7 +73,7 @@ export function parseBacklogFilters(raw: string): BacklogFilters {
 }
 
 export const serializeBacklogFilters = (filters: BacklogFilters): string =>
-  JSON.stringify({ projectId: filters.projectId, statuses: filters.statuses, hiddenPriorities: filters.hiddenPriorities ?? [], showInToday: filters.showInToday !== false });
+  JSON.stringify({ v: BACKLOG_FILTERS_VERSION, projectId: filters.projectId, statuses: filters.statuses, hiddenPriorities: filters.hiddenPriorities ?? [], showInToday: filters.showInToday !== false });
 
 export function hasCustomBacklogFilters(filters: BacklogFilters): boolean {
   const defaults = DEFAULT_BACKLOG_FILTERS.statuses;

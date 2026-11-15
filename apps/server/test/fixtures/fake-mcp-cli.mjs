@@ -79,6 +79,8 @@ function codex(argv) {
 export function runMcpCli(kind, argv) {
   record(kind, argv);
   if (process.env.FAKE_CLI_FAIL === "1") fail("simulated failure");
+  const failMatch = process.env.FAKE_CLI_FAIL_MATCH;
+  if (failMatch && failMatch.split("|").some((part) => argv.join(" ").includes(part))) fail(`simulated failure of ${argv.slice(0, 2).join(" ")}`);
   if (kind === "claude") claude(argv);
   else codex(argv);
 }
