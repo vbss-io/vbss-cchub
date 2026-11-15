@@ -177,6 +177,8 @@ function primed(date: string = TODAY): { root: string; settings: DelegationSetti
   return { root, settings };
 }
 
+const IN_ALPHA_GROUP = [LINE_ONE, LINE_TWO, "  - [ ] Sub of two", "  - a note under two", "- [ ] [[alpha|Alpha]] - Task four", "", LINE_BETA, "- [ ] free text of the day"];
+
 const RELS = (date: string): string[] => ["projects/alpha.md", "projects/beta.md", dailyRel(date)];
 
 describe("G00c D1: the focus is the lines of the daily", () => {
@@ -305,10 +307,8 @@ describe("G00c D4: a scheduled date changed in the project mirrors into the dail
     const { root, settings } = primed();
     editProject(root, "alpha", (content) => content.replace("- [ ] Task four\n", `- [ ] Task four ${SCHEDULED} ${TODAY}\n`));
     today.todayApi.regenerateFocusMirror(settings, TODAY);
-    const content = read(root, dailyRel(TODAY));
-    assert.ok(content.includes(`${LINE_ONE}\n${LINE_TWO}\n  - [ ] Sub of two\n  - a note under two\n- [ ] [[alpha|Alpha]] - Task four\n`) || content.includes("- [ ] [[alpha|Alpha]] - Task four\n"));
-    assert.ok(focusTitles(settings, TODAY).includes("Task four"));
-    for (const line of FOCUS) assert.ok(content.split("\n").includes(line), line);
+    assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, IN_ALPHA_GROUP));
+    assert.deepEqual(focusTitles(settings, TODAY), ["Task one", "Task two", "Task four", "Beta one"]);
     assertSettled(settings, root, TODAY, RELS(TODAY));
   });
 
@@ -402,12 +402,27 @@ describe("G00c D3: hub actions write the daily first", () => {
     const { root, settings } = primed();
     const four = taskIn(settings, "alpha", "Task four");
     today.todayApi.schedule(settings, { projectId: "alpha", line: four.line, raw: four.raw, date: TODAY, from: TODAY });
-    const content = read(root, dailyRel(TODAY));
-    for (const line of FOCUS) assert.ok(content.split("\n").includes(line), line);
-    assert.ok(content.includes("- [ ] [[alpha|Alpha]] - Task four\n"));
+    assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, IN_ALPHA_GROUP));
     assert.equal(taskIn(settings, "alpha", "Task four").scheduled, TODAY);
-    assert.ok(focusTitles(settings, TODAY).includes("Task four"));
+    assert.deepEqual(focusTitles(settings, TODAY), ["Task one", "Task two", "Task four", "Beta one"]);
     assertSettled(settings, root, TODAY, RELS(TODAY));
+  });
+
+  it("Add to focus lands at the end of the group of its project before the free lines, and a project without a group gets a new group at the end", () => {
+    const { root, settings } = primed();
+    write(root, "projects/gamma.md", project("Gamma", ["- [ ] Gamma one"]));
+    const two = taskIn(settings, "beta", "Beta two");
+    today.todayApi.schedule(settings, { projectId: "beta", line: two.line, raw: two.raw, date: TODAY, from: TODAY });
+    const BETA_TWO = "- [ ] [[beta|Beta]] - Beta two";
+    assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, [LINE_ONE, LINE_TWO, "  - [ ] Sub of two", "  - a note under two", "", LINE_BETA, BETA_TWO, "- [ ] free text of the day"]));
+    const gamma = taskIn(settings, "gamma", "Gamma one");
+    today.todayApi.schedule(settings, { projectId: "gamma", line: gamma.line, raw: gamma.raw, date: TODAY, from: TODAY });
+    assert.equal(
+      read(root, dailyRel(TODAY)),
+      dailyOf(TODAY, [LINE_ONE, LINE_TWO, "  - [ ] Sub of two", "  - a note under two", "", LINE_BETA, BETA_TWO, "- [ ] free text of the day", "", "- [ ] [[gamma|Gamma]] - Gamma one"]),
+    );
+    assert.deepEqual(focusTitles(settings, TODAY), ["Task one", "Task two", "Beta one", "Beta two", "Gamma one"]);
+    assertSettled(settings, root, TODAY, [...RELS(TODAY), "projects/gamma.md"]);
   });
 
   it("reorder moves the block of a line past its neighbour of the same project", () => {

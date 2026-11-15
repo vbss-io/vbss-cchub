@@ -1124,7 +1124,48 @@ function insertMissing(
       placeUnder(task, subtask);
     }
   };
-  let tops: TopItem[] = [];
+  const placeTops = (batch: TopItem[], grouped: string | null): void => {
+    let tops = batch;
+    while (tops.length > 0) {
+      const items: ComposeFocusItem[] = tops.map((item) => ({ project: null, text: "", block: item.lines.map((line) => line.text).join("\n"), keepMark: true }));
+      const rendered = renderFocusLines(items, settings.daily.wikilinks, board);
+      const owners = layoutOf(rendered, tops);
+      if (owners === null) {
+        for (const item of tops) ambiguous(item.task, "same-title");
+        return;
+      }
+      const texts = textsOf();
+      const groupEnd = grouped === null ? null : projectGroupEnd(settings, texts, board, grouped);
+      const spot = groupEnd === null ? insertionSpot(settings, texts, board, rendered[0], allowHeading) : { at: groupEnd + 1, prefix: [], suffix: [] };
+      if (spot === null) return;
+      const block = [...spot.prefix, ...rendered, ...spot.suffix];
+      const copy = [...texts];
+      copy.splice(spot.at, 0, ...block);
+      const linked = linkedAt(scanOf(copy));
+      const failing = new Set<TreeLine>();
+      owners.forEach((owner, offset) => {
+        if (owner !== null && linked.get(spot.at + spot.prefix.length + offset) !== owner.taskId) failing.add(owner);
+      });
+      if (failing.size === 0) {
+        doc.lines.splice(spot.at, 0, ...block.map((text) => docLine(text)));
+        for (const item of tops) record(item.lines);
+        refresh();
+        return;
+      }
+      tops = tops.flatMap((item) => {
+        const head = item.lines[0] as TreeLine;
+        if (failing.has(head)) {
+          ambiguous(item.task, "same-title");
+          return [];
+        }
+        const index = item.lines.findIndex((line) => failing.has(line));
+        if (index === -1) return [item];
+        ambiguous(byId.get((item.lines[index] as TreeLine).taskId) as BoardTask, "same-title");
+        return [{ task: item.task, lines: withoutLine(item.lines, index) }];
+      });
+    }
+  };
+  const tops: TopItem[] = [];
   for (const entry of focus) {
     const task = entry.task;
     if (isPresent(presence, task)) {
@@ -1144,43 +1185,38 @@ function insertMissing(
     const subtree = task.subtasks.filter((subtask) => !skip(subtask)).flatMap((subtask) => treeLines(subtask, 1, (depth) => SUBTASK_INDENT.repeat(depth), skip));
     tops.push({ task, lines: [{ text: canonicalHead(settings, entry.project, task), taskId: task.id, depth: 0 }, ...subtree] });
   }
-  while (tops.length > 0) {
-    const items: ComposeFocusItem[] = tops.map((item) => ({ project: null, text: "", block: item.lines.map((line) => line.text).join("\n"), keepMark: true }));
-    const rendered = renderFocusLines(items, settings.daily.wikilinks, board);
-    const owners = layoutOf(rendered, tops);
-    if (owners === null) {
-      for (const item of tops) ambiguous(item.task, "same-title");
-      break;
-    }
+  let pending = tops;
+  while (pending.length > 0) {
     const texts = textsOf();
-    const spot = insertionSpot(settings, texts, board, rendered[0], allowHeading);
-    if (spot === null) break;
-    const block = [...spot.prefix, ...rendered, ...spot.suffix];
-    const copy = [...texts];
-    copy.splice(spot.at, 0, ...block);
-    const linked = linkedAt(scanOf(copy));
-    const failing = new Set<TreeLine>();
-    owners.forEach((owner, offset) => {
-      if (owner !== null && linked.get(spot.at + spot.prefix.length + offset) !== owner.taskId) failing.add(owner);
-    });
-    if (failing.size === 0) {
-      doc.lines.splice(spot.at, 0, ...block.map((text) => docLine(text)));
-      for (const item of tops) record(item.lines);
-      break;
-    }
-    tops = tops.flatMap((item) => {
-      const head = item.lines[0] as TreeLine;
-      if (failing.has(head)) {
-        ambiguous(item.task, "same-title");
-        return [];
-      }
-      const index = item.lines.findIndex((line) => failing.has(line));
-      if (index === -1) return [item];
-      ambiguous(byId.get((item.lines[index] as TreeLine).taskId) as BoardTask, "same-title");
-      return [{ task: item.task, lines: withoutLine(item.lines, index) }];
-    });
+    const grouped = pending.find((item) => projectGroupEnd(settings, texts, board, item.task.projectId) !== null)?.task.projectId ?? null;
+    placeTops(grouped === null ? pending : pending.filter((item) => item.task.projectId === grouped), grouped);
+    pending = grouped === null ? [] : pending.filter((item) => item.task.projectId !== grouped);
   }
   return result;
+}
+
+function projectGroupEnd(settings: DelegationSettings, texts: string[], board: ComposeBoard, projectId: string): number | null {
+  const range = focusRange(texts, settings);
+  if (!range) return null;
+  const ownTop = (text: string): boolean => indentWidth(text) === 0 && projectOfFocusLine(text, board) === projectId;
+  let end: number | null = null;
+  let index = range.heading + 1;
+  while (index < range.end) {
+    if (!ownTop(texts[index] as string)) {
+      index += 1;
+      continue;
+    }
+    let last = index;
+    index += 1;
+    while (index < range.end) {
+      const text = texts[index] as string;
+      if (isBlankText(text) || (indentWidth(text) === 0 && !ownTop(text))) break;
+      last = index;
+      index += 1;
+    }
+    end = last;
+  }
+  return end;
 }
 
 function commonPairs(before: string[], after: string[]): [number, number][] {

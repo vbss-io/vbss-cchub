@@ -473,7 +473,7 @@ function signifierRegExp(config: TasksFeatureSettings): RegExp {
   if (cached) return cached;
   const stop = stamp === null ? STOP_SOURCE : `(?:${STOP_SOURCE}|${stamp})`;
   const pattern = new RegExp(
-    `(\\s*)(?:(${START_MARK}|${SCHEDULED_MARK}|${DUE_MARK})\\uFE0F?\\s*(\\d{4}-\\d{2}-\\d{2})(?!\\d)|${REPEAT_MARK}\\uFE0F?[ \\t]*(.*?)(?=\\s*${stop}|\\s+#[^\\s#]|\\s*$))(\\s*)`,
+    `(\\s*)(?:(${START_MARK}|${SCHEDULED_MARK}|${DUE_MARK})\\uFE0F?\\s*(\\d{4}-\\d{1,2}-\\d{1,2})(?!\\d)|${REPEAT_MARK}\\uFE0F?[ \\t]*(.*?)(?=\\s*${stop}|\\s+#[^\\s#]|\\s*$))(\\s*)`,
     "gu",
   );
   signifierPatterns.set(key, pattern);
@@ -494,6 +494,7 @@ const DATE_MARKS: Record<DateField, string> = { start: START_MARK, scheduled: SC
 interface SignifierSplit extends BoardDates {
   text: string;
   conflict: keyof BoardDates | null;
+  undated: string[];
 }
 
 function isCalendarDate(text: string): boolean {
@@ -517,9 +518,14 @@ function signifierMatches(text: string, config: TasksFeatureSettings): RegExpMat
   return [...text.matchAll(signifierRegExp(config))].filter((match) => {
     const at = (match.index ?? 0) + (match[1] ?? "").length;
     if (spans.some(([from, to]) => at >= from && at < to)) return false;
+    if (match[2] === SCHEDULED_MARK) return endsAtWhitespace(text, match);
     if (match[2] !== undefined) return isBoardDate(match[3] ?? "");
     return (match[4] ?? "").trim() !== "";
   });
+}
+
+function endsAtWhitespace(text: string, match: RegExpMatchArray): boolean {
+  return (match[5] ?? "") !== "" || (match.index ?? 0) + match[0].length === text.length;
 }
 
 function stripSignifiers(text: string, matches: RegExpMatchArray[]): string {
@@ -541,7 +547,7 @@ function signifierField(match: RegExpMatchArray): keyof BoardDates {
 }
 
 function splitSignifiers(text: string, config: TasksFeatureSettings): SignifierSplit {
-  const split: SignifierSplit = { text, start: null, scheduled: null, due: null, repeat: null, conflict: null };
+  const split: SignifierSplit = { text, start: null, scheduled: null, due: null, repeat: null, conflict: null, undated: [] };
   const matches = signifierMatches(text, config);
   if (matches.length === 0) return split;
   const stripped = stripSignifiers(text, matches);
@@ -550,6 +556,10 @@ function splitSignifiers(text: string, config: TasksFeatureSettings): SignifierS
   for (const match of matches) {
     const field = signifierField(match);
     const value = field === "repeat" ? (match[4] ?? "").trim() : (match[3] ?? "");
+    if (field !== "repeat" && !isBoardDate(value)) {
+      split.undated.push(match[0].trim());
+      continue;
+    }
     const current = split[field];
     if (current === null) split[field] = value;
     else if (current !== value && split.conflict === null) split.conflict = field;
@@ -561,12 +571,13 @@ function withoutSignifiers(text: string, config: TasksFeatureSettings): string {
   return stripSignifiers(text, signifierMatches(text, config));
 }
 
-function formatSignifiers(dates: BoardDates): string {
+function formatSignifiers(dates: BoardDates, undated: string[] = []): string {
   const parts: string[] = [];
   if (dates.repeat !== null) parts.push(`${REPEAT_MARK} ${dates.repeat}`);
   for (const field of DATE_FIELDS) {
     const value = dates[field];
     if (value !== null) parts.push(`${DATE_MARKS[field]} ${value}`);
+    if (field === "scheduled") parts.push(...undated);
   }
   return parts.join(" ");
 }
@@ -1046,7 +1057,7 @@ export function rewriteTaskLine(raw: string, config: TasksFeatureSettings, chang
   if (priority !== null) token = priority === prioritized.priority && prioritized.token ? prioritized.token : formatPriority(config, priority);
   const tail = stampMode === "drop" ? "" : stamped.tail;
   const content = text === "" ? token : `${text}${token === "" ? "" : ` ${token}`}`;
-  const signifiers = formatSignifiers(dates);
+  const signifiers = formatSignifiers(dates, change.scheduled === undefined ? signified.undated : []);
   if (signifiers === "") return `${head}${checkbox}${close}${gap || " "}${span}${content}${tail}`;
   if (removePriorityTokens(withoutSignifiers(text, config), config) === "") throw new BadRequestError(NO_TITLE_ERROR);
   return `${head}${checkbox}${close}${gap || " "}${span}${content} ${signifiers}${tail}`;
@@ -1640,11 +1651,6 @@ function scheduledInsertAt(rest: string, spans: TokenSpan[], config: TasksFeatur
   return { at: body.trimEnd().length, before: false };
 }
 
-const DATE_SHAPE_SOURCE = "\\d{4}-\\d{1,2}-\\d{1,2}(?!\\d)";
-const LOOSE_SCHEDULED_RE = new RegExp(`(\\s*)${SCHEDULED_MARK}\\uFE0F?([ \\t]*${DATE_SHAPE_SOURCE})?(\\s*)`, "gu");
-const DEPENDS_MARK = "\u26D4";
-const TAIL_DATE_MARKS = [START_MARK, SCHEDULED_MARK, DUE_MARK, "\u2705", "\u2795", "\u274C", DEPENDS_MARK];
-const tailTokenPatterns = new Map<string, RegExp>();
 const SCHEDULED_LEAD_RE = new RegExp(`^${SCHEDULED_MARK}\\uFE0F?[ \\t]*`, "u");
 const BLOCK_ID_RE = /\s+\^[A-Za-z0-9-]+\s*$/u;
 
@@ -1663,59 +1669,13 @@ function withoutSpans(rest: string, spans: TokenSpan[]): string {
   return next;
 }
 
-function tailTokenRegExp(config: TasksFeatureSettings): RegExp {
-  const template = config.doneStamp.trim();
-  const stamp = template.includes(TASKS_DATE_TOKEN) ? template.split(TASKS_DATE_TOKEN).map(escapeRegExp).join(DATE_SHAPE_SOURCE) : null;
-  const key = `${config.priorityTag}\n${stamp ?? ""}`;
-  const cached = tailTokenPatterns.get(key);
-  if (cached) return cached;
-  const stop = stamp === null ? STOP_SOURCE : `(?:${STOP_SOURCE}|${stamp})`;
-  const tokens = [
-    `(?:${TAIL_DATE_MARKS.join("|")})\\uFE0F?[ \\t]*${DATE_SHAPE_SOURCE}`,
-    `${REPEAT_MARK}\\uFE0F?[ \\t]*(?!${stop})\\S.*?(?=\\s*${stop}|\\s+#[^\\s#]|\\s*$)`,
-    `${DEPENDS_MARK}\\uFE0F?[ \\t]*[A-Za-z0-9_-]+(?:,[A-Za-z0-9_-]+)*(?![^\\s])`,
-    `#${escapeRegExp(config.priorityTag)}\\d(?![^\\s])`,
-    "\\^[A-Za-z0-9-]+(?![^\\s])",
-    ...(stamp === null ? [] : [stamp]),
-  ];
-  const pattern = new RegExp(`^\\s*(?:${tokens.join("|")})`, "iu");
-  tailTokenPatterns.set(key, pattern);
-  return pattern;
-}
-
-function isSignifierTail(tail: string, config: TasksFeatureSettings): boolean {
-  const pattern = tailTokenRegExp(config);
-  let rest = tail;
-  while (rest.trim() !== "") {
-    const match = rest.match(pattern);
-    if (match === null || match[0].length === 0) return false;
-    rest = rest.slice(match[0].length);
-  }
-  return true;
-}
-
-function scheduledSpans(rest: string, spans: TokenSpan[], config: TasksFeatureSettings): TokenSpan[] {
-  const own = spans.filter((span) => span.mark === SCHEDULED_MARK);
-  const guarded = protectedSpans(rest);
-  for (const match of rest.matchAll(LOOSE_SCHEDULED_RE)) {
-    const at = match.index ?? 0;
-    const start = at + (match[1] ?? "").length;
-    const end = at + match[0].length - (match[3] ?? "").length;
-    if (match[2] === undefined && !isSignifierTail(rest.slice(end), config)) continue;
-    if (guarded.some(([from, to]) => start >= from && start < to)) continue;
-    if (spans.some((span) => start < span.end && end > span.start)) continue;
-    own.push({ mark: SCHEDULED_MARK, start, end });
-  }
-  return own.sort((a, b) => a.start - b.start);
-}
-
 export function withScheduledToken(raw: string, config: TasksFeatureSettings, scheduled: string | null): string {
   const parts = raw.match(TASK_PARTS_RE);
   if (!parts) throw new BadRequestError("not a task line");
   const rest = parts[5] as string;
   const head = raw.slice(0, raw.length - rest.length);
   const spans = tokenSpans(rest, config);
-  const own = scheduledSpans(rest, spans, config);
+  const own = spans.filter((span) => span.mark === SCHEDULED_MARK);
   if (scheduled === null) return `${head}${withoutSpans(rest, own)}`;
   const [first, ...others] = own;
   if (first !== undefined) {
