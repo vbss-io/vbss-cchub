@@ -12,6 +12,10 @@ const dataDir = mkdtempSync(join(tmpdir(), "cch-backups-"));
 process.env.HUB_DATA_DIR = dataDir;
 delete process.env.HUB_RESOURCE_DIR;
 
+function removePath(path: string): void {
+  rmSync(path, { recursive: true, force: true, maxRetries: 8, retryDelay: 50 });
+}
+
 type Backups = typeof import("../src/backups.js");
 let backups: Backups;
 
@@ -25,7 +29,7 @@ before(async () => {
 });
 
 after(() => {
-  rmSync(dataDir, { recursive: true, force: true });
+  removePath(dataDir);
 });
 
 function seedDb(path: string, rows: string[], wal = true): void {
@@ -48,8 +52,8 @@ function bodies(path: string): string[] {
 
 function resetData(): void {
   backups.resetBackupError();
-  rmSync(backupsDir, { recursive: true, force: true });
-  for (const name of ["hub.db", "hub.db-wal", "hub.db-shm"]) rmSync(join(dataDir, name), { force: true });
+  removePath(backupsDir);
+  for (const name of ["hub.db", "hub.db-wal", "hub.db-shm"]) removePath(join(dataDir, name));
 }
 
 beforeEach(resetData);
@@ -180,7 +184,7 @@ describe("upgrade backup", () => {
     assert.equal(backups.upgradeBackupIfNeeded("1.4.0", at(0)), null);
     backups.recordAppVersion("1.4.0");
     assert.equal(existsSync(join(backupsDir, "last-version")), false);
-    rmSync(dbPath, { force: true });
+    removePath(dbPath);
     seedDb(dbPath, ["after the fix"]);
     const retry = backups.upgradeBackupIfNeeded("1.4.0", at(1));
     assert.ok(retry);
@@ -199,7 +203,7 @@ describe("upgrade backup", () => {
   it("keeps a failed upgrade backup visible after a later successful daily backup and clears it once the upgrade backup succeeds", async () => {
     writeFileSync(dbPath, "this is not a database");
     assert.equal(backups.upgradeBackupIfNeeded("1.4.0", at(0)), null);
-    rmSync(dbPath, { force: true });
+    removePath(dbPath);
     seedDb(dbPath, ["x"]);
     await backups.backupDatabase("daily", at(1));
     const afterDaily = backups.backupsSummary().lastError;
@@ -215,7 +219,7 @@ describe("upgrade backup", () => {
     await assert.rejects(backups.backupDatabase("manual", at(1)));
     assert.equal(backups.lastBackupError()?.at, at(1).getTime());
     assert.match(backups.lastBackupError()?.message ?? "", /^manual backup failed: /);
-    rmSync(dbPath, { force: true });
+    removePath(dbPath);
     seedDb(dbPath, ["x"]);
     await backups.backupDatabase("manual", at(2));
     assert.equal(backups.lastBackupError()?.at, at(0).getTime());
@@ -301,7 +305,7 @@ describe("restore-db", () => {
   it("refuses while the hub answers and leaves the database alone", async () => {
     seedDb(dbPath, ["current"]);
     const source = join(dataDir, "source.db");
-    rmSync(source, { force: true });
+    removePath(source);
     seedDb(source, ["from backup"], false);
     const result = await runCli(["restore-db", source], { HUB_URL: fakeHubUrl });
     assert.equal(result.code, 1);
@@ -324,7 +328,7 @@ describe("restore-db", () => {
   it("rejects a corrupted database through integrity_check", async () => {
     seedDb(dbPath, ["current"]);
     const damaged = join(dataDir, "damaged.db");
-    rmSync(damaged, { force: true });
+    removePath(damaged);
     bigDb(damaged);
     assert.equal(backups.integrityCheck(damaged), "ok");
     corruptMiddle(damaged);
@@ -351,7 +355,7 @@ describe("restore-db", () => {
   it("makes a pre-restore backup, replaces hub.db and removes the stale sidecars", async () => {
     seedDb(dbPath, ["current Acme", "current Globex"]);
     const source = join(dataDir, "good.db");
-    rmSync(source, { force: true });
+    removePath(source);
     seedDb(source, ["restored Initech"], false);
     writeFileSync(`${dbPath}-wal`, "");
     writeFileSync(`${dbPath}-shm`, "");
@@ -370,7 +374,7 @@ describe("restore-db", () => {
 
   it("restores when there is no current database and makes no pre-restore backup", async () => {
     const source = join(dataDir, "good2.db");
-    rmSync(source, { force: true });
+    removePath(source);
     seedDb(source, ["restored Alex"], false);
     const result = await runCli(["restore-db", source], { HUB_URL: await closedHubUrl() });
     assert.equal(result.code, 0, result.stderr);

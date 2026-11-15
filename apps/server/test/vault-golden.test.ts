@@ -36,6 +36,8 @@ const FIXTURE_FILES = [
   "daily/2026-11-11.md",
   "daily/2026-11-12.md",
   "insert-after.md",
+  "insert-fence-unclosed.md",
+  "insert-fence.md",
   "projects/_about.md",
   "projects/acme/acme.md",
   "projects/alex-personal.md",
@@ -989,5 +991,71 @@ describe("golden vault: today mirror", () => {
     assert.throws(() => today.todayApi.migrateFocus(settings, "2026-11-10"), /past dailies/);
     assert.equal(readFileSync(join(root, "daily", "2026-11-10.md")).equals(before), true);
     assert.deepEqual(digestOf(GOLDEN), goldenDigest);
+  });
+});
+
+describe("golden vault: creating next to a block with a code fence", () => {
+  const FIXTURE = "insert-fence.md";
+  const PROJECT = "insert-fence";
+  const fenceVault = (fixture = FIXTURE, project = PROJECT): string => {
+    const root = freshVault();
+    cpSync(join(GOLDEN, fixture), pathOf(root, project));
+    return root;
+  };
+  const spliceAt = (content: string, index: number, line: string): string => {
+    const lines = withEol(content);
+    lines.splice(index, 0, `${line}\n`);
+    return lines.join("");
+  };
+
+  it("puts the sibling after the closing fence when the fence holds a column-0 line", () => {
+    const root = fenceVault();
+    const original = readFileSync(pathOf(root, PROJECT), "utf8");
+    const anchor = taskNamed(root, PROJECT, "Fenced anchor");
+    const result = board.createBoardTask(settingsFor(root), { projectId: PROJECT, title: "After the fence", after: { line: anchor.line, raw: anchor.raw } });
+    assert.equal(result.task.line, anchor.line + 4);
+    assert.equal(result.task.depth, 0);
+    assert.equal(result.task.raw, "- [ ] After the fence");
+    assert.equal(readFileSync(pathOf(root, PROJECT), "utf8"), spliceAt(original, anchor.line + 4, "- [ ] After the fence"));
+    assert.equal(withEol(readFileSync(pathOf(root, PROJECT), "utf8"))[anchor.line + 3], "  ```\n");
+    assert.equal(taskNamed(root, PROJECT, "Fenced anchor").noteItems.length, 0);
+  });
+
+  it("puts a new subtask after the closing fence of the last child when only the parent is given", () => {
+    const root = fenceVault();
+    const original = readFileSync(pathOf(root, PROJECT), "utf8");
+    const parent = taskNamed(root, PROJECT, "Parent with fence");
+    const result = board.createBoardTask(settingsFor(root), { projectId: PROJECT, title: "Appended child", parentLine: parent.line, parentRaw: parent.raw });
+    assert.equal(result.task.line, parent.line + 6);
+    assert.equal(result.task.depth, 1);
+    assert.equal(readFileSync(pathOf(root, PROJECT), "utf8"), spliceAt(original, parent.line + 6, "  - [ ] Appended child"));
+    assert.deepEqual(taskNamed(root, PROJECT, "Parent with fence").subtasks.map((subtask) => subtask.title), ["Fenced child", "Last child", "Appended child"]);
+  });
+
+  it("puts a sibling right after a fenced subtask when the parent and the anchor are given", () => {
+    const root = fenceVault();
+    const original = readFileSync(pathOf(root, PROJECT), "utf8");
+    const parent = taskNamed(root, PROJECT, "Parent with fence");
+    const anchor = taskNamed(root, PROJECT, "Fenced child");
+    const result = board.createBoardTask(settingsFor(root), {
+      projectId: PROJECT,
+      title: "Between children",
+      parentLine: parent.line,
+      parentRaw: parent.raw,
+      after: { line: anchor.line, raw: anchor.raw },
+    });
+    assert.equal(result.task.line, anchor.line + 4);
+    assert.equal(readFileSync(pathOf(root, PROJECT), "utf8"), spliceAt(original, anchor.line + 4, "  - [ ] Between children"));
+    assert.deepEqual(taskNamed(root, PROJECT, "Parent with fence").subtasks.map((subtask) => subtask.title), ["Fenced child", "Between children", "Last child"]);
+  });
+
+  it("refuses a fence that never closes and leaves the file byte-identical", () => {
+    const root = fenceVault("insert-fence-unclosed.md", "insert-fence-unclosed");
+    const target = pathOf(root, "insert-fence-unclosed");
+    const before = readFileSync(target);
+    const anchor = taskNamed(root, "insert-fence-unclosed", "Open fence anchor");
+    assert.throws(() => board.createBoardTask(settingsFor(root), { projectId: "insert-fence-unclosed", title: "Never written", after: { line: anchor.line, raw: anchor.raw } }), /code fence/);
+    assert.throws(() => board.createBoardTask(settingsFor(root), { projectId: "insert-fence-unclosed", title: "Never written", parentLine: anchor.line, parentRaw: anchor.raw }), /code fence/);
+    assert.deepEqual(readFileSync(target), before);
   });
 });

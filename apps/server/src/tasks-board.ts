@@ -1696,7 +1696,44 @@ function composeTaskLine(indent: string, status: BoardStatus, title: string, rea
   return `${indent}- [${checkbox}] ${span}${joinReason(title, reason, config.reasonSeparator)}${token}${signifiers === "" ? "" : ` ${signifiers}`}`;
 }
 
-function insertAfterAnchor(doc: ParsedDoc, content: string, file: WalkedFile, config: TasksFeatureSettings, input: BoardCreateInput, compose: (indent: string) => string): number {
+function createBlockLength(doc: ParsedDoc, start: number): number {
+  const baseDepth = indentDepth((doc.lines[start] as DocLine).text);
+  let end = start + 1;
+  let fence: string | null = null;
+  for (let index = start + 1; index < doc.lines.length; index += 1) {
+    const text = (doc.lines[index] as DocLine).text;
+    const fenceMatch = text.match(FENCE_RE);
+    if (fence !== null) {
+      if (closesFence(fenceMatch, fence)) fence = null;
+      end = index + 1;
+      continue;
+    }
+    if (text.trim() === "") continue;
+    if (indentDepth(text) <= baseDepth) break;
+    end = index + 1;
+    if (fenceMatch) fence = fenceMatch[1] as string;
+  }
+  if (fence !== null) throw new BadRequestError(FENCE_BLOCK_ERROR);
+  return end - start;
+}
+
+interface CreatePlacement {
+  at: number;
+  parent: number | null;
+  section: BoardSection | null;
+}
+
+function ensureCreatedInPlace(next: string, file: WalkedFile, config: TasksFeatureSettings, placement: CreatePlacement): BoardTask {
+  const tasks = parseBoardTasks(next, file.id, config);
+  const task = findTaskAt(tasks, placement.at);
+  if (!task) throw new BadRequestError("the new task is outside the configured sections");
+  if ((parentTaskOf(tasks, placement.at)?.line ?? null) !== placement.parent || (placement.section !== null && task.section !== placement.section)) {
+    throw new BadRequestError("the new task would land outside the block it was meant for");
+  }
+  return task;
+}
+
+function insertAfterAnchor(doc: ParsedDoc, content: string, file: WalkedFile, config: TasksFeatureSettings, input: BoardCreateInput, compose: (indent: string) => string): CreatePlacement {
   const after = input.after as { line: number; raw: string };
   const anchor = checkFresh(content, file, config, after.line, after.raw);
   if (anchor.section !== "open") throw new BadRequestError("the anchor task is not in the open section");
@@ -1704,10 +1741,11 @@ function insertAfterAnchor(doc: ParsedDoc, content: string, file: WalkedFile, co
     const parent = checkFresh(content, file, config, input.parentLine, input.parentRaw as string);
     if (!parent.subtasks.some((subtask) => subtask.line === anchor.line)) throw new BadRequestError("the anchor task is not a subtask of the parent");
   }
-  ensureNotOccurrence(parseBoardTasks(content, file.id, config), anchor.line, config);
-  const at = anchor.line + blockLength(doc, anchor.line);
+  const tasks = parseBoardTasks(content, file.id, config);
+  ensureNotOccurrence(tasks, anchor.line, config);
+  const at = anchor.line + createBlockLength(doc, anchor.line);
   doc.lines.splice(at, 0, docLine(compose(leadingSpace(anchor.raw))));
-  return at;
+  return { at, parent: parentTaskOf(tasks, anchor.line)?.line ?? null, section: anchor.section };
 }
 
 export function createBoardTask(settings: DelegationSettings, input: BoardCreateInput): BoardCreateResult {
@@ -1725,25 +1763,25 @@ export function createBoardTask(settings: DelegationSettings, input: BoardCreate
   const config = settings.tasks;
   const doc = openDoc(content);
   if (input.after !== undefined && status === "done" && doneSectionName(config) !== null) throw new BadRequestError("a task created after another cannot start done");
-  let at: number;
+  let placement: CreatePlacement;
   if (input.after !== undefined) {
-    at = insertAfterAnchor(doc, content, file, config, input, (indent) => composeTaskLine(indent, status, title, reason, priority, dates, config));
+    placement = insertAfterAnchor(doc, content, file, config, input, (indent) => composeTaskLine(indent, status, title, reason, priority, dates, config));
   } else if (input.parentLine !== undefined) {
     const parent = checkFresh(content, file, config, input.parentLine, input.parentRaw as string);
     ensureNotOccurrence(parseBoardTasks(content, file.id, config), parent.line, config);
     const indent = childIndent(doc, parent.line);
-    at = parent.line + blockLength(doc, parent.line);
+    const at = parent.line + createBlockLength(doc, parent.line);
     doc.lines.splice(at, 0, docLine(composeTaskLine(indent, status, title, reason, priority, dates, config)));
+    placement = { at, parent: parent.line, section: parent.section };
   } else if (status === "done" && doneSectionName(config) !== null) {
     const line = `${composeTaskLine("", status, title, reason, priority, dates, config)}${formatStamp(config, localDate())}`;
-    at = insertIntoDone(doc, [docLine(line)], config);
+    placement = { at: insertIntoDone(doc, [docLine(line)], config), parent: null, section: null };
   } else {
-    at = insertIntoOpenEnd(doc, [docLine(composeTaskLine("", status, title, reason, priority, dates, config))], config);
+    placement = { at: insertIntoOpenEnd(doc, [docLine(composeTaskLine("", status, title, reason, priority, dates, config))], config), parent: null, section: null };
   }
   const next = renderDoc(doc);
+  const task = ensureCreatedInPlace(next, file, config, placement);
   const updatedAt = commitFile(file, next);
-  const task = findTaskAt(parseBoardTasks(next, file.id, config), at);
-  if (!task) throw new BadRequestError("the new task is outside the configured sections");
   return { task, updatedAt };
 }
 
