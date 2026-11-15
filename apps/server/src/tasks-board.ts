@@ -1640,13 +1640,29 @@ function scheduledInsertAt(rest: string, spans: TokenSpan[], config: TasksFeatur
   return { at: body.trimEnd().length, before: false };
 }
 
+const LOOSE_SCHEDULED_RE = new RegExp(`(\\s*)${SCHEDULED_MARK}\\uFE0F?[ \\t]*\\d\\S*(\\s*)`, "gu");
+
+function scheduledSpans(rest: string, spans: TokenSpan[]): TokenSpan[] {
+  const own = spans.filter((span) => span.mark === SCHEDULED_MARK);
+  const guarded = protectedSpans(rest);
+  for (const match of rest.matchAll(LOOSE_SCHEDULED_RE)) {
+    const at = match.index ?? 0;
+    const start = at + (match[1] ?? "").length;
+    const end = at + match[0].length - (match[2] ?? "").length;
+    if (guarded.some(([from, to]) => start >= from && start < to)) continue;
+    if (spans.some((span) => start < span.end && end > span.start)) continue;
+    own.push({ mark: SCHEDULED_MARK, start, end });
+  }
+  return own.sort((a, b) => a.start - b.start);
+}
+
 export function withScheduledToken(raw: string, config: TasksFeatureSettings, scheduled: string | null): string {
   const parts = raw.match(TASK_PARTS_RE);
   if (!parts) throw new BadRequestError("not a task line");
   const rest = parts[5] as string;
   const head = raw.slice(0, raw.length - rest.length);
   const spans = tokenSpans(rest, config);
-  const own = spans.filter((span) => span.mark === SCHEDULED_MARK);
+  const own = scheduledSpans(rest, spans);
   if (scheduled === null) {
     let next = rest;
     for (const span of [...own].reverse()) {
@@ -1660,7 +1676,7 @@ export function withScheduledToken(raw: string, config: TasksFeatureSettings, sc
     let next = rest;
     for (const span of [...own].reverse()) {
       const token = next.slice(span.start, span.end);
-      next = next.slice(0, span.start) + token.replace(/\d{4}-\d{2}-\d{2}$/, scheduled) + next.slice(span.end);
+      next = next.slice(0, span.start) + token.replace(/\d\S*$/u, scheduled) + next.slice(span.end);
     }
     return `${head}${next}`;
   }

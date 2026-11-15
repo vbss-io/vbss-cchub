@@ -526,7 +526,7 @@ describe("G00c fix, finding 6: scheduled date edits touch only the scheduled tok
     const projectBefore = read(root, "projects/alpha.md");
     const dailyBefore = read(root, dailyRel(TODAY));
     const cleared = today.todayApi.clearToday(settings, TODAY);
-    assert.deepEqual(projectLines(root, "alpha"), [`- [ ] Task one ${DUE} 2026-12-24 #p1`, "  - [ ] Sub one", `- [x] Task two ${DONE} ${TODAY}`, `- [ ] Rec ${SCHEDULED} ${TODAY} ${REPEAT} every day`]);
+    assert.deepEqual(projectLines(root, "alpha"), [`- [ ] Task one ${DUE} 2026-12-24 #p1`, "  - [ ] Sub one", `- [x] Task two ${SCHEDULED} ${TODAY} ${DONE} ${TODAY}`, `- [ ] Rec ${SCHEDULED} ${TODAY} ${REPEAT} every day`]);
     settle(settings, TODAY);
     assert.deepEqual(today.todayApi.undoClear(settings, TODAY, cleared.token), { restored: true });
     assert.equal(read(root, "projects/alpha.md"), projectBefore);
@@ -608,5 +608,262 @@ describe("G00c fix, finding 9: Undo for Clear today", () => {
     record.at -= 31 * 60 * 1000;
     store.setSetting("today.clearUndo", JSON.stringify(stored));
     assert.throws(() => today.todayApi.undoClear(settings, TODAY, cleared.token), /nothing to undo/);
+  });
+});
+
+const alphaLine = (title: string, mark = " "): string => `- [${mark}] [[alpha|Alpha]] - ${title}`;
+const betaLine = (title: string): string => `- [ ] [[beta|Beta]] - ${title}`;
+
+describe("G00c fix wave 2, finding 1: a deleted daily that comes back is adopted like a daily never seen", () => {
+  const variants: [string, string, (date: string) => string][] = [
+    ["today from the template", TODAY, (date) => TEMPLATE.replace("{{date}}", date)],
+    ["today with a dash placeholder", TODAY, (date) => dailyOf(date, ["-"])],
+    ["tomorrow from the template", TOMORROW, (date) => TEMPLATE.replace("{{date}}", date)],
+  ];
+  for (const [name, date, recreate] of variants) {
+    it(`keeps every date and inserts the lines again: ${name}`, () => {
+      const root = lab({ alpha: project("Alpha", [`- [ ] Task one ${SCHEDULED} ${date}`, `- [ ] Task two ${SCHEDULED} ${date}`]) }, { [date]: dailyOf(date, [alphaLine("Task one"), alphaLine("Task two")]) });
+      const settings = useVault(root);
+      settle(settings, date);
+      const projectBefore = read(root, "projects/alpha.md");
+      unlinkSync(join(root, dailyRel(date)));
+      today.queueDailyDiskChange(date);
+      settle(settings, date);
+      assert.equal(read(root, "projects/alpha.md"), projectBefore);
+      write(root, dailyRel(date), recreate(date));
+      today.queueDailyDiskChange(date);
+      settle(settings, date);
+      assert.equal(read(root, "projects/alpha.md"), projectBefore, name);
+      assert.ok(read(root, dailyRel(date)).includes(`${alphaLine("Task one")}\n${alphaLine("Task two")}\n`), name);
+      assert.deepEqual(focusTitles(settings, date), ["Task one", "Task two"]);
+      assertSettled(settings, root, [date], ["projects/alpha.md", dailyRel(date)]);
+    });
+  }
+
+  it("a recreated daily with a typed line gives that line the date, like a daily created outside the hub", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Task one ${SCHEDULED} ${TODAY}`, "- [ ] Task free"]) }, { [TODAY]: dailyOf(TODAY, [alphaLine("Task one")]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    unlinkSync(join(root, dailyRel(TODAY)));
+    today.queueDailyDiskChange(TODAY);
+    settle(settings, TODAY);
+    write(root, dailyRel(TODAY), dailyOf(TODAY, [alphaLine("Task free")]));
+    today.queueDailyDiskChange(TODAY);
+    settle(settings, TODAY);
+    assert.equal(taskIn(settings, "alpha", "Task one").scheduled, TODAY);
+    assert.equal(taskIn(settings, "alpha", "Task free").scheduled, TODAY);
+    assert.deepEqual(focusTitles(settings, TODAY).sort(), ["Task free", "Task one"]);
+  });
+});
+
+describe("G00c fix wave 2, finding 2: a done subtask is history on every path", () => {
+  const DONE_TODAY = `${DONE} ${TODAY}`;
+
+  it("the date of the parent removed in the project keeps the date and the line of its done subtask", () => {
+    const root = lab(
+      { alpha: project("Alpha", [`- [ ] Parent ${SCHEDULED} ${TODAY}`, `  - [x] Sub done ${SCHEDULED} ${TODAY} ${DONE_TODAY}`, `  - [ ] Sub open ${SCHEDULED} ${TODAY}`]) },
+      { [TODAY]: dailyOf(TODAY, [alphaLine("Parent"), "  - [x] Sub done", "  - [ ] Sub open"]) },
+    );
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    editProject(root, "alpha", (content) => content.replace(`- [ ] Parent ${SCHEDULED} ${TODAY}`, "- [ ] Parent"));
+    settle(settings, TODAY);
+    assert.deepEqual(projectLines(root, "alpha"), ["- [ ] Parent", `  - [x] Sub done ${SCHEDULED} ${TODAY} ${DONE_TODAY}`, "  - [ ] Sub open"]);
+    assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, ["- [x] Sub done"]));
+    assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+  });
+
+  it("moving the parent to another day from the hub leaves its done subtask on the day it was done", () => {
+    const root = lab(
+      { alpha: project("Alpha", [`- [ ] Parent ${SCHEDULED} ${TODAY}`, `  - [x] Sub done ${SCHEDULED} ${TODAY} ${DONE_TODAY}`, `  - [ ] Sub open ${SCHEDULED} ${TODAY}`]) },
+      { [TODAY]: dailyOf(TODAY, [alphaLine("Parent"), "  - [x] Sub done", "  - [ ] Sub open"]), [TOMORROW]: dailyOf(TOMORROW, ["- [ ]"]) },
+    );
+    const settings = useVault(root);
+    settle(settings, TODAY, TOMORROW);
+    const parent = taskIn(settings, "alpha", "Parent");
+    today.todayApi.schedule(settings, { projectId: "alpha", line: parent.line, raw: parent.raw, date: TOMORROW, from: TODAY });
+    settle(settings, TODAY, TOMORROW);
+    assert.equal(taskIn(settings, "alpha", "Parent").scheduled, TOMORROW);
+    assert.equal(taskIn(settings, "alpha", "Sub open").scheduled, TOMORROW);
+    assert.equal(taskIn(settings, "alpha", "Sub done").scheduled, TODAY);
+  });
+
+  it("Clear today keeps the date of a done subtask", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Parent ${SCHEDULED} ${TODAY}`, `  - [x] Sub done ${SCHEDULED} ${TODAY} ${DONE_TODAY}`]) }, { [TODAY]: dailyOf(TODAY, [alphaLine("Parent"), "  - [x] Sub done"]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    today.todayApi.clearToday(settings, TODAY);
+    assert.deepEqual(projectLines(root, "alpha"), ["- [ ] Parent", `  - [x] Sub done ${SCHEDULED} ${TODAY} ${DONE_TODAY}`]);
+  });
+});
+
+describe("G00c fix wave 2, finding 3: notes freed by an automatic removal become top level lines", () => {
+  it("never lands under the block before, keeps the nesting among the freed notes and is idempotent", () => {
+    const root = lab(
+      { alpha: project("Alpha", [`- [ ] Task one ${SCHEDULED} ${TODAY}`, `- [ ] Task two ${SCHEDULED} ${TODAY}`, `  - [ ] Sub two ${SCHEDULED} ${TODAY}`]) },
+      { [TODAY]: dailyOf(TODAY, [alphaLine("Task one"), alphaLine("Task two"), "  - [ ] Sub two", "    - note under sub", "  - free note two", "    - deeper free note"]) },
+    );
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    editProject(root, "alpha", (content) => content.replace(`- [ ] Task two ${SCHEDULED} ${TODAY}`, "- [ ] Task two"));
+    settle(settings, TODAY);
+    assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, [alphaLine("Task one"), "- note under sub", "- free note two", "  - deeper free note"]));
+    assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+    const one = taskIn(settings, "alpha", "Task one");
+    today.todayApi.schedule(settings, { projectId: "alpha", line: one.line, raw: one.raw, date: null, from: TODAY });
+    assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, ["- note under sub", "- free note two", "  - deeper free note"]));
+  });
+
+  it("dropping and adding the date again keeps the freed notes as they are", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Task one ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyOf(TODAY, [alphaLine("Task one"), "  - note A", "    - deeper note"]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    for (let round = 0; round < 3; round += 1) {
+      editProject(root, "alpha", (content) => content.replace(`- [ ] Task one ${SCHEDULED} ${TODAY}`, "- [ ] Task one"));
+      settle(settings, TODAY);
+      assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, ["- note A", "  - deeper note"]), `round ${round}`);
+      editProject(root, "alpha", (content) => content.replace("- [ ] Task one", `- [ ] Task one ${SCHEDULED} ${TODAY}`));
+      settle(settings, TODAY);
+      assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, ["- note A", "  - deeper note", "", alphaLine("Task one")]), `round ${round}`);
+    }
+  });
+});
+
+describe("G00c fix wave 2, finding 4: a reworded line holds only the task whose line it replaced", () => {
+  const base = (): string =>
+    lab(
+      { alpha: project("Alpha", [`- [ ] Task one ${SCHEDULED} ${TODAY}`, `- [ ] Task two ${SCHEDULED} ${TODAY} #p1`, "- [ ] Task three"]), beta: project("Beta", [`- [ ] Beta one ${SCHEDULED} ${TODAY}`, `- [ ] Beta two ${DUE} 2026-12-01`]) },
+      { [TODAY]: dailyOf(TODAY, [alphaLine("Task one"), alphaLine("Task two"), "", betaLine("Beta one")]) },
+    );
+  const rewrites: [string, string[]][] = [
+    ["with group headings", ["### Beta", betaLine("Beta one"), betaLine("Beta two"), "  - ask Ana", "", "### Alpha", alphaLine("Task two (morning: review PR)"), alphaLine("Task three")]],
+    ["without headings", [betaLine("Beta one"), betaLine("Beta two"), "", alphaLine("Task two (morning: review PR)"), alphaLine("Task three")]],
+  ];
+  for (const [name, lines] of rewrites) {
+    it(`the good-morning rewrite ${name}: the deleted line loses its date, the reworded one keeps its own`, () => {
+      const root = base();
+      const settings = useVault(root);
+      settle(settings, TODAY);
+      const rewritten = editDaily(root, TODAY, () => dailyOf(TODAY, lines));
+      settle(settings, TODAY);
+      assert.deepEqual(projectLines(root, "alpha"), ["- [ ] Task one", `- [ ] Task two ${SCHEDULED} ${TODAY} #p1`, `- [ ] Task three ${SCHEDULED} ${TODAY}`]);
+      assert.deepEqual(projectLines(root, "beta"), [`- [ ] Beta one ${SCHEDULED} ${TODAY}`, `- [ ] Beta two ${SCHEDULED} ${TODAY} ${DUE} 2026-12-01`]);
+      assert.equal(read(root, dailyRel(TODAY)), rewritten);
+      assertSettled(settings, root, [TODAY], ["projects/alpha.md", "projects/beta.md", dailyRel(TODAY)]);
+    });
+  }
+
+  it("a reworded line in place of its own line keeps its task, and an unlabeled line naming a removed task keeps that one", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Task one ${SCHEDULED} ${TODAY}`, `- [ ] Task two ${SCHEDULED} ${TODAY}`, `- [ ] Task four ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyOf(TODAY, [alphaLine("Task one"), alphaLine("Task two"), alphaLine("Task four")]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    editDaily(root, TODAY, () => dailyOf(TODAY, [alphaLine("Task two (morning: review PR)"), "- [ ] Alpha: finish Task four today"]));
+    settle(settings, TODAY);
+    assert.deepEqual(projectLines(root, "alpha"), ["- [ ] Task one", `- [ ] Task two ${SCHEDULED} ${TODAY}`, `- [ ] Task four ${SCHEDULED} ${TODAY}`]);
+  });
+});
+
+describe("G00c fix wave 2, finding 5: outside additions wait for a stable read, and a removed line gives back the date it took", () => {
+  it("a partial write stuck past the window moves nothing before the window, and the restored file gives every date back", async () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Deploy ${SCHEDULED} ${YESTERDAY}`, `- [ ] Deploy the API ${SCHEDULED} ${TODAY}`, `- [ ] Write notes ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyOf(TODAY, [alphaLine("Deploy the API"), alphaLine("Write notes")]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    const projectBefore = read(root, "projects/alpha.md");
+    const full = read(root, dailyRel(TODAY));
+    today.setFocusStability({ delayMs: 60 });
+    try {
+      editDaily(root, TODAY, () => full.slice(0, full.indexOf("Deploy the API") + "Deploy".length));
+      today.flushMirrors(settings);
+      assert.equal(read(root, "projects/alpha.md"), projectBefore);
+      await sleep(250);
+      assert.equal(taskIn(settings, "alpha", "Deploy").scheduled, TODAY);
+      editDaily(root, TODAY, () => full);
+      today.flushMirrors(settings);
+      await sleep(250);
+      today.flushMirrors(settings);
+      assert.equal(read(root, "projects/alpha.md"), projectBefore);
+      assert.equal(read(root, dailyRel(TODAY)), full);
+    } finally {
+      today.setFocusStability({ delayMs: 0 });
+    }
+  });
+
+  it("a line typed for a task of tomorrow and removed again gives the date back to tomorrow", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Task three ${SCHEDULED} ${TOMORROW}`]) }, { [TODAY]: dailyOf(TODAY, ["- [ ]"]), [TOMORROW]: dailyOf(TOMORROW, [alphaLine("Task three")]) });
+    const settings = useVault(root);
+    settle(settings, TODAY, TOMORROW);
+    const tomorrow = read(root, dailyRel(TOMORROW));
+    editDaily(root, TODAY, (content) => content.replace(EMPTY_FOCUS, `## Focus\n\n${alphaLine("Task three")}\n`));
+    settle(settings, TODAY, TOMORROW);
+    assert.equal(taskIn(settings, "alpha", "Task three").scheduled, TODAY);
+    editDaily(root, TODAY, (content) => content.replace(`${alphaLine("Task three")}\n`, "- [ ]\n"));
+    settle(settings, TODAY, TOMORROW);
+    assert.equal(taskIn(settings, "alpha", "Task three").scheduled, TOMORROW);
+    assert.equal(read(root, dailyRel(TOMORROW)), tomorrow);
+    assert.deepEqual(focusTitles(settings, TOMORROW), ["Task three"]);
+    assertSettled(settings, root, [TODAY, TOMORROW], ["projects/alpha.md", dailyRel(TODAY), dailyRel(TOMORROW)]);
+  });
+
+  it("a line typed for an undated task and removed again leaves it undated", () => {
+    const root = lab({ alpha: project("Alpha", ["- [ ] Task five"]) }, { [TODAY]: dailyOf(TODAY, ["- [ ]"]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    const projectBefore = read(root, "projects/alpha.md");
+    editDaily(root, TODAY, (content) => content.replace(EMPTY_FOCUS, `## Focus\n\n${alphaLine("Task five")}\n`));
+    settle(settings, TODAY);
+    assert.equal(taskIn(settings, "alpha", "Task five").scheduled, TODAY);
+    editDaily(root, TODAY, (content) => content.replace(`${alphaLine("Task five")}\n`, "- [ ]\n"));
+    settle(settings, TODAY);
+    assert.equal(read(root, "projects/alpha.md"), projectBefore);
+  });
+});
+
+describe("G00c fix wave 2, finding 6: Clear today leaves done tasks alone", () => {
+  it("keeps the date and the line of a done task, and Undo restores every byte", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Open one ${SCHEDULED} ${TODAY}`, `- [x] Done one ${SCHEDULED} ${TODAY} ${DONE} ${TODAY}`]) }, { [TODAY]: dailyOf(TODAY, [alphaLine("Open one"), alphaLine("Done one", "x")]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    const before = snapshot(root, ["projects/alpha.md", dailyRel(TODAY)]);
+    const cleared = today.todayApi.clearToday(settings, TODAY);
+    assert.equal(cleared.lines, 1);
+    assert.equal(cleared.unscheduled, 1);
+    assert.equal(taskIn(settings, "alpha", "Done one").scheduled, TODAY);
+    assert.equal(taskIn(settings, "alpha", "Open one").scheduled, null);
+    assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, [alphaLine("Done one", "x")]));
+    assert.deepEqual(today.todayApi.undoClear(settings, TODAY, cleared.token), { restored: true });
+    assert.deepEqual(snapshot(root, ["projects/alpha.md", dailyRel(TODAY)]), before);
+  });
+});
+
+describe("G00c fix wave 2, finding 7: the sync does not queue another run of the day it is writing", () => {
+  it("an unschedule written by the mirror leaves no run of that day pending", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Task one ${SCHEDULED} ${TODAY}`, `- [ ] Task two ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyOf(TODAY, [alphaLine("Task one"), alphaLine("Task two")]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    editDaily(root, TODAY, (content) => content.replace(`${alphaLine("Task one")}\n`, ""));
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "Task one").scheduled, null);
+    writeFileSync(join(root, dailyRel(TODAY)), read(root, dailyRel(TODAY)).replace(`${alphaLine("Task two")}\n`, ""));
+    assert.equal(today.flushMirrors(settings), false);
+    assert.equal(taskIn(settings, "alpha", "Task two").scheduled, TODAY);
+  });
+});
+
+describe("G00c fix wave 2, finding 9: the scheduled token writer replaces a malformed scheduled token", () => {
+  const D = "2026-11-20";
+
+  it("sets and clears a token whose date is not a calendar date, and leaves a bare hourglass in the text or in a link alone", () => {
+    const settings = useVault(lab({ alpha: project("Alpha", ["- [ ] x"]) }));
+    const cases: [string, string, string][] = [
+      [`- [ ] A ${SCHEDULED} 2026-02-30`, `- [ ] A ${SCHEDULED} ${D}`, "- [ ] A"],
+      [`- [ ] A ${SCHEDULED} 2026-2-3 #p1`, `- [ ] A ${SCHEDULED} ${D} #p1`, "- [ ] A #p1"],
+      [`- [ ] A ${SCHEDULED} 2026-02-30 ${DUE} 2026-12-01`, `- [ ] A ${SCHEDULED} ${D} ${DUE} 2026-12-01`, `- [ ] A ${DUE} 2026-12-01`],
+      [`- [ ] A text ${SCHEDULED} in middle`, `- [ ] A text ${SCHEDULED} in middle ${SCHEDULED} ${D}`, `- [ ] A text ${SCHEDULED} in middle`],
+      [`- [ ] A [doc](http://x/${SCHEDULED} 2026-11-10)`, `- [ ] A [doc](http://x/${SCHEDULED} 2026-11-10) ${SCHEDULED} ${D}`, `- [ ] A [doc](http://x/${SCHEDULED} 2026-11-10)`],
+    ];
+    for (const [raw, set, cleared] of cases) {
+      assert.equal(board.withScheduledToken(raw, settings.tasks, D), set, raw);
+      assert.equal(board.withScheduledToken(raw, settings.tasks, null), cleared, raw);
+    }
   });
 });
