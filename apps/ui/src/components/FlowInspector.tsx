@@ -20,6 +20,7 @@ interface Props {
   onOpenWorkspace: (name: string) => void;
   onToggleLane: (key: string) => void;
   onToggleSubagents: (sessionId: string) => void;
+  onToggleEnded: (sessionId: string) => void;
   onToggleTaskGroup: (key: string) => void;
   expanded: boolean;
 }
@@ -56,6 +57,7 @@ export function FlowInspector({
   onOpenWorkspace,
   onToggleLane,
   onToggleSubagents,
+  onToggleEnded,
   onToggleTaskGroup,
   expanded,
 }: Props) {
@@ -101,6 +103,9 @@ export function FlowInspector({
     rows.push({ label: "Type", value: node.title });
     rows.push({ label: "Status", value: node.subtitle });
     if (node.sessionId) actions.push({ label: "Open session", run: () => onOpenSession(node.sessionId!), primary: true });
+  } else if (node.kind === "more" && node.sessionId) {
+    if (node.moreKind === "ended") actions.push({ label: "List ended subagents", run: () => onToggleEnded(node.sessionId!), primary: true });
+    actions.push({ label: "Open session", run: () => onOpenSession(node.sessionId!), primary: node.moreKind !== "ended" });
   } else if (node.kind === "hub") {
     rows.push({ label: "Summary", value: node.subtitle });
   }

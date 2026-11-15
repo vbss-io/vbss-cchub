@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TaskRecord, WorkspaceRecord } from "./delegation";
-import { buildFlow, OUTSIDE_LABEL, relatives, type FlowInput } from "./flow-layout";
+import { buildFlow, fitNodeText, OUTSIDE_LABEL, relatives, type FlowInput } from "./flow-layout";
 import type { AgentRecord, CodexSessionRecord, GroupRecord, SessionRecord, SessionStatus } from "./types";
 
 const now = Date.now();
@@ -167,14 +167,14 @@ test("subagents collapse then expand caps at 12 + more", () => {
   );
   assert.equal(runningOnly.nodes.filter((n) => n.kind === "agent").length, 3);
   assert.equal(runningOnly.nodes.find((n) => n.kind === "more")?.title, "+61 ended");
-  assert.equal(runningOnly.nodes.find((n) => n.kind === "more")?.subtitle, "turn on show ended to list");
+  assert.equal(runningOnly.nodes.find((n) => n.kind === "more")?.subtitle, "double-click to list");
 
   const expanded = buildFlow(
     input({ sessions: [parent], workspaces: [workspace("alpha", "/repo/alpha")], agentsBySession: { a: agents }, expandedSubagents: new Set(["a"]), showEndedAgents: true }),
   );
   assert.equal(expanded.nodes.filter((n) => n.kind === "agent").length, 12);
   const more = expanded.nodes.find((n) => n.kind === "more");
-  assert.equal(more?.title, "+52 ended");
+  assert.equal(more?.title, "+52 more");
   const runningFirst = expanded.nodes.filter((n) => n.kind === "agent").slice(0, 3).every((n) => n.subtitle === "running");
   assert.ok(runningFirst);
 });
@@ -363,4 +363,53 @@ test("null-safe edges: parents always exist for edges", () => {
     assert.ok(ids.has(edge.from));
     assert.ok(ids.has(edge.to));
   }
+});
+
+const withSubagents = (running: number, ended: number, over: Partial<FlowInput> = {}) => {
+  const agents = [
+    ...Array.from({ length: running }, (_, i) => agent(`r${i}`, "s1", "running")),
+    ...Array.from({ length: ended }, (_, i) => agent(`e${i}`, "s1", "ended")),
+  ];
+  return buildFlow(
+    input({
+      sessions: [session("s1", "/repo/alpha", "active", { agentsRunning: running, agentsTotal: running + ended })],
+      workspaces: [workspace("alpha", "/repo/alpha")],
+      agentsBySession: { s1: agents },
+      expandedSubagents: new Set(["s1"]),
+      ...over,
+    }),
+  );
+};
+
+test("hidden ended subagents get their own node that lists them for that session only", () => {
+  const collapsed = withSubagents(1, 9);
+  const endedNode = collapsed.nodes.find((n) => n.kind === "more" && n.moreKind === "ended");
+  assert.equal(endedNode?.title, "+9 ended");
+  assert.equal(collapsed.nodes.filter((n) => n.kind === "agent").length, 1);
+  const listed = withSubagents(1, 9, { endedAgentsFor: new Set(["s1"]) });
+  assert.equal(listed.nodes.filter((n) => n.kind === "agent").length, 10);
+  assert.equal(listed.nodes.some((n) => n.kind === "more"), false);
+});
+
+test("more than the map can hold becomes an overflow node that opens the session", () => {
+  const graph = withSubagents(15, 0);
+  assert.equal(graph.nodes.filter((n) => n.kind === "agent").length, 12);
+  const overflow = graph.nodes.find((n) => n.kind === "more" && n.moreKind === "overflow");
+  assert.equal(overflow?.title, "+3 more");
+});
+
+test("every node keeps its subtitle inside the box", () => {
+  const graph = withSubagents(1, 9);
+  for (const node of graph.nodes) {
+    assert.ok(node.h >= 44 || node.kind === "hub" || node.subtitle === "", `${node.kind} too short for a subtitle`);
+    assert.ok(node.subtitle.length * 6.2 <= node.w - 44, `${node.kind} subtitle too long: ${node.subtitle}`);
+  }
+});
+
+test("fitNodeText clips title and subtitle to the node width, leaving room for the badge", () => {
+  const fitted = fitNodeText({ w: 196, title: "A very long subagent title that never ends", subtitle: "turn on show ended to list everything here", badge: "3 running" });
+  assert.ok(fitted.title.endsWith("…"));
+  assert.ok(fitted.subtitle.endsWith("…"));
+  assert.ok(fitted.subtitle.length * 6.2 <= 196 - 44);
+  assert.deepEqual(fitNodeText({ w: 268, title: "Short", subtitle: "ok", badge: null }), { title: "Short", subtitle: "ok" });
 });

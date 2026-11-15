@@ -213,6 +213,7 @@ function FlowCanvasView({ sessions: allSessions, codexSessions: allCodex, tasks:
   const [selected, setSelected] = useState<string | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [expandedSubagents, setExpandedSubagents] = useState<Set<string>>(() => new Set());
+  const [endedAgentsFor, setEndedAgentsFor] = useState<Set<string>>(() => new Set());
   const [expandedTaskGroups, setExpandedTaskGroups] = useState<Set<string>>(() => new Set());
   const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(() => new Set());
   const [agentsBySession, setAgentsBySession] = useState<Record<string, AgentRecord[]>>({});
@@ -331,9 +332,9 @@ function FlowCanvasView({ sessions: allSessions, codexSessions: allCodex, tasks:
     const codexSig = filteredCodex.map((c) => `${c.id}:${c.status}`).sort().join(",");
     const taskSig = filteredTasks.map((t) => `${t.id}:${t.status}:${t.sessionId ?? ""}:${t.originSessionId ?? ""}:${t.workspace}`).sort().join(",");
     const laneSig = `${groups.map((g) => `${g.name}:${g.match}:${g.position}`).join(",")}|${workspaces.map((w) => w.name).join(",")}`;
-    const expandSig = `${[...expandedSubagents].sort().join(",")}|${[...expandedTaskGroups].sort().join(",")}|${[...collapsedLanes].sort().join(",")}`;
+    const expandSig = `${[...expandedSubagents].sort().join(",")}|${[...endedAgentsFor].sort().join(",")}|${[...expandedTaskGroups].sort().join(",")}|${[...collapsedLanes].sort().join(",")}`;
     return `${orientation}||${sessionSig}||${codexSig}||${taskSig}||${laneSig}||${expandSig}||${agentsSignature}`;
-  }, [filteredSessions, filteredCodex, filteredTasks, groups, workspaces, orientation, expandedSubagents, expandedTaskGroups, collapsedLanes, agentsSignature, showEnded, period]);
+  }, [filteredSessions, filteredCodex, filteredTasks, groups, workspaces, orientation, expandedSubagents, endedAgentsFor, expandedTaskGroups, collapsedLanes, agentsSignature, showEnded, period]);
 
   const graph = useMemo(
     () =>
@@ -349,6 +350,7 @@ function FlowCanvasView({ sessions: allSessions, codexSessions: allCodex, tasks:
         collapsedLanes,
         orientation,
         showEndedAgents: showEnded,
+        endedAgentsFor,
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [layoutKey],
@@ -490,7 +492,8 @@ function FlowCanvasView({ sessions: allSessions, codexSessions: allCodex, tasks:
     else if (node.kind === "task" && node.taskId) onOpenTask(node.taskId);
     else if (node.kind === "workspace" && node.workspaceName) onOpenWorkspace(node.workspaceName);
     else if (node.kind === "subagents" && node.sessionId) toggleSet(setExpandedSubagents, node.sessionId);
-    else if (node.kind === "more" && node.sessionId) toggleSet(setExpandedSubagents, node.sessionId);
+    else if (node.kind === "more" && node.sessionId && node.moreKind === "ended") toggleSet(setEndedAgentsFor, node.sessionId);
+    else if (node.kind === "more" && node.sessionId) onOpenSession(node.sessionId);
     else if (node.kind === "taskgroup") toggleSet(setExpandedTaskGroups, node.lane);
   };
 
@@ -725,6 +728,7 @@ function FlowCanvasView({ sessions: allSessions, codexSessions: allCodex, tasks:
             onOpenWorkspace={onOpenWorkspace}
             onToggleLane={(key) => toggleSet(setCollapsedLanes, key)}
             onToggleSubagents={(id) => toggleSet(setExpandedSubagents, id)}
+            onToggleEnded={(id) => toggleSet(setEndedAgentsFor, id)}
             onToggleTaskGroup={(key) => toggleSet(setExpandedTaskGroups, key)}
           />
         )}
@@ -750,6 +754,7 @@ interface PanelProps {
   onOpenWorkspace: (name: string) => void;
   onToggleLane: (key: string) => void;
   onToggleSubagents: (sessionId: string) => void;
+  onToggleEnded: (sessionId: string) => void;
   onToggleTaskGroup: (key: string) => void;
 }
 
@@ -769,6 +774,7 @@ function FlowInspectorPanel({
   onOpenWorkspace,
   onToggleLane,
   onToggleSubagents,
+  onToggleEnded,
   onToggleTaskGroup,
 }: PanelProps) {
   const session = node.sessionId ? sessions[node.sessionId] ?? null : null;
@@ -793,6 +799,7 @@ function FlowInspectorPanel({
       onOpenWorkspace={onOpenWorkspace}
       onToggleLane={onToggleLane}
       onToggleSubagents={onToggleSubagents}
+      onToggleEnded={onToggleEnded}
       onToggleTaskGroup={onToggleTaskGroup}
     />
   );

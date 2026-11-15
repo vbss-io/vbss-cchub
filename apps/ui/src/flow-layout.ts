@@ -9,6 +9,8 @@ export type FlowTone = "go" | "pend" | "hold" | "unread" | "seen" | "muted" | "b
 
 export type FlowNodeKind = "hub" | "workspace" | "session" | "codex" | "subagents" | "agent" | "task" | "taskgroup" | "more";
 
+export type FlowMoreKind = "ended" | "overflow";
+
 export interface FlowNode {
   id: string;
   kind: FlowNodeKind;
@@ -29,6 +31,7 @@ export interface FlowNode {
   codexId?: string;
   taskId?: string;
   workspaceName?: string;
+  moreKind?: FlowMoreKind;
 }
 
 export interface FlowEdge {
@@ -57,6 +60,7 @@ export interface FlowInput {
   collapsedLanes: Set<string>;
   orientation: Orientation;
   showEndedAgents?: boolean;
+  endedAgentsFor?: Set<string>;
 }
 
 export const OUTSIDE_LANE = "\u0000outside";
@@ -71,7 +75,7 @@ const SIZES: Record<FlowNodeKind, [number, number]> = {
   agent: [196, 44],
   task: [224, 56],
   taskgroup: [212, 48],
-  more: [196, 38],
+  more: [196, 52],
 };
 
 const DEPTH_MAIN_H = [24, 240, 500, 840, 1150];
@@ -115,6 +119,20 @@ const taskGroupTone = (tasks: TaskRecord[]): FlowTone => {
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
+const TEXT_LEFT = 32;
+const TEXT_RIGHT = 12;
+const TITLE_CHAR_PX = 7.6;
+const SUB_CHAR_PX = 6.2;
+const BADGE_CHAR_PX = 6.4;
+
+export function fitNodeText(node: Pick<FlowNode, "w" | "title" | "subtitle" | "badge">): { title: string; subtitle: string } {
+  const room = node.w - TEXT_LEFT - TEXT_RIGHT;
+  const badgeRoom = node.badge ? node.badge.length * BADGE_CHAR_PX + TEXT_RIGHT : 0;
+  const titleChars = Math.max(6, Math.floor((room - badgeRoom) / TITLE_CHAR_PX));
+  const subChars = Math.max(6, Math.floor(room / SUB_CHAR_PX));
+  return { title: clip(node.title, titleChars), subtitle: clip(node.subtitle, subChars) };
+}
+
 const shortCwd = (cwd: string | null): string => {
   if (!cwd) return "no folder";
   const parts = cwd.replace(/[\\/]+$/, "").split(/[\\/]/).filter(Boolean);
@@ -154,6 +172,7 @@ interface Lane {
 export function buildFlow(input: FlowInput): FlowGraph {
   const { workspaces, groups, agentsBySession, expandedSubagents, expandedTaskGroups, collapsedLanes, orientation } = input;
   const showEndedAgents = input.showEndedAgents === true;
+  const endedAgentsFor = input.endedAgentsFor ?? new Set<string>();
   const laneKeyOf = (cwd: string | null | undefined): string => workspaceOf(workspaces, cwd) ?? OUTSIDE_LANE;
   const sessions = input.sessions.filter((session) => session.helperOf == null);
   const sessionById = new Map(sessions.map((session) => [session.sessionId, session]));
@@ -194,7 +213,8 @@ export function buildFlow(input: FlowInput): FlowGraph {
   const nodes: FlowNode[] = [];
   const edges: FlowEdge[] = [];
   const children = new Map<string, string[]>();
-  const add = (node: FlowNode) => {
+  const add = (raw: FlowNode) => {
+    const node = { ...raw, ...fitNodeText(raw) };
     nodes.push(node);
     if (node.parent) {
       const list = children.get(node.parent) ?? [];
@@ -263,7 +283,8 @@ export function buildFlow(input: FlowInput): FlowGraph {
           const allAgents = [...(agentsBySession[session.sessionId] ?? [])].sort(
             (a, b) => Number(b.status === "running") - Number(a.status === "running") || b.updatedAt - a.updatedAt,
           );
-          const agents = showEndedAgents ? allAgents : allAgents.filter((agent) => agent.status === "running");
+          const listEnded = showEndedAgents || endedAgentsFor.has(session.sessionId);
+          const agents = listEnded ? allAgents : allAgents.filter((agent) => agent.status === "running");
           const hiddenEnded = allAgents.length - agents.length;
           for (const agent of agents.slice(0, MAX_AGENTS)) {
             add({
@@ -276,15 +297,27 @@ export function buildFlow(input: FlowInput): FlowGraph {
               sessionId: session.sessionId,
             });
           }
-          const rest = Math.max(0, agents.length - MAX_AGENTS) + hiddenEnded;
-          if (rest > 0) {
+          const overflow = Math.max(0, agents.length - MAX_AGENTS);
+          if (overflow > 0) {
             add({
               ...base("more", `more:${session.sessionId}`, subId, lane.key),
-              title: `+${rest} ended`,
-              subtitle: hiddenEnded > 0 ? "turn on show ended to list" : "collapsed",
+              title: `+${overflow} more`,
+              subtitle: "open the session to see all",
               tone: "muted",
               dim: laneDim,
               sessionId: session.sessionId,
+              moreKind: "overflow",
+            });
+          }
+          if (hiddenEnded > 0) {
+            add({
+              ...base("more", `ended:${session.sessionId}`, subId, lane.key),
+              title: `+${hiddenEnded} ended`,
+              subtitle: "double-click to list",
+              tone: "muted",
+              dim: laneDim,
+              sessionId: session.sessionId,
+              moreKind: "ended",
             });
           }
         }
