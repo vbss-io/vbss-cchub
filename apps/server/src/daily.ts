@@ -765,6 +765,7 @@ export function readDaily(settings: DelegationSettings, date: string): DailyRead
 }
 
 const lastHubHash = new Map<string, string>();
+const lastSeenHash = new Map<string, string>();
 const lastServerWriteAt = new Map<string, number>();
 
 export type DailyWriteOrigin = "client" | "server";
@@ -903,6 +904,7 @@ export function writeDaily(
   writeFileAtomic(path, content);
   const stat = statSync(path);
   lastHubHash.set(path, hashOf(content));
+  lastSeenHash.set(path, hashOf(content));
   if (origin === "server") lastServerWriteAt.set(path, stat.mtimeMs);
   broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "hub", writeId: writeId ?? null });
   runHook(() => dailyHooks.written?.(settings, date, content, origin, previous, unseen));
@@ -1000,7 +1002,11 @@ export function stopDailyWatch(): void {
 
 function handleDailyFsEvent(dir: string, date: string): void {
   const path = findExistingDailyFile(dir, date);
-  if (!path) return;
+  if (!path) {
+    for (const seen of [...lastSeenHash.keys()]) if (basename(seen, ".md") === date) lastSeenHash.delete(seen);
+    runHook(() => dailyHooks.diskChanged?.(date));
+    return;
+  }
   let content: string;
   let stat;
   try {
@@ -1009,7 +1015,10 @@ function handleDailyFsEvent(dir: string, date: string): void {
   } catch {
     return;
   }
-  if (lastHubHash.get(path) === hashOf(content)) return;
+  const hash = hashOf(content);
+  const seen = lastSeenHash.get(path);
+  lastSeenHash.set(path, hash);
+  if (lastHubHash.get(path) === hash && seen === hash) return;
   broadcast("daily", { date, updatedAt: stat.mtimeMs, source: "disk", writeId: null });
   runHook(() => dailyHooks.diskChanged?.(date));
 }

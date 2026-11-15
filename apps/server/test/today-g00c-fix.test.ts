@@ -1191,7 +1191,7 @@ describe("G00c fix wave 4, finding 2: an hourglass before a regular word is text
       [`- [ ] Wait ${SCHEDULED} for Ana`, `- [ ] Wait ${SCHEDULED} for Ana ${SCHEDULED} ${D}`, `- [ ] Wait ${SCHEDULED} for Ana`],
       [`- [ ] Wait ${SCHEDULED} for Ana ${DUE} 2026-12-01`, `- [ ] Wait ${SCHEDULED} for Ana ${SCHEDULED} ${D} ${DUE} 2026-12-01`, `- [ ] Wait ${SCHEDULED} for Ana ${DUE} 2026-12-01`],
       [`- [ ] Wait ${SCHEDULED} for Ana ${SCHEDULED} 2026-11-10`, `- [ ] Wait ${SCHEDULED} for Ana ${SCHEDULED} ${D}`, `- [ ] Wait ${SCHEDULED} for Ana`],
-      [`- [ ] Call ${SCHEDULED} 10am with Bob`, `- [ ] Call ${SCHEDULED} ${D} with Bob`, "- [ ] Call with Bob"],
+      [`- [ ] Call ${SCHEDULED} 10am with Bob`, `- [ ] Call ${SCHEDULED} 10am with Bob ${SCHEDULED} ${D}`, `- [ ] Call ${SCHEDULED} 10am with Bob`],
       [`- [ ] Task ${SCHEDULED} ${DONE} 2026-11-10`, `- [ ] Task ${SCHEDULED} ${D} ${DONE} 2026-11-10`, `- [ ] Task ${DONE} 2026-11-10`],
       [`- [ ] Task ${SCHEDULED} #p1 ^abc`, `- [ ] Task ${SCHEDULED} ${D} #p1 ^abc`, "- [ ] Task #p1 ^abc"],
       [`- [ ] Task ${SCHEDULED} ${REPEAT} every week`, `- [ ] Task ${SCHEDULED} ${D} ${REPEAT} every week`, `- [ ] Task ${REPEAT} every week`],
@@ -1259,5 +1259,244 @@ describe("G00c fix wave 4, finding 3: lines appended after the hub filled an emp
     editDaily(root, TODAY, (content) => content.replace("- free reminder from the skill", `${alphaLine("Undated pick")}\n- free reminder from the skill`));
     settle(settings, TODAY);
     assert.equal(count(read(root, dailyRel(TODAY)), alphaLine("Undated pick")), 2);
+  });
+});
+
+async function until(check: () => boolean, label: string, timeoutMs = 12000): Promise<void> {
+  const started = Date.now();
+  while (!check()) {
+    if (Date.now() - started > timeoutMs) assert.fail(`timed out waiting for ${label}`);
+    await sleep(100);
+  }
+}
+
+describe("G00c fix wave 5, finding 1: only a date shaped value or a signifier only tail makes an hourglass the scheduled token", () => {
+  const D = "2026-11-20";
+  const FIRE = "\u{1F525}";
+  it("keeps a time, a duration or an incomplete signifier after the hourglass as text and adds the canonical token apart", () => {
+    const settings = useVault(lab({ alpha: project("Alpha", ["- [ ] x"]) }));
+    const cases: [string, string, string][] = [
+      [`- [ ] Call Bob ${SCHEDULED} 10:30`, `- [ ] Call Bob ${SCHEDULED} 10:30 ${SCHEDULED} ${D}`, `- [ ] Call Bob ${SCHEDULED} 10:30`],
+      [`- [ ] Call Bob ${SCHEDULED}10:30 then lunch`, `- [ ] Call Bob ${SCHEDULED}10:30 then lunch ${SCHEDULED} ${D}`, `- [ ] Call Bob ${SCHEDULED}10:30 then lunch`],
+      [`- [ ] Task ${SCHEDULED} 2 days`, `- [ ] Task ${SCHEDULED} 2 days ${SCHEDULED} ${D}`, `- [ ] Task ${SCHEDULED} 2 days`],
+      [`- [ ] Task ${SCHEDULED} ${DONE} yay`, `- [ ] Task ${SCHEDULED} ${DONE} yay ${SCHEDULED} ${D}`, `- [ ] Task ${SCHEDULED} ${DONE} yay`],
+      [`- [ ] Task ${SCHEDULED} ${FIRE}`, `- [ ] Task ${SCHEDULED} ${FIRE} ${SCHEDULED} ${D}`, `- [ ] Task ${SCHEDULED} ${FIRE}`],
+      [`- [ ] Task ${SCHEDULED} 2026-11-14 ${SCHEDULED} 10:30`, `- [ ] Task ${SCHEDULED} ${D} ${SCHEDULED} 10:30`, `- [ ] Task ${SCHEDULED} 10:30`],
+      [`- [ ] Task ${SCHEDULED} 2026-02-30 ${SCHEDULED} 2 days`, `- [ ] Task ${SCHEDULED} ${D} ${SCHEDULED} 2 days`, `- [ ] Task ${SCHEDULED} 2 days`],
+      [`- [ ] Task ${SCHEDULED} 2026-2-3`, `- [ ] Task ${SCHEDULED} ${D}`, "- [ ] Task"],
+      [`- [ ] Task ${SCHEDULED} #p1 ^id-1`, `- [ ] Task ${SCHEDULED} ${D} #p1 ^id-1`, "- [ ] Task #p1 ^id-1"],
+      [`- [ ] Task ${SCHEDULED} ${DUE} 2026-12-01 ${DONE} 2026-11-10`, `- [ ] Task ${SCHEDULED} ${D} ${DUE} 2026-12-01 ${DONE} 2026-11-10`, `- [ ] Task ${DUE} 2026-12-01 ${DONE} 2026-11-10`],
+      [`- [ ] Task ${SCHEDULED} ${REPEAT} every day`, `- [ ] Task ${SCHEDULED} ${D} ${REPEAT} every day`, `- [ ] Task ${REPEAT} every day`],
+      [`- [ ] Wait ${SCHEDULED} for Ana ${SCHEDULED}`, `- [ ] Wait ${SCHEDULED} for Ana ${SCHEDULED} ${D}`, `- [ ] Wait ${SCHEDULED} for Ana`],
+    ];
+    for (const [raw, set, cleared] of cases) {
+      assert.equal(board.withScheduledToken(raw, settings.tasks, D), set, raw);
+      assert.equal(board.withScheduledToken(raw, settings.tasks, null), cleared, raw);
+      assert.equal(board.withScheduledToken(set, settings.tasks, D), set, set);
+      assert.equal(board.withScheduledToken(set, settings.tasks, null), cleared, set);
+    }
+  });
+
+  it("the board reads a time or a duration after the hourglass as part of the title, never as the scheduled date", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Call Bob ${SCHEDULED} 10:30`, `- [ ] Call Ana ${SCHEDULED} 10:30 ${SCHEDULED} ${TODAY}`, `- [ ] Task ${SCHEDULED} 2 days`]) });
+    const settings = useVault(root);
+    assert.equal(taskIn(settings, "alpha", `Call Bob ${SCHEDULED} 10:30`).scheduled, null);
+    assert.equal(taskIn(settings, "alpha", `Call Ana ${SCHEDULED} 10:30`).scheduled, TODAY);
+    assert.equal(taskIn(settings, "alpha", `Task ${SCHEDULED} 2 days`).scheduled, null);
+  });
+
+  it("scheduling and unscheduling a task with a time after the hourglass keeps the time byte for byte", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Call Bob ${SCHEDULED} 10:30`, "- [ ] Other"]) }, { [TODAY]: dailyOf(TODAY, ["- [ ] free"]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    editDaily(root, TODAY, (content) => content.replace("- [ ] free", `- [ ] free\n${alphaLine(`Call Bob ${SCHEDULED} 10:30`)}`));
+    settle(settings, TODAY);
+    assert.deepEqual(projectLines(root, "alpha"), [`- [ ] Call Bob ${SCHEDULED} 10:30 ${SCHEDULED} ${TODAY}`, "- [ ] Other"]);
+    assert.deepEqual(focusTitles(settings, TODAY), [`Call Bob ${SCHEDULED} 10:30`]);
+    editDaily(root, TODAY, (content) => content.replace(`${alphaLine(`Call Bob ${SCHEDULED} 10:30`)}\n`, ""));
+    settle(settings, TODAY);
+    assert.deepEqual(projectLines(root, "alpha"), [`- [ ] Call Bob ${SCHEDULED} 10:30`, "- [ ] Other"]);
+    assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+  });
+});
+
+describe("G00c fix wave 5, finding 2: a user change reverted to the hub's own bytes is still seen by the watcher", () => {
+  const primed = (): { root: string; settings: DelegationSettings; hub: string } => {
+    const root = lab({ alpha: project("Alpha", ["- [ ] Task A", "- [ ] Task B"]) }, { [TODAY]: dailyOf(TODAY, ["- [ ] free"]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    editProject(root, "alpha", (content) => content.replace("- [ ] Task A", `- [ ] Task A ${SCHEDULED} ${TODAY}`));
+    today.todayApi.regenerateFocusMirror(settings, TODAY, { source: "board" });
+    settle(settings, TODAY);
+    const hub = read(root, dailyRel(TODAY));
+    assert.ok(hub.includes(alphaLine("Task A")), hub);
+    return { root, settings, hub };
+  };
+
+  it("a hub line ticked then unticked reopens the task", async () => {
+    const { root, settings, hub } = primed();
+    daily.watchDaily(settings);
+    try {
+      await sleep(300);
+      writeFileSync(join(root, dailyRel(TODAY)), hub.replace(alphaLine("Task A"), alphaLine("Task A", "x")));
+      await until(() => taskIn(settings, "alpha", "Task A").status === "done", "the tick");
+      await sleep(2500);
+      writeFileSync(join(root, dailyRel(TODAY)), hub);
+      await until(() => taskIn(settings, "alpha", "Task A").status === "todo", "the untick");
+    } finally {
+      daily.stopDailyWatch();
+    }
+    assert.deepEqual(projectLines(root, "alpha").sort(), [`- [ ] Task A ${SCHEDULED} ${TODAY}`, "- [ ] Task B"]);
+    assert.equal(read(root, "projects/alpha.md").includes(DONE), false);
+    assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+  });
+
+  it("a hub line deleted then restored with undo schedules the task again", async () => {
+    const { root, settings, hub } = primed();
+    daily.watchDaily(settings);
+    try {
+      await sleep(300);
+      writeFileSync(join(root, dailyRel(TODAY)), hub.replace(`${alphaLine("Task A")}\n`, ""));
+      await until(() => taskIn(settings, "alpha", "Task A").scheduled === null, "the removal");
+      await sleep(2500);
+      writeFileSync(join(root, dailyRel(TODAY)), hub);
+      await until(() => taskIn(settings, "alpha", "Task A").scheduled === TODAY, "the undo");
+    } finally {
+      daily.stopDailyWatch();
+    }
+    assert.equal(read(root, dailyRel(TODAY)), hub);
+    assert.deepEqual(focusTitles(settings, TODAY), ["Task A"]);
+    assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+  });
+});
+
+describe("G00c fix wave 5, finding 3: a daily confirmed missing comes back the same way with or without a restart", () => {
+  const ALPHA = (): string => project("Alpha", [`- [ ] Task A ${SCHEDULED} ${TODAY}`, `- [ ] Task B ${SCHEDULED} ${TODAY}`, "- [ ] Task C"]);
+  const LINES = [alphaLine("Task A"), "  - note A", alphaLine("Task B"), "- free top"];
+  const without = (content: string): string => content.replace(`${alphaLine("Task B")}\n`, "").replace("- free top", "- free top\n- remote note");
+  const restart = (settings: DelegationSettings): void => {
+    today.forgetTodayState();
+    today.runStartupMirror(settings);
+  };
+
+  const assertAdopted = (settings: DelegationSettings, root: string, written: string): void => {
+    const now = read(root, dailyRel(TODAY));
+    for (const line of written.split("\n")) assert.ok(now.includes(line), line);
+    assert.ok(now.includes(alphaLine("Task B")), now);
+    assert.equal(taskIn(settings, "alpha", "Task A").scheduled, TODAY);
+    assert.equal(taskIn(settings, "alpha", "Task B").scheduled, TODAY);
+    assert.deepEqual(focusTitles(settings, TODAY).sort(), ["Task A", "Task B"]);
+  };
+
+  it("the watcher sees the file go, the baseline is dropped after the window and the day comes back adopted", async () => {
+    const root = lab({ alpha: ALPHA() }, { [TODAY]: dailyOf(TODAY, LINES) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    const next = without(read(root, dailyRel(TODAY)));
+    today.setFocusStability({ delayMs: 60 });
+    daily.watchDaily(settings);
+    try {
+      await sleep(300);
+      unlinkSync(join(root, dailyRel(TODAY)));
+      await until(() => store.getTodayBaseline(TODAY) === null, "the confirmed gone daily");
+      writeFileSync(join(root, dailyRel(TODAY)), next);
+      await until(() => read(root, dailyRel(TODAY)).includes(alphaLine("Task B")), "the adopted daily");
+    } finally {
+      daily.stopDailyWatch();
+      today.setFocusStability({ delayMs: 0 });
+    }
+    assertAdopted(settings, root, next);
+    assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+  });
+
+  const paths: [string, (settings: DelegationSettings) => void, (settings: DelegationSettings) => void][] = [
+    ["no restart", () => undefined, () => undefined],
+    ["restart while missing, before the window", restart, () => undefined],
+    ["restart after the window", () => undefined, restart],
+  ];
+  for (const [name, beforeWindow, afterWindow] of paths) {
+    it(`a daily still missing after the window is adopted when it comes back: ${name}`, async () => {
+      const root = lab({ alpha: ALPHA() }, { [TODAY]: dailyOf(TODAY, LINES) });
+      const settings = useVault(root);
+      settle(settings, TODAY);
+      const next = without(read(root, dailyRel(TODAY)));
+      today.setFocusStability({ delayMs: 60 });
+      try {
+        unlinkSync(join(root, dailyRel(TODAY)));
+        today.queueDailyDiskChange(TODAY);
+        today.flushMirrors(settings);
+        beforeWindow(settings);
+        await sleep(250);
+        assert.equal(store.getTodayBaseline(TODAY), null);
+        afterWindow(settings);
+        write(root, dailyRel(TODAY), next);
+        today.queueDailyDiskChange(TODAY);
+        today.flushMirrors(settings);
+        await sleep(250);
+        today.flushMirrors(settings);
+      } finally {
+        today.setFocusStability({ delayMs: 0 });
+      }
+      settle(settings, TODAY);
+      assertAdopted(settings, root, next);
+      assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+    });
+  }
+
+  for (const [name, beforeWindow] of paths.slice(0, 2)) {
+    it(`a daily written again inside the window keeps its baseline, so the removed line unschedules its task: ${name}`, async () => {
+      const root = lab({ alpha: ALPHA() }, { [TODAY]: dailyOf(TODAY, LINES) });
+      const settings = useVault(root);
+      settle(settings, TODAY);
+      const next = without(read(root, dailyRel(TODAY)));
+      today.setFocusStability({ delayMs: 60 });
+      try {
+        unlinkSync(join(root, dailyRel(TODAY)));
+        today.queueDailyDiskChange(TODAY);
+        today.flushMirrors(settings);
+        beforeWindow(settings);
+        assert.ok(store.getTodayBaseline(TODAY));
+        write(root, dailyRel(TODAY), next);
+        today.queueDailyDiskChange(TODAY);
+        today.flushMirrors(settings);
+        await sleep(250);
+        today.flushMirrors(settings);
+      } finally {
+        today.setFocusStability({ delayMs: 0 });
+      }
+      assert.equal(read(root, dailyRel(TODAY)), next);
+      assert.equal(taskIn(settings, "alpha", "Task A").scheduled, TODAY);
+      assert.equal(taskIn(settings, "alpha", "Task B").scheduled, null);
+      assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+    });
+  }
+});
+
+describe("G00c fix wave 5, finding 4: a hub line the user wrote a note under stays the user's after the note goes", () => {
+  const ALPHA = (): string => project("Alpha", [`- [ ] Dated today ${SCHEDULED} ${TODAY}`, `- [ ] Daily standup ${REPEAT} every day ${SCHEDULED} ${TODAY}`]);
+  const HEAD = `---\ntype: daily\n---\n\n# ${TODAY}\n\n## Focus\n\n`;
+  const SKILL = [alphaLine("Dated today"), alphaLine("Daily standup"), "- free reminder from the skill", "", "## Meetings", "", "- 10:00 Standup", ""].join("\n");
+  const count = (content: string, line: string): number => content.split("\n").filter((text) => text === line).length;
+
+  it("never removes it as a hub copy, while an untouched hub copy still yields", () => {
+    const root = lab({ alpha: ALPHA() });
+    const settings = useVault(root);
+    write(root, dailyRel(TODAY), HEAD);
+    today.queueDailyDiskChange(TODAY);
+    settle(settings, TODAY);
+    const filled = read(root, dailyRel(TODAY));
+    assert.equal(count(filled, alphaLine("Daily standup")), 1);
+    editDaily(root, TODAY, (content) => content.replace(alphaLine("Daily standup"), `${alphaLine("Daily standup")}\n  - my own note`));
+    settle(settings, TODAY);
+    editDaily(root, TODAY, (content) => content.replace("\n  - my own note", ""));
+    settle(settings, TODAY);
+    assert.equal(read(root, dailyRel(TODAY)), filled);
+    editDaily(root, TODAY, (content) => content + SKILL);
+    settle(settings, TODAY);
+    const after = read(root, dailyRel(TODAY));
+    assert.equal(count(after, alphaLine("Daily standup")), 2, after);
+    assert.equal(count(after, alphaLine("Dated today")), 1, after);
+    assert.ok(after.includes(SKILL), after);
+    assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
   });
 });

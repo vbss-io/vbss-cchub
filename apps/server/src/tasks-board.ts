@@ -1640,8 +1640,11 @@ function scheduledInsertAt(rest: string, spans: TokenSpan[], config: TasksFeatur
   return { at: body.trimEnd().length, before: false };
 }
 
-const LOOSE_SCHEDULED_RE = new RegExp(`(\\s*)${SCHEDULED_MARK}\\uFE0F?([ \\t]*\\d\\S*)?(\\s*)`, "gu");
-const SIGNIFIER_TAIL_RE = new RegExp(`^(?:\\s*(?:${STOP_SOURCE}(?:[ \\t]*[^\\s]+)?|\\^[A-Za-z0-9-]+))*\\s*$`, "u");
+const DATE_SHAPE_SOURCE = "\\d{4}-\\d{1,2}-\\d{1,2}(?!\\d)";
+const LOOSE_SCHEDULED_RE = new RegExp(`(\\s*)${SCHEDULED_MARK}\\uFE0F?([ \\t]*${DATE_SHAPE_SOURCE})?(\\s*)`, "gu");
+const DEPENDS_MARK = "\u26D4";
+const TAIL_DATE_MARKS = [START_MARK, SCHEDULED_MARK, DUE_MARK, "\u2705", "\u2795", "\u274C", DEPENDS_MARK];
+const tailTokenPatterns = new Map<string, RegExp>();
 const SCHEDULED_LEAD_RE = new RegExp(`^${SCHEDULED_MARK}\\uFE0F?[ \\t]*`, "u");
 const BLOCK_ID_RE = /\s+\^[A-Za-z0-9-]+\s*$/u;
 
@@ -1660,8 +1663,35 @@ function withoutSpans(rest: string, spans: TokenSpan[]): string {
   return next;
 }
 
+function tailTokenRegExp(config: TasksFeatureSettings): RegExp {
+  const template = config.doneStamp.trim();
+  const stamp = template.includes(TASKS_DATE_TOKEN) ? template.split(TASKS_DATE_TOKEN).map(escapeRegExp).join(DATE_SHAPE_SOURCE) : null;
+  const key = `${config.priorityTag}\n${stamp ?? ""}`;
+  const cached = tailTokenPatterns.get(key);
+  if (cached) return cached;
+  const stop = stamp === null ? STOP_SOURCE : `(?:${STOP_SOURCE}|${stamp})`;
+  const tokens = [
+    `(?:${TAIL_DATE_MARKS.join("|")})\\uFE0F?[ \\t]*${DATE_SHAPE_SOURCE}`,
+    `${REPEAT_MARK}\\uFE0F?[ \\t]*(?!${stop})\\S.*?(?=\\s*${stop}|\\s+#[^\\s#]|\\s*$)`,
+    `${DEPENDS_MARK}\\uFE0F?[ \\t]*[A-Za-z0-9_-]+(?:,[A-Za-z0-9_-]+)*(?![^\\s])`,
+    `#${escapeRegExp(config.priorityTag)}\\d(?![^\\s])`,
+    "\\^[A-Za-z0-9-]+(?![^\\s])",
+    ...(stamp === null ? [] : [stamp]),
+  ];
+  const pattern = new RegExp(`^\\s*(?:${tokens.join("|")})`, "iu");
+  tailTokenPatterns.set(key, pattern);
+  return pattern;
+}
+
 function isSignifierTail(tail: string, config: TasksFeatureSettings): boolean {
-  return SIGNIFIER_TAIL_RE.test(removePriorityTokens(stripSignifiers(tail, signifierMatches(tail, config)), config));
+  const pattern = tailTokenRegExp(config);
+  let rest = tail;
+  while (rest.trim() !== "") {
+    const match = rest.match(pattern);
+    if (match === null || match[0].length === 0) return false;
+    rest = rest.slice(match[0].length);
+  }
+  return true;
 }
 
 function scheduledSpans(rest: string, spans: TokenSpan[], config: TasksFeatureSettings): TokenSpan[] {

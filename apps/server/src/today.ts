@@ -319,6 +319,7 @@ const CAPTURE_MAX = 2000;
 const SEEN_LIMIT = 400;
 const BASELINE_KEEP_DAYS = 7;
 const MIGRATED_KEY = "today.migrated.";
+const GONE_KEY = "today.gone";
 const BOARD_DELAY_MS = 50;
 const CLIENT_DELAY_MS = 400;
 const DISK_DELAY_MS = 1200;
@@ -336,6 +337,29 @@ function isScheduledMode(settings: DelegationSettings): boolean {
 
 function isCurrentOrFuture(date: string): boolean {
   return date >= localDate();
+}
+
+function goneDates(): string[] {
+  const raw = getSetting(GONE_KEY);
+  if (raw === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function isGone(date: string): boolean {
+  return goneDates().includes(date);
+}
+
+function setGone(date: string, gone: boolean): void {
+  const current = goneDates();
+  if (current.includes(date) === gone) return;
+  const next = current.filter((item) => item !== date && isCurrentOrFuture(item));
+  if (gone) next.push(date);
+  setSetting(GONE_KEY, next.length === 0 ? null : JSON.stringify(next));
 }
 
 interface BoardData {
@@ -823,6 +847,7 @@ function adoptBaseline(settings: DelegationSettings, date: string, path: string,
   };
   const baseline: Baseline = { content, state };
   storeBaseline(date, path, baseline);
+  setGone(date, false);
   return baseline;
 }
 
@@ -2343,7 +2368,17 @@ function hubCopies(content: string, texts: string[], plan: TickPlan, members: Me
   return out;
 }
 
-function hubInserted(previous: readonly string[], pruned: readonly string[], added: readonly string[], finalTexts: readonly string[]): string[] {
+function userTouched(content: string, finalTexts: readonly string[], candidates: ReadonlySet<string>): Set<string> {
+  const out = new Set<string>();
+  finalTexts.forEach((text, index) => {
+    if (!candidates.has(text)) return;
+    const block = taskBlock(content, index).split(LINE_SPLIT_RE).slice(1);
+    if (block.some((line) => line.trim() !== "" && !candidates.has(line))) out.add(text);
+  });
+  return out;
+}
+
+function hubInserted(previous: readonly string[], pruned: readonly string[], added: readonly string[], finalTexts: readonly string[], touched: ReadonlySet<string>): string[] {
   const left = new Map<string, number>();
   for (const text of finalTexts) left.set(text, (left.get(text) ?? 0) + 1);
   const removed = [...pruned];
@@ -2355,7 +2390,7 @@ function hubInserted(previous: readonly string[], pruned: readonly string[], add
       continue;
     }
     const count = left.get(text) ?? 0;
-    if (count === 0) continue;
+    if (count === 0 || touched.has(text)) continue;
     left.set(text, count - 1);
     out.push(text);
   }
@@ -2527,11 +2562,14 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
   let applied = 0;
   try {
     const daily = readDailySafe(settings, date);
-    if (daily !== null && !daily.exists && getTodayBaseline(date) !== null && isGoneForGood(settings, date, options)) deleteTodayBaseline(date);
+    if (daily !== null && !daily.exists && getTodayBaseline(date) !== null && isGoneForGood(settings, date, options)) {
+      deleteTodayBaseline(date);
+      setGone(date, true);
+    }
     if (daily === null || !daily.exists) return skip("no-daily");
     let data = loadBoardData(settings);
     if (data === null) return skip("no-board");
-    const stored = loadBaseline(date, daily.path);
+    const stored = isGone(date) ? null : loadBaseline(date, daily.path);
     if (!isSaneDaily(settings, daily.content, stored?.content ?? null)) return skip("unsettled");
     if (stored === null && !isFirstSightStable(settings, date, daily.content, options)) return skip("unsettled");
     const baseline = stored ?? adoptBaseline(settings, date, daily.path, daily.content, data, true);
@@ -2696,7 +2734,8 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
       const at = positions.get(originals[item.index] as DocLine);
       return at === undefined ? [] : [{ ...item, index: at }];
     });
-    const inserted = hubInserted(baseline.state.inserted ?? [], pruned.map((line) => texts[line] as string), added, finalTexts);
+    const candidates = new Set([...(baseline.state.inserted ?? []), ...added]);
+    const inserted = hubInserted(baseline.state.inserted ?? [], pruned.map((line) => texts[line] as string), added, finalTexts, userTouched(next, finalTexts, candidates));
     storeBaseline(date, daily.path, {
       content: renderDoc(baseDoc),
       state: {
