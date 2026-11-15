@@ -16,7 +16,7 @@ import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 import { RunChip } from "./RunChips";
 import { Toggletip } from "./Toggletip";
-import { sessionMenuKeys, sessionPrimaryAction, sessionRelations, sessionTabs, splitAgents, toggleExpanded, visibleTab, type SessionMenuKey, type SessionTab } from "../drawer-model";
+import { agentStepsLabel, sessionMenuKeys, sessionPrimaryAction, sessionRelations, sessionTabs, splitAgents, toggleExpanded, visibleTab, type SessionMenuKey, type SessionTab } from "../drawer-model";
 import { shortFolder } from "../wsmatch";
 import { LIST_WINDOW } from "../show-more";
 import { ClampScope, ClampText, ShowMoreList } from "./ShowMore";
@@ -370,7 +370,7 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
                           <span className="agent__type">{type}</span>
                         </button>
                         <span className={`tag tag--${agent.status === "running" ? "active" : "ended"}`}>{agent.status}</span>
-                        {agent.turns > 0 && <span className="muted small">{agent.turns} turns</span>}
+                        {agent.turns > 0 && <span className="muted small">{agentStepsLabel(agent.turns)}</span>}
                         <time>{relativeTime(agent.updatedAt)}</time>
                       </header>
                       {lastMessage && (

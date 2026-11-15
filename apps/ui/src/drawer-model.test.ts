@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { sessionRelations, splitAgents, toggleExpanded } from "./drawer-model";
+import { agentStepsLabel, sessionRelations, splitAgents, toggleExpanded } from "./drawer-model";
 import { codexMenuKeys, codexPrimaryAction, sessionMenuKeys, sessionPrimaryAction, sessionTabs, visibleTab, type SessionTabInput } from "./drawer-model";
 
 const empty: SessionTabInput = { agentsTotal: 0, agentsRunning: 0, asks: 0, forks: 0, delegated: 0, delegatedOn: true };
@@ -129,5 +129,18 @@ describe("toggleExpanded", () => {
     assert.deepEqual([...added], ["a", "b"]);
     assert.deepEqual([...toggleExpanded(added, "a")], ["b"]);
     assert.deepEqual([...start], ["a"]);
+  });
+});
+
+describe("agentStepsLabel", () => {
+  it("counts the steps below the tail cap", () => {
+    assert.equal(agentStepsLabel(1), "1 step");
+    assert.equal(agentStepsLabel(7), "7 steps");
+    assert.equal(agentStepsLabel(11), "11 steps");
+  });
+
+  it("marks the count as a lower bound once the tail cap is reached", () => {
+    assert.equal(agentStepsLabel(12), "12+ steps");
+    assert.equal(agentStepsLabel(300), "12+ steps");
   });
 });

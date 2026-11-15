@@ -23,6 +23,7 @@ import { folderPeers } from "../peers";
 import { isPluginEnabled } from "../plugins/registry";
 import { isEmpty, isStale } from "../stale";
 import type { SessionRecord } from "../types";
+import { turnOnOptimistically } from "../widget-turn-on";
 import { clampPercent, compactRect, dockRect, offsetFromPosition, ringTone, type Rect } from "../widget-layout";
 import {
   gaugeResetText,
@@ -723,11 +724,11 @@ export function Widget() {
   }, [open, collapse]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || surface !== "on") return;
     window.clearTimeout(leaveTimer.current);
     leaveTimer.current = window.setTimeout(() => void collapse(), 3000);
     return () => window.clearTimeout(leaveTimer.current);
-  }, [open, collapse]);
+  }, [open, surface, collapse]);
 
   const onPanelEnter = () => window.clearTimeout(leaveTimer.current);
 
@@ -797,16 +798,22 @@ export function Widget() {
   const turnOn = async () => {
     setTurningOn(true);
     setTurnOnError(null);
-    try {
-      const next = await updateSettings({ features: { widget: true } });
-      openRef.current = true;
-      setOpen(true);
-      setConfig(configOf(next));
-    } catch (err) {
-      setTurnOnError(err instanceof Error ? err.message : "could not turn the widget on");
-    } finally {
-      setTurningOn(false);
-    }
+    const result = await turnOnOptimistically(
+      {
+        open: () => {
+          openRef.current = true;
+          setOpen(true);
+        },
+        revert: () => {
+          openRef.current = false;
+          setOpen(false);
+        },
+      },
+      () => updateSettings({ features: { widget: true } }),
+    );
+    if (result.ok) setConfig(configOf(result.value));
+    else setTurnOnError(result.message);
+    setTurningOn(false);
   };
 
   const openSettings = () => {

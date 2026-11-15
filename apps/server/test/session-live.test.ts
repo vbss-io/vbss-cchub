@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { LAST_MESSAGE_PREVIEW, parseLiveQuery, summarizeAgent } from "../src/live-summary.js";
+import { AGENT_TAIL_LIMIT, LAST_MESSAGE_PREVIEW, createTurnCounter, parseLiveQuery, summarizeAgent, type FileStamp } from "../src/live-summary.js";
 import { fixtures, makeSandbox, startServer, type RunningServer } from "./helpers.js";
 
 const box = makeSandbox("cch-live-");
@@ -93,6 +93,68 @@ describe("live query parsing", () => {
   });
 });
 
+describe("agent turn counter", () => {
+  const harness = (capacity: number) => {
+    const stamps = new Map<string, FileStamp>();
+    const reads: string[] = [];
+    const counter = createTurnCounter({
+      capacity,
+      stamp: async (path) => stamps.get(path) ?? null,
+      count: async (path) => {
+        reads.push(path);
+        return stamps.get(path)?.size ?? 0;
+      },
+    });
+    return { stamps, reads, counter };
+  };
+
+  it("does not re-read a file whose mtime and size are unchanged", async () => {
+    const { stamps, reads, counter } = harness(10);
+    stamps.set("a", { mtimeMs: 1, size: 3 });
+    assert.equal(await counter("a"), 3);
+    assert.equal(await counter("a"), 3);
+    assert.equal(await counter("a"), 3);
+    assert.deepEqual(reads, ["a"]);
+  });
+
+  it("re-reads when the mtime or the size changes", async () => {
+    const { stamps, reads, counter } = harness(10);
+    stamps.set("a", { mtimeMs: 1, size: 3 });
+    assert.equal(await counter("a"), 3);
+    stamps.set("a", { mtimeMs: 2, size: 3 });
+    assert.equal(await counter("a"), 3);
+    stamps.set("a", { mtimeMs: 2, size: 5 });
+    assert.equal(await counter("a"), 5);
+    assert.deepEqual(reads, ["a", "a", "a"]);
+  });
+
+  it("returns zero without reading when there is no path and reads uncached when the file cannot be stamped", async () => {
+    const { reads, counter } = harness(10);
+    assert.equal(await counter(null), 0);
+    assert.equal(await counter("missing"), 0);
+    assert.equal(await counter("missing"), 0);
+    assert.deepEqual(reads, ["missing", "missing"]);
+  });
+
+  it("evicts the least recently used entry beyond its capacity", async () => {
+    const { stamps, reads, counter } = harness(2);
+    for (const name of ["a", "b", "c"]) stamps.set(name, { mtimeMs: 1, size: 1 });
+    await counter("a");
+    await counter("b");
+    await counter("a");
+    await counter("c");
+    assert.deepEqual(reads, ["a", "b", "c"]);
+    await counter("a");
+    assert.deepEqual(reads, ["a", "b", "c"]);
+    await counter("b");
+    assert.deepEqual(reads, ["a", "b", "c", "b"]);
+  });
+
+  it("caps the tail at the agent tail limit used by the live reader", () => {
+    assert.equal(AGENT_TAIL_LIMIT, 12);
+  });
+});
+
 describe("session live route", () => {
   it("keeps the default payload unchanged and ignores unknown params", async () => {
     const plain = await get(`/api/sessions/${SESSION}/live`);
@@ -150,6 +212,34 @@ describe("session live route", () => {
     assert.equal(missingSession.status, 404);
     assert.deepEqual(missingSession.json, { error: "session not found" });
     assert.equal((await get("/api/sessions/nope/live?subagents=summary")).status, 404);
+  });
+});
+
+describe("session live summary cache", () => {
+  const assistantLine = (text: string): string =>
+    `${JSON.stringify({ isSidechain: true, agentId: "a1", type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] }, timestamp: "2026-09-05T10:00:09.000Z" })}
+`;
+  const agentFile = join(box.tmp, "transcripts", SESSION, "subagents", "agent-a1.jsonl");
+  const turnsOf = async (agentId: string): Promise<number | undefined> => {
+    const live = (await get(`/api/sessions/${SESSION}/live?subagents=summary`)).json as LiveShape;
+    return live.agents.find((agent) => agent.agentId === agentId)?.turns;
+  };
+
+  it("serves identical summaries while the files are unchanged and refreshes a changed file", async () => {
+    const first = await get(`/api/sessions/${SESSION}/live?subagents=summary`);
+    const second = await get(`/api/sessions/${SESSION}/live?subagents=summary`);
+    assert.equal(second.text, first.text);
+    assert.equal(await turnsOf("a1"), 3);
+    appendFileSync(agentFile, assistantLine("more"));
+    assert.equal(await turnsOf("a1"), 4);
+    assert.equal(await turnsOf("a2"), 3);
+    const full = (await get(`/api/sessions/${SESSION}/live`)).json as LiveShape;
+    assert.equal(full.agents.find((agent) => agent.agentId === "a1")?.transcript?.length, 4);
+  });
+
+  it("caps the reported turns at the tail limit", async () => {
+    for (let index = 0; index < AGENT_TAIL_LIMIT + 3; index += 1) appendFileSync(agentFile, assistantLine(`extra ${index}`));
+    assert.equal(await turnsOf("a1"), AGENT_TAIL_LIMIT);
   });
 });
 

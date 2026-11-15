@@ -115,3 +115,10 @@ export function toggleExpanded(expanded: ReadonlySet<string>, id: string): Set<s
   else next.add(id);
   return next;
 }
+
+export const AGENT_TAIL_LIMIT = 12;
+
+export function agentStepsLabel(turns: number): string {
+  if (turns >= AGENT_TAIL_LIMIT) return `${AGENT_TAIL_LIMIT}+ steps`;
+  return `${turns} ${turns === 1 ? "step" : "steps"}`;
+}

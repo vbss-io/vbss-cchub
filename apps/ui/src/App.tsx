@@ -993,7 +993,7 @@ export function App() {
     { combo: "ctrl+3", handler: () => isViewEnabled("board", features) && navigate("board") },
     { combo: "ctrl+4", handler: () => isViewEnabled("flow", features) && navigate("flow") },
     { combo: "ctrl+,", handler: () => navigate("settings") },
-    { combo: SIDEBAR_TOGGLE_COMBO, handler: () => railAvailable() && toggleSidebar() },
+    { combo: SIDEBAR_TOGGLE_COMBO, enabled: railAvailable, handler: toggleSidebar },
   ]);
 
   useEffect(() => {

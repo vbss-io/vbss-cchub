@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isEditableTarget, matchCombo, parseCombo, type EditableTargetLike, type KeyEventLike } from "./use-hotkeys";
+import { findBinding, isEditableTarget, matchCombo, parseCombo, type EditableTargetLike, type HotkeyBinding, type KeyEventLike } from "./use-hotkeys";
 
 const event = (key: string, mods: Partial<Omit<KeyEventLike, "key">> = {}): KeyEventLike => ({
   key,
@@ -44,6 +44,35 @@ describe("Ctrl+B", () => {
     assert.equal(matchCombo(event("B", { metaKey: true }), "ctrl+b"), true);
     assert.equal(matchCombo(event("b", { ctrlKey: true, shiftKey: true }), "ctrl+b"), false);
     assert.equal(matchCombo(event("b"), "ctrl+b"), false);
+  });
+});
+
+describe("findBinding", () => {
+  const handler = () => undefined;
+  const sidebar = (enabled: () => boolean): HotkeyBinding => ({ combo: "ctrl+b", handler, enabled });
+
+  it("returns the binding when it matches and is enabled", () => {
+    const binding = sidebar(() => true);
+    assert.equal(findBinding(event("b", { ctrlKey: true }), false, [binding]), binding);
+  });
+
+  it("returns null for a disabled binding so the browser default is not prevented", () => {
+    assert.equal(findBinding(event("b", { ctrlKey: true }), false, [sidebar(() => false)]), null);
+  });
+
+  it("falls through to a later enabled binding with the same combo", () => {
+    const later: HotkeyBinding = { combo: "ctrl+b", handler };
+    assert.equal(findBinding(event("b", { ctrlKey: true }), false, [sidebar(() => false), later]), later);
+  });
+
+  it("skips bindings in editable targets unless they allow inputs", () => {
+    assert.equal(findBinding(event("b", { ctrlKey: true }), true, [sidebar(() => true)]), null);
+    const allowed: HotkeyBinding = { combo: "ctrl+k", handler, allowInInputs: true };
+    assert.equal(findBinding(event("k", { ctrlKey: true }), true, [allowed]), allowed);
+  });
+
+  it("returns null when nothing matches", () => {
+    assert.equal(findBinding(event("x"), false, [sidebar(() => true)]), null);
   });
 });
 

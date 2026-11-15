@@ -4,6 +4,7 @@ export interface HotkeyBinding {
   combo: string;
   handler: (event: KeyboardEvent) => void;
   allowInInputs?: boolean;
+  enabled?: () => boolean;
 }
 
 export interface KeyEventLike {
@@ -79,6 +80,20 @@ export const isEditableTarget = (target: EventTarget | EditableTargetLike | null
   return (node.closest as (selector: string) => unknown).call(target, EDITOR_SELECTOR) != null;
 };
 
+export const findBinding = (
+  event: KeyEventLike,
+  inEditable: boolean,
+  bindings: readonly HotkeyBinding[],
+): HotkeyBinding | null => {
+  for (const binding of bindings) {
+    if (inEditable && !binding.allowInInputs) continue;
+    if (!matchCombo(event, binding.combo)) continue;
+    if (binding.enabled && !binding.enabled()) continue;
+    return binding;
+  }
+  return null;
+};
+
 export const useHotkeys = (bindings: HotkeyBinding[]): void => {
   const latest = useRef(bindings);
 
@@ -89,14 +104,10 @@ export const useHotkeys = (bindings: HotkeyBinding[]): void => {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;
-      const inEditable = isEditableTarget(event.target);
-      for (const binding of latest.current) {
-        if (inEditable && !binding.allowInInputs) continue;
-        if (!matchCombo(event, binding.combo)) continue;
-        event.preventDefault();
-        binding.handler(event);
-        return;
-      }
+      const binding = findBinding(event, isEditableTarget(event.target), latest.current);
+      if (!binding) return;
+      event.preventDefault();
+      binding.handler(event);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
