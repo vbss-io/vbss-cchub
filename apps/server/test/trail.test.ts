@@ -994,6 +994,17 @@ describe("trail HTTP routes", () => {
     await new Promise((resolve) => setTimeout(resolve, 600));
     assert.equal(httpCalls(), baseline);
   });
+
+  it("summarizes on a failed stop like on a stop", async () => {
+    await http("PUT", "/delegation/settings", { features: { trail: true } });
+    const failed = join(box.tmp, "http-failed.jsonl");
+    writeFileSync(failed, transcriptOf(3, "failed"));
+    const baseline = httpCalls();
+    assert.equal(await postHook("stop_failure", "http-s2", { transcriptPath: failed }), 200);
+    await waitFor(async () => (readFileSync(trailPath(), "utf8").includes("<!-- session:http-s2 START -->") ? true : null), 15000);
+    assert.equal(httpCalls(), baseline + 1);
+    await http("PUT", "/delegation/settings", { features: { trail: false } });
+  });
 });
 
 after(() => {

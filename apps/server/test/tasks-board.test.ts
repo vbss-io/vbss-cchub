@@ -2844,3 +2844,49 @@ describe("daily matching ignores markdown emphasis and inline code", () => {
     assert.equal(linkOf("- [ ] **Workai** - Ship the release notes").taskTitle, "Ship the release notes");
   });
 });
+
+describe("daily matching compares the written text first and ignores emphasis only as a fallback", () => {
+  const root = mkdtempSync(join(tmpdir(), "cch-tasks-strict-first-"));
+  after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  writeTree(root, {
+    "acme.md": [
+      "# Acme",
+      "",
+      "## Open loops",
+      "",
+      "- [ ] **Feegow**: sincronizar a agenda",
+      "- [ ] Feegow: sincronizar a agenda",
+      "- [ ] Clean __init__.py imports",
+      "- [ ] Clean init.py imports",
+      "- [ ] Compute a*b*c total",
+      "- [ ] Compute abc total",
+      "- [ ] Only **bold** in the task",
+      "",
+    ].join("\n"),
+  });
+  const settings = (): DelegationSettings => ({ ...settingsFor(root, { section: "Open loops", priorityTag: "p" }), daily: { ...store.getSettings().daily, headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" } } });
+  const linkOf = (line: string): { taskTitle: string | null; candidates: number } => {
+    const current = settings();
+    const payload = board.readBoard(current);
+    const scan = board.scanDaily(current, "2026-11-15", `# 2026-11-15\n\n## Focus\n\n${line}\n`, payload.projects, payload.tasks);
+    const entry = scan.entries[0];
+    assert.ok(entry, line);
+    return { taskTitle: entry.match.task?.title ?? null, candidates: entry.match.candidates.length };
+  };
+
+  it("links each of two titles that differ only by emphasis to its own task", () => {
+    assert.deepEqual(linkOf("- [ ] [[acme|Acme]] - **Feegow**: sincronizar a agenda"), { taskTitle: "**Feegow**: sincronizar a agenda", candidates: 0 });
+    assert.deepEqual(linkOf("- [ ] [[acme|Acme]] - Feegow: sincronizar a agenda"), { taskTitle: "Feegow: sincronizar a agenda", candidates: 0 });
+  });
+
+  it("does not read underscores or stars as emphasis when the written text matches", () => {
+    assert.equal(linkOf("- [ ] [[acme|Acme]] - Clean __init__.py imports").taskTitle, "Clean __init__.py imports");
+    assert.equal(linkOf("- [ ] [[acme|Acme]] - Clean init.py imports").taskTitle, "Clean init.py imports");
+    assert.equal(linkOf("- [ ] [[acme|Acme]] - Compute a*b*c total").taskTitle, "Compute a*b*c total");
+    assert.equal(linkOf("- [ ] [[acme|Acme]] - Compute abc total").taskTitle, "Compute abc total");
+  });
+
+  it("still links a line when only the task has emphasis", () => {
+    assert.equal(linkOf("- [ ] [[acme|Acme]] - Only bold in the task").taskTitle, "Only **bold** in the task");
+  });
+});

@@ -111,4 +111,55 @@ describe("hook configuration", () => {
     assert.deepEqual(settings.hooks.Stop, [userStop]);
     assert.deepEqual(settings.hooks.PreToolUse, [userGuard]);
   });
+
+  const userSay: HookCommand = { type: "command", command: "say done" };
+  const userPing: HookCommand = { type: "command", command: "ping-me.sh", timeout: 9 };
+  const sharedInstall = (name: string): string => {
+    const path = join(home, `${name}.json`);
+    const hooks: Record<string, HookEntry[]> = {};
+    for (const event of OLD_EVENTS) hooks[event] = [hubEntry()];
+    hooks.Stop = [{ hooks: [userSay, ...hubEntry().hooks] }];
+    hooks.SessionEnd = [{ matcher: "clear", hooks: [...hubEntry().hooks, userPing] }];
+    writeFileSync(path, JSON.stringify({ hooks }, null, 2));
+    return path;
+  };
+  const userCommands = (entries: HookEntry[] | undefined): string[] =>
+    (entries ?? []).flatMap((entry) => entry.hooks.filter((hook) => !hook.command.includes("notify.mjs")).map((hook) => `${entry.matcher ?? ""}|${hook.command}`));
+
+  it("install keeps a user's hook that shares an entry with the hub hook", () => {
+    const path = sharedInstall("shared-install");
+    const status = run(path, "install");
+    assert.equal(status.installed, true);
+    const settings = read(path);
+    assert.deepEqual(userCommands(settings.hooks.Stop), ["|say done"]);
+    assert.deepEqual(userCommands(settings.hooks.SessionEnd), ["clear|ping-me.sh"]);
+    assert.deepEqual(settings.hooks.Stop?.[0], { hooks: [userSay] });
+    assert.deepEqual(settings.hooks.SessionEnd?.[0], { matcher: "clear", hooks: [userPing] });
+    for (const event of [...OLD_EVENTS, "StopFailure"]) assert.equal(ours(settings.hooks[event]).length, 1, event);
+  });
+
+  it("an update of an outdated install keeps the shared user hooks and is stable", () => {
+    const path = sharedInstall("shared-update");
+    const before = run(path, "status");
+    assert.equal(before.outdated, true);
+    assert.deepEqual(before.missing.sort(), ["SessionEnd", "StopFailure"]);
+    run(path, "install");
+    const once = read(path);
+    run(path, "install");
+    assert.deepEqual(read(path), once);
+    assert.deepEqual(userCommands(once.hooks.Stop), ["|say done"]);
+    assert.deepEqual(userCommands(once.hooks.SessionEnd), ["clear|ping-me.sh"]);
+    assert.ok((ours(once.hooks.SessionEnd)[0]?.hooks[0]?.timeout ?? 0) > 1.5);
+  });
+
+  it("uninstall removes only the hub hook from a shared entry and keeps its matcher", () => {
+    const path = sharedInstall("shared-remove");
+    const status = run(path, "uninstall");
+    assert.equal(status.installed, false);
+    const settings = read(path);
+    assert.deepEqual(settings.hooks.Stop, [{ hooks: [userSay] }]);
+    assert.deepEqual(settings.hooks.SessionEnd, [{ matcher: "clear", hooks: [userPing] }]);
+    assert.equal(settings.hooks.Notification, undefined);
+    for (const event of Object.keys(settings.hooks)) assert.equal(ours(settings.hooks[event]).length, 0, event);
+  });
 });

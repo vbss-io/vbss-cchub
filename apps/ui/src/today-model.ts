@@ -251,15 +251,18 @@ export function noteLineItems(data: Pick<TodayData, "inNote" | "unlinked" | "inN
 
 const FOCUSABLE_STATUSES: ReadonlySet<BoardStatus> = new Set<BoardStatus>(["todo", "doing", "blocked", "hold"]);
 
-export function canAddToFocus(task: Pick<BoardTask, "status" | "scheduled" | "doneAt">, date: string): boolean {
-  if (task.scheduled === date) return false;
-  if (FOCUSABLE_STATUSES.has(task.status)) return true;
-  return task.status === "done" && (task.doneAt === null || task.doneAt === date);
+export function canAddToFocus(task: Pick<BoardTask, "status" | "scheduled">): boolean {
+  return (task.scheduled ?? null) === null && FOCUSABLE_STATUSES.has(task.status);
 }
 
-export function addableNoteTasks(items: readonly NoteLineItem[], date: string): BoardTask[] {
+export function scheduledElsewhere(task: Pick<BoardTask, "scheduled">, date: string): string | null {
+  const scheduled = task.scheduled ?? null;
+  return scheduled === null || scheduled === date ? null : `Scheduled ${scheduled}`;
+}
+
+export function addableNoteTasks(items: readonly NoteLineItem[]): BoardTask[] {
   const out = new Map<string, BoardTask>();
-  for (const item of items) if (item.task !== null && canAddToFocus(item.task, date)) out.set(item.task.id, item.task);
+  for (const item of items) if (item.task !== null && canAddToFocus(item.task)) out.set(item.task.id, item.task);
   return [...out.values()];
 }
 

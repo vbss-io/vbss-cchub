@@ -213,8 +213,7 @@ export function buildFlow(input: FlowInput): FlowGraph {
   const nodes: FlowNode[] = [];
   const edges: FlowEdge[] = [];
   const children = new Map<string, string[]>();
-  const add = (raw: FlowNode) => {
-    const node = { ...raw, ...fitNodeText(raw) };
+  const add = (node: FlowNode) => {
     nodes.push(node);
     if (node.parent) {
       const list = children.get(node.parent) ?? [];
@@ -243,7 +242,7 @@ export function buildFlow(input: FlowInput): FlowGraph {
     const wsId = `ws:${lane.key}`;
     add({
       ...base("workspace", wsId, "hub", lane.key),
-      title: clip(lane.label, 22),
+      title: lane.label,
       subtitle: lane.key === OUTSIDE_LANE ? lane.sublabel : `${laneSessions.length} sessions`,
       tone: "brand",
       running: laneRunning,
@@ -259,7 +258,7 @@ export function buildFlow(input: FlowInput): FlowGraph {
       const running = session.agentsRunning ?? 0;
       add({
         ...base("session", sid, wsId, lane.key),
-        title: clip(session.customTitle ?? session.title ?? session.sessionId.slice(0, 8), 26),
+        title: session.customTitle ?? session.title ?? session.sessionId.slice(0, 8),
         subtitle: sessionSubtitle(session),
         tone: sessionTone(session),
         running: session.status === "active" || running > 0,
@@ -289,7 +288,7 @@ export function buildFlow(input: FlowInput): FlowGraph {
           for (const agent of agents.slice(0, MAX_AGENTS)) {
             add({
               ...base("agent", `a:${agent.agentId}`, subId, lane.key),
-              title: clip(agent.agentType ?? "agent", 24),
+              title: agent.agentType ?? "agent",
               subtitle: agent.status === "running" ? "running" : "ended",
               tone: agent.status === "running" ? "go" : "muted",
               running: agent.status === "running",
@@ -326,7 +325,7 @@ export function buildFlow(input: FlowInput): FlowGraph {
       for (const task of tasksBySession.get(session.sessionId) ?? []) {
         add({
           ...base("task", `t:${task.id}`, sid, lane.key),
-          title: clip(task.title, 26),
+          title: task.title,
           subtitle: `${task.runner} · ${task.status}`,
           tone: taskTone(task),
           running: taskRunning(task),
@@ -339,7 +338,7 @@ export function buildFlow(input: FlowInput): FlowGraph {
     for (const thread of lane.codex) {
       add({
         ...base("codex", `c:${thread.id}`, wsId, lane.key),
-        title: clip(thread.customTitle ?? thread.title, 26),
+        title: thread.customTitle ?? thread.title,
         subtitle: `codex · ${thread.status}`,
         tone: thread.status === "active" ? "go" : "muted",
         running: thread.status === "active",
@@ -363,7 +362,7 @@ export function buildFlow(input: FlowInput): FlowGraph {
         for (const task of lane.looseTasks) {
           add({
             ...base("task", `t:${task.id}`, groupId, lane.key),
-            title: clip(task.title, 26),
+            title: task.title,
             subtitle: `${task.runner} · ${task.status}`,
             tone: taskTone(task),
             running: taskRunning(task),

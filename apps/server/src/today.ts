@@ -37,8 +37,9 @@ import {
   effectiveProjectOrder,
   flattenTasks,
   focusRange,
+  anyFold,
+  firstFold,
   joinReason,
-  matchText,
   mirrorsFocus,
   normalizeText,
   openDoc,
@@ -58,6 +59,7 @@ import {
   type BoardCheckbox,
   type BoardProject,
   type BoardStatus,
+  type TextFold,
   type BoardTask,
   type DocLine,
   type FocusScan,
@@ -1340,8 +1342,8 @@ function resolveMemo(memo: MarkMemo, context: ResolveContext): BoardTask | null 
   return candidates.length === 1 ? (candidates[0] as BoardTask) : null;
 }
 
-function coversTitle(needle: string, title: string): boolean {
-  const words = new Set(normalizeText(title).match(WORD_RE) ?? []);
+function coversTitle(needle: string, title: string, fold: TextFold): boolean {
+  const words = new Set(fold(title).match(WORD_RE) ?? []);
   if (words.size === 0) return false;
   const have = new Set(needle.match(WORD_RE) ?? []);
   return [...words].every((word) => have.has(word));
@@ -1470,9 +1472,15 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
     const task = before.task;
     if (task.repeat !== null || (before.memo === null && !inScope(task, date, lineage))) return;
     const sameProject = openLine.projectId === null || openLine.projectId === task.projectId;
-    const needle = taskNeedle(openLine.text, settings.tasks);
     const loose = before.memo?.loose === true;
-    const plausible = sameProject && (same ? !loose : needle.startsWith(matchText(task.title)) || coversTitle(needle, task.title));
+    const plausible =
+      sameProject &&
+      (same
+        ? !loose
+        : anyFold((fold) => {
+            const needle = taskNeedle(openLine.text, settings.tasks, fold);
+            return needle.startsWith(fold(task.title)) || coversTitle(needle, task.title, fold);
+          }));
     if (plausible) {
       plan.links.push({ line, checkbox, task, effective: projectCheckbox(task), userSynced: true, base, tracked: true, remembered: before.memo !== null });
       plan.continued.set(line, task);
@@ -1615,8 +1623,10 @@ function overlap(a: Set<string>, b: Set<string>): number {
 }
 
 function isProjectLabel(label: string, projects: BoardProject[]): boolean {
-  const wanted = matchText(label);
-  return wanted !== "" && projects.some((project) => [project.id, project.name, project.title].some((name) => matchText(name) === wanted));
+  return anyFold((fold) => {
+    const wanted = fold(label);
+    return wanted !== "" && projects.some((project) => [project.id, project.name, project.title].some((name) => fold(name) === wanted));
+  });
 }
 
 function bodyText(text: string, projects: BoardProject[]): string {
@@ -1632,24 +1642,29 @@ function projectLinksOf(text: string, projects: BoardProject[]): Set<string> {
   for (const match of text.matchAll(WIKILINK_RE)) {
     const target = ((match[1] ?? "").split("/").pop() ?? "").replace(/\.md$/i, "");
     const label = target.trim() === "" ? (match[2] ?? "") : target;
-    const wanted = matchText(label);
-    for (const project of projects) {
-      if (wanted !== "" && [project.id, project.name, project.title].some((name) => matchText(name) === wanted)) out.add(project.id);
-    }
+    const hits = firstFold((fold) => {
+      const wanted = fold(label);
+      if (wanted === "") return undefined;
+      const ids = projects.filter((project) => [project.id, project.name, project.title].some((name) => fold(name) === wanted)).map((project) => project.id);
+      return ids.length > 0 ? ids : undefined;
+    });
+    for (const id of hits ?? []) out.add(id);
   }
   return out;
 }
 
 function namesTask(text: string, data: BoardData, seen: SeenTask[]): boolean {
   const body = bodyText(text, data.projects);
-  const needle = matchText(body);
-  if (needle === "") return false;
   const seenTitle = normalizeText(body);
-  if (seen.some((item) => item.title === seenTitle)) return true;
-  return flattenTasks(data.tasks).some((task) => {
-    if (!isOpenTask(task)) return false;
-    const title = matchText(task.title);
-    return (title.length >= TITLE_HINT_MIN && needle.includes(title)) || (needle.length >= TITLE_HINT_MIN && title.includes(needle));
+  if (seenTitle !== "" && seen.some((item) => item.title === seenTitle)) return true;
+  const open = flattenTasks(data.tasks).filter(isOpenTask);
+  return anyFold((fold) => {
+    const needle = fold(body);
+    if (needle === "") return false;
+    return open.some((task) => {
+      const title = fold(task.title);
+      return (title.length >= TITLE_HINT_MIN && needle.includes(title)) || (needle.length >= TITLE_HINT_MIN && title.includes(needle));
+    });
   });
 }
 
@@ -1800,6 +1815,10 @@ function focusIdentities(settings: DelegationSettings, content: string): Set<str
   return out;
 }
 
+function lateLineSchedules(task: BoardTask, date: string): boolean {
+  return task.repeat === null && task.section === "open" && task.status !== "done" && migrationSkipOf(task, date) === null;
+}
+
 function lateLineTasks(settings: DelegationSettings, date: string, baseline: Baseline, scan: FocusScan): BoardTask[] {
   if (date !== localDate()) return [];
   const before = focusIdentities(settings, baseline.content);
@@ -1807,9 +1826,9 @@ function lateLineTasks(settings: DelegationSettings, date: string, baseline: Bas
   const out = new Map<string, BoardTask>();
   for (const entry of scan.entries) {
     const task = entry.match.task;
-    if (task === null || entry.held || before.has(identityText(entry.raw))) continue;
+    if (task === null || entry.held || entry.projectId === null || before.has(identityText(entry.raw))) continue;
     if (seen.has(seenKey({ projectId: task.projectId, title: normalizeText(task.title) }))) continue;
-    if (migrationSkipOf(task, date) === null) out.set(task.id, task);
+    if (lateLineSchedules(task, date)) out.set(task.id, task);
   }
   return [...out.values()];
 }
@@ -2135,8 +2154,10 @@ function onDailyWritten(settings: DelegationSettings, date: string, content: str
 }
 
 function isExactTitle(settings: DelegationSettings, text: string, task: BoardTask): boolean {
-  const needle = taskNeedle(text, settings.tasks);
-  return needle === matchText(task.title) || needle === matchText(joinReason(task.title, task.reason, settings.tasks.reasonSeparator));
+  return anyFold((fold) => {
+    const needle = taskNeedle(text, settings.tasks, fold);
+    return needle === fold(task.title) || needle === fold(joinReason(task.title, task.reason, settings.tasks.reasonSeparator));
+  });
 }
 
 function onDailyComposed(settings: DelegationSettings, date: string, content: string, heads: string[]): void {
@@ -2605,7 +2626,7 @@ function migrateFocus(settings: DelegationSettings, date: string): MigrationResu
     }
   }
   for (const task of linked.values()) {
-    if (task.scheduled === date) continue;
+    if (task.scheduled === date || task.repeat !== null) continue;
     const reason = migrationSkipOf(task, date);
     if (reason !== null) result.skipped.push({ taskId: task.id, title: task.title, scheduled: task.scheduled, reason });
     else {

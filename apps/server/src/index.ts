@@ -60,7 +60,7 @@ import { markShareEndpoint, stopTunnel } from "./tunnel.js";
 import { abortAllAsks } from "./share-service.js";
 import { mergeHooks, windowsHooks, wslHooks } from "./hooks-control.js";
 import { readSessionName, readTranscript } from "./transcript.js";
-import { isHubRun, scheduleTrail } from "./trail.js";
+import { isHubRun, scheduleTrail, trailTriggerOf } from "./trail.js";
 import { addClient, broadcast, clientCount, onBroadcast } from "./sse.js";
 import { HOOK_KINDS, type HookKind, type HookPayload, type SessionRecord } from "./types.js";
 import { whenBrainWritesIdle } from "./second-brain.js";
@@ -104,9 +104,10 @@ function transcriptPathFor(path: string | null, source: string | null): string |
 }
 
 function trailAfterHook(session: SessionRecord, kind: HookKind): void {
-  if ((kind !== "stop" && kind !== "session_end") || !session.transcriptPath || isHubRun(session)) return;
+  const trigger = trailTriggerOf(kind);
+  if (trigger === null || !session.transcriptPath || isHubRun(session)) return;
   try {
-    scheduleTrail(session.sessionId, kind);
+    scheduleTrail(session.sessionId, trigger);
   } catch (err) {
     console.error(`session trail schedule failed: ${String(err)}`);
   }

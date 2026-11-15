@@ -398,12 +398,25 @@ test("more than the map can hold becomes an overflow node that opens the session
   assert.equal(overflow?.title, "+3 more");
 });
 
-test("every node keeps its subtitle inside the box", () => {
+test("every node's drawn subtitle fits inside the box", () => {
   const graph = withSubagents(1, 9);
   for (const node of graph.nodes) {
     assert.ok(node.h >= 44 || node.kind === "hub" || node.subtitle === "", `${node.kind} too short for a subtitle`);
-    assert.ok(node.subtitle.length * 6.2 <= node.w - 44, `${node.kind} subtitle too long: ${node.subtitle}`);
+    const drawn = fitNodeText(node).subtitle;
+    assert.ok(drawn.length * 6.2 <= node.w - 44, `${node.kind} subtitle too long: ${drawn}`);
   }
+});
+
+test("nodes keep their full subtitle for the inspector and only the drawing clips it", () => {
+  const sessions = Array.from({ length: 12 }, (_, i) => session(`s${i}`, `C:/somewhere/very/deep/inside/a-folder-with-a-long-name-${i}`, "active"));
+  const graph = buildFlow(input({ sessions, codex: [codex("cx1", null), codex("cx2", null), codex("cx3", null)] }));
+  const hub = graph.nodes.find((n) => n.kind === "hub");
+  assert.equal(hub?.subtitle, "12 live · 3 codex · 0 tasks");
+  assert.notEqual(fitNodeText(hub!).subtitle, hub?.subtitle);
+  const outside = graph.nodes.find((n) => n.kind === "workspace" && n.title === OUTSIDE_LABEL);
+  assert.ok(outside);
+  assert.equal(outside.subtitle.endsWith("…"), false);
+  assert.ok(fitNodeText(outside).subtitle.length <= outside.subtitle.length);
 });
 
 test("fitNodeText clips title and subtitle to the node width, leaving room for the badge", () => {

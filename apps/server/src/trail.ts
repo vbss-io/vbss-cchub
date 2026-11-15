@@ -17,9 +17,14 @@ import {
   queueSessionBlock,
 } from "./second-brain.js";
 import { broadcast } from "./sse.js";
-import type { SessionRecord } from "./types.js";
+import type { HookKind, SessionRecord } from "./types.js";
 
 export type TrailTrigger = "stop" | "session_end";
+
+export function trailTriggerOf(kind: HookKind): TrailTrigger | null {
+  if (kind === "session_end") return "session_end";
+  return kind === "stop" || kind === "stop_failure" ? "stop" : null;
+}
 
 export interface TrailLevel {
   window: number;

@@ -6,7 +6,7 @@ import type { TaskRecord, WorkspaceRecord } from "../delegation";
 import { FlowInspector } from "../components/FlowInspector";
 import { RunsFilters, type RunsFilterOption } from "../components/RunsFilters";
 import { Toggletip } from "../components/Toggletip";
-import { buildFlow, relatives, type FlowNode, type Orientation } from "../flow-layout";
+import { buildFlow, fitNodeText, relatives, type FlowNode, type Orientation } from "../flow-layout";
 import { mapSummaryLine, type MapScope } from "../sessions-mode";
 import { IconCode, IconCodex, IconDesktop, IconFlow, IconHub, IconSearch, IconTasks, IconTerminal, IconWorkspaces } from "../icons";
 import { isEmpty, isStale } from "../stale";
@@ -648,6 +648,7 @@ function FlowCanvasView({ sessions: allSessions, codexSessions: allCodex, tasks:
                 );
               })}
               {graph.nodes.map((node) => {
+                const drawn = fitNodeText(node);
                 const isSelected = node.id === selected;
                 const dim = (highlight != null && !highlight.has(node.id)) || (node.dim && node.kind !== "hub" && highlight == null);
                 return (
@@ -662,16 +663,17 @@ function FlowCanvasView({ sessions: allSessions, codexSessions: allCodex, tasks:
                     }}
                     onMouseEnter={() => setHovered(node.id)}
                   >
+                    <title>{node.subtitle === "" ? node.title : `${node.title}\n${node.subtitle}`}</title>
                     <rect width={node.w} height={node.h} rx={10} />
                     <rect className="flow__stripe" width={4} height={node.h} rx={2} />
                     <g className="flow__icon" transform={`translate(12 ${node.kind === "hub" ? 14 : 13})`}>
                       {kindIcon(node)}
                     </g>
                     <text className="flow__title" x={32} y={node.kind === "hub" ? 24 : 23}>
-                      {node.title}
+                      {drawn.title}
                     </text>
                     <text className="flow__sub" x={32} y={node.kind === "hub" ? 42 : 41}>
-                      {node.subtitle}
+                      {drawn.subtitle}
                     </text>
                     {node.badge && (
                       <text className="flow__badge" x={node.w - 12} y={23} textAnchor="end">
@@ -720,6 +722,7 @@ function FlowCanvasView({ sessions: allSessions, codexSessions: allCodex, tasks:
             collapsedLanes={collapsedLanes}
             expandedSubagents={expandedSubagents}
             expandedTaskGroups={expandedTaskGroups}
+            endedAgentsFor={endedAgentsFor}
             onClose={() => setSelected(null)}
             onOpenSession={onOpenSession}
             onOpenCodex={onOpenCodex}
@@ -746,6 +749,7 @@ interface PanelProps {
   collapsedLanes: Set<string>;
   expandedSubagents: Set<string>;
   expandedTaskGroups: Set<string>;
+  endedAgentsFor: Set<string>;
   onClose: () => void;
   onOpenSession: (sessionId: string) => void;
   onOpenCodex: (id: string) => void;
@@ -766,6 +770,7 @@ function FlowInspectorPanel({
   collapsedLanes,
   expandedSubagents,
   expandedTaskGroups,
+  endedAgentsFor,
   onClose,
   onOpenSession,
   onOpenCodex,
@@ -791,6 +796,7 @@ function FlowInspectorPanel({
       origin={origin}
       laneCollapsed={collapsedLanes.has(node.lane)}
       expanded={expanded}
+      endedListed={node.sessionId !== undefined && endedAgentsFor.has(node.sessionId)}
       onClose={onClose}
       onOpenSession={onOpenSession}
       onOpenCodex={onOpenCodex}

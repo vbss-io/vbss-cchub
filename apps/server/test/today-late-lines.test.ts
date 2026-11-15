@@ -273,3 +273,83 @@ describe("late lines: a skill writes the focus after the hub created the daily",
     assert.equal(read(root, dailyRel(TODAY)), before);
   });
 });
+
+const ACME = project(
+  "Acme",
+  [
+    "- [ ] Revisar o contrato",
+    "- [ ] Weekly review 🔁 every week",
+    "- [x] Enviar a proposta",
+    "- [ ] **Feegow**: sincronizar a agenda",
+    "- [ ] Feegow: sincronizar a agenda",
+  ],
+  [`- [x] Fechar o caixa ${DONE} ${TODAY}`],
+);
+
+function acmeLab(): { root: string; settings: DelegationSettings } {
+  const root = lab();
+  write(root, "projects/acme.md", ACME);
+  return { root, settings: useVault(root) };
+}
+
+describe("late lines: only plain, labeled, open, unscheduled tasks are scheduled", () => {
+  it("never schedules from a line without a project label, even an exact one, and still offers the line", () => {
+    const { root, settings } = acmeLab();
+    today.todayApi.createToday(settings, TODAY);
+    const acme = read(root, "projects/acme.md");
+    const cemig = read(root, "projects/cemig.md");
+    const lines = ["- [ ] revisar o contrato do aluguel com a imobiliária", "- [ ] Relatório mensal"];
+    appendToFocus(root, TODAY, lines);
+    assert.equal(read(root, "projects/acme.md"), acme);
+    assert.equal(read(root, "projects/cemig.md"), cemig);
+    assert.equal(taskIn(settings, "acme", "Revisar o contrato").scheduled, null);
+    assert.equal(taskIn(settings, "cemig", "Relatório mensal").scheduled, null);
+    const payload = today.readToday(settings, TODAY);
+    assert.deepEqual(payload.inNote, lines);
+    assert.deepEqual(payload.inNoteLinks.find((item) => item.line === lines[1])?.taskId, taskIn(settings, "cemig", "Relatório mensal").id);
+  });
+
+  it("still schedules a labeled prefix line inside its own project", () => {
+    const { root, settings } = acmeLab();
+    today.todayApi.createToday(settings, TODAY);
+    appendToFocus(root, TODAY, ["- [ ] [[acme|Acme]] - Revisar o contrato do aluguel com a imobiliária"]);
+    assert.equal(taskIn(settings, "acme", "Revisar o contrato").scheduled, TODAY);
+  });
+
+  it("never schedules a recurring task, a ticked open task or a task done today", () => {
+    const { root, settings } = acmeLab();
+    today.todayApi.createToday(settings, TODAY);
+    const acme = read(root, "projects/acme.md");
+    appendToFocus(root, TODAY, ["- [ ] [[acme|Acme]] - Weekly review", "- [x] [[acme|Acme]] - Enviar a proposta", "- [x] [[acme|Acme]] - Fechar o caixa"]);
+    assert.equal(read(root, "projects/acme.md").includes(SCHEDULED), false);
+    assert.equal(read(root, "projects/acme.md"), acme);
+    assert.equal(taskIn(settings, "acme", "Weekly review").scheduled, null);
+    assert.equal(taskIn(settings, "acme", "Weekly review").repeat, "every week");
+  });
+
+  it("the morning migration leaves a recurring task without a scheduled date", () => {
+    const content = ["---", "type: daily", "---", "", `# ${TODAY}`, "", "## Focus", "", "- [ ] [[acme|Acme]] - Weekly review", "- [ ] [[acme|Acme]] - Revisar o contrato", "", "## Meetings", "", "-", ""].join("\n");
+    const root = lab({ [TODAY]: content });
+    write(root, "projects/acme.md", ACME);
+    const settings = useVault(root);
+    const result = today.todayApi.migrateFocus(settings, TODAY);
+    assert.equal(result.scheduled, 1);
+    assert.equal(taskIn(settings, "acme", "Revisar o contrato").scheduled, TODAY);
+    assert.equal(taskIn(settings, "acme", "Weekly review").scheduled, null);
+    assert.ok(read(root, "projects/acme.md").includes("- [ ] Weekly review 🔁 every week\n"));
+  });
+
+  it("keeps two tasks that differ only by emphasis apart when the daily is created", () => {
+    const { root, settings } = acmeLab();
+    const bold = taskIn(settings, "acme", "**Feegow**: sincronizar a agenda");
+    today.todayApi.schedule(settings, { projectId: "acme", line: bold.line, raw: bold.raw, date: TODAY });
+    today.todayApi.createToday(settings, TODAY);
+    const focus = read(root, dailyRel(TODAY)).split("\n").filter((line) => line.includes("Feegow"));
+    assert.equal(focus.length, 1);
+    assert.ok((focus[0] as string).includes("**Feegow**: sincronizar a agenda"));
+    const payload = today.readToday(settings, TODAY);
+    assert.deepEqual(payload.ambiguous, []);
+    assert.deepEqual(payload.focus.map((entry) => entry.task.id), [bold.id]);
+    assert.equal(taskIn(settings, "acme", "Feegow: sincronizar a agenda").scheduled, null);
+  });
+});

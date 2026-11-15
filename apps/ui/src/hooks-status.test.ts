@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { hooksView } from "./hooks-status";
+import { HOOK_EVENTS_HINT, hooksView } from "./hooks-status";
 
 describe("hooks status view", () => {
   it("shows checking until the status arrives", () => {
@@ -8,11 +8,17 @@ describe("hooks status view", () => {
   });
 
   it("offers an update when an older install misses hub events", () => {
-    const view = hooksView({ installed: false, outdated: true, missing: ["StopFailure", "PermissionRequest"], events: ["Stop"] });
+    const view = hooksView({ installed: false, outdated: true, missing: ["StopFailure", "SessionEnd"], events: ["Stop"] });
     assert.equal(view.tag, "update available");
     assert.equal(view.tone, "warn");
     assert.equal(view.action, "Update hooks");
-    assert.equal(view.detail, "missing StopFailure, PermissionRequest");
+    assert.equal(view.detail, "missing StopFailure, SessionEnd");
+  });
+
+  it("describes only the events the hub registers", () => {
+    assert.doesNotMatch(HOOK_EVENTS_HINT, /permission request/i);
+    assert.match(HOOK_EVENTS_HINT, /notifications \(such as permission prompts\)/);
+    assert.match(HOOK_EVENTS_HINT, /failed stops/);
   });
 
   it("reads installed and not installed as before", () => {

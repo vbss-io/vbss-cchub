@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { HooksStatus } from "../../api";
-import { hooksView } from "../../hooks-status";
+import { HOOK_EVENTS_HINT, hooksView } from "../../hooks-status";
 import type { ConnectStatus, McpClient, ShellKind } from "../../delegation";
 
 const MCP_LABEL: Record<McpClient, string> = {
@@ -40,7 +40,7 @@ export function ConnectionsTab({ enabled, hubUrl, connect, hooks, hooksBusy, onT
       <section className="settings__section" id="settings-hooks">
         <h2>Hooks</h2>
         <p className="hint">
-          Claude Code hooks are how sessions reach the hub: session start, prompts, notifications, permission requests, stops and failed stops, subagent start and stop, session end. They post to <code>{hubUrl}</code> and never block Claude.
+          Claude Code hooks are how sessions reach the hub: {HOOK_EVENTS_HINT}. They post to <code>{hubUrl}</code> and never block Claude.
         </p>
         <div className="statusrow">
           <span className={`tag tag--${view.tone}`}>{view.tag}</span>

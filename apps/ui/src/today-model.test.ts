@@ -41,6 +41,7 @@ import {
   noteLineItems,
   canAddToFocus,
   addableNoteTasks,
+  scheduledElsewhere,
   outOfSyncKey,
   parseDismissedOutOfSync,
   taskOfOutOfSync,
@@ -303,17 +304,27 @@ describe("note lines and ambiguity", () => {
     assert.deepEqual(noteLineItems({ unlinked: ["- free"], inNote: ["- x"] }, tasks), [{ line: "- x", task: null }]);
   });
 
-  it("adds to focus only open tasks and tasks finished that day, once each", () => {
-    assert.equal(canAddToFocus(task("t", "p", 1), TODAY), true);
-    assert.equal(canAddToFocus(task("t", "p", 1, { status: "blocked", scheduled: "2026-11-20" }), TODAY), true);
-    assert.equal(canAddToFocus(task("t", "p", 1, { scheduled: TODAY }), TODAY), false);
-    assert.equal(canAddToFocus(task("t", "p", 1, { status: "archived" }), TODAY), false);
-    assert.equal(canAddToFocus(task("t", "p", 1, { status: "done", doneAt: "2026-11-01" }), TODAY), false);
-    assert.equal(canAddToFocus(task("t", "p", 1, { status: "done", doneAt: TODAY }), TODAY), true);
+  it("adds to focus only open tasks without a scheduled date, once each", () => {
+    assert.equal(canAddToFocus(task("t", "p", 1)), true);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "blocked" })), true);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "doing" })), true);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "blocked", scheduled: "2026-11-20" })), false);
+    assert.equal(canAddToFocus(task("t", "p", 1, { scheduled: TODAY })), false);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "archived" })), false);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "done", doneAt: "2026-11-01" })), false);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "done", doneAt: TODAY })), false);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "done", doneAt: null })), false);
     const a = task("a", "p", 1);
     const done = task("d", "p", 2, { status: "done", doneAt: "2026-11-01" });
-    const items = [{ line: "- a", task: a }, { line: "- a again", task: a }, { line: "- d", task: done }, { line: "- free", task: null }];
-    assert.deepEqual(addableNoteTasks(items, TODAY).map((item) => item.id), ["a"]);
+    const planned = task("s", "p", 3, { status: "blocked", scheduled: "2026-11-20" });
+    const items = [{ line: "- a", task: a }, { line: "- a again", task: a }, { line: "- d", task: done }, { line: "- s", task: planned }, { line: "- free", task: null }];
+    assert.deepEqual(addableNoteTasks(items).map((item) => item.id), ["a"]);
+  });
+
+  it("names the other day a note line's task is scheduled for", () => {
+    assert.equal(scheduledElsewhere(task("t", "p", 1, { scheduled: "2026-11-20" }), TODAY), "Scheduled 2026-11-20");
+    assert.equal(scheduledElsewhere(task("t", "p", 1, { scheduled: TODAY }), TODAY), null);
+    assert.equal(scheduledElsewhere(task("t", "p", 1), TODAY), null);
   });
 
   it("gives a short hint for every reason", () => {

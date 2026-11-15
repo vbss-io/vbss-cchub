@@ -88,6 +88,7 @@ import {
   pickerTasks,
   recentlyDoneTasks,
   rootNodeOf,
+  scheduledElsewhere,
   START_DAY_EVENT,
   startPanelAuto,
   targetOfTask,
@@ -1010,7 +1011,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const boardTasks = board?.tasks ?? [];
   const noteLines = data ? noteLineItems(data, boardTasks) : [];
   const noteActions = data !== null && data.focusSource === "scheduled" && tasksEnabled && date >= today;
-  const addable = noteActions ? addableNoteTasks(noteLines, date) : [];
+  const addable = noteActions ? addableNoteTasks(noteLines) : [];
   const ambiguous = data?.ambiguous ?? [];
   const outOfSync = visibleOutOfSync(data?.outOfSync, kept);
   const unmatched = data?.unmatched ?? [];
@@ -1650,7 +1651,16 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                   {noteLines.length > 0 && (
                     <ul className="today__plain">
                       {noteLines.map(({ line, task }, index) => {
-                        const action = noteActions && task !== null && canAddToFocus(task, date) ? task : null;
+                        const action = noteActions && task !== null && canAddToFocus(task) ? task : null;
+                        const planned = noteActions && task !== null ? scheduledElsewhere(task, date) : null;
+                        if (planned !== null) {
+                          return (
+                            <li key={`${index}:${line}`} className="today__row today__note-line">
+                              <span className="today__raw today__note-text">{line.trim()}</span>
+                              <span className="hint">{planned}</span>
+                            </li>
+                          );
+                        }
                         if (action === null) {
                           return (
                             <li key={`${index}:${line}`} className="today__raw">

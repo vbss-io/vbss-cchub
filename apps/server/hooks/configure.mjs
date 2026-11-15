@@ -23,13 +23,16 @@ const posix = (value) => value.replace(/\\/g, "/");
 const quotedRunner = runner === "node" || runner === "sh" ? runner : `"${posix(runner)}"`;
 const command = `${source ? `HUB_SOURCE=${source} ` : ""}${quotedRunner} "${posix(notifyPath)}"`;
 
-const isOurs = (entry) =>
-  Array.isArray(entry?.hooks) &&
-  entry.hooks.some(
-    (h) =>
-      typeof h?.command === "string" &&
-      (h.command.includes("notify.mjs") || h.command.includes("notify.sh")),
-  );
+const isHubHook = (h) => typeof h?.command === "string" && (h.command.includes("notify.mjs") || h.command.includes("notify.sh"));
+
+const isOurs = (entry) => Array.isArray(entry?.hooks) && entry.hooks.some(isHubHook);
+
+const withoutHub = (entries) =>
+  entries.flatMap((entry) => {
+    if (!isOurs(entry)) return [entry];
+    const rest = entry.hooks.filter((h) => !isHubHook(h));
+    return rest.length > 0 ? [{ ...entry, hooks: rest }] : [];
+  });
 
 function readSettings() {
   if (!existsSync(settingsPath)) return {};
@@ -48,8 +51,7 @@ function writeSettings(settings) {
 
 const hubHook = (event) => (TIMEOUTS[event] ? { type: "command", command, timeout: TIMEOUTS[event] } : { type: "command", command });
 
-const isCurrent = (event, entry) =>
-  !TIMEOUTS[event] || entry.hooks.some((h) => typeof h?.command === "string" && typeof h.timeout === "number" && h.timeout > 0);
+const isCurrent = (event, entry) => !TIMEOUTS[event] || entry.hooks.some((h) => isHubHook(h) && typeof h.timeout === "number" && h.timeout > 0);
 
 function status(settings) {
   const hooks = settings?.hooks ?? {};
@@ -62,9 +64,7 @@ function status(settings) {
 function install(settings) {
   settings.hooks ??= {};
   for (const event of EVENTS) {
-    const list = (Array.isArray(settings.hooks[event]) ? settings.hooks[event] : []).filter(
-      (entry) => !isOurs(entry),
-    );
+    const list = withoutHub(Array.isArray(settings.hooks[event]) ? settings.hooks[event] : []);
     list.push({ hooks: [hubHook(event)] });
     settings.hooks[event] = list;
   }
@@ -75,7 +75,7 @@ function uninstall(settings) {
   const hooks = settings?.hooks ?? {};
   for (const event of EVENTS) {
     if (!Array.isArray(hooks[event])) continue;
-    hooks[event] = hooks[event].filter((entry) => !isOurs(entry));
+    hooks[event] = withoutHub(hooks[event]);
     if (hooks[event].length === 0) delete hooks[event];
   }
   return settings;

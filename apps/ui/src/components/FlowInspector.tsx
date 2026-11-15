@@ -23,6 +23,7 @@ interface Props {
   onToggleEnded: (sessionId: string) => void;
   onToggleTaskGroup: (key: string) => void;
   expanded: boolean;
+  endedListed: boolean;
 }
 
 const KIND_LABEL: Record<FlowNode["kind"], string> = {
@@ -60,6 +61,7 @@ export function FlowInspector({
   onToggleEnded,
   onToggleTaskGroup,
   expanded,
+  endedListed,
 }: Props) {
   const rows: Row[] = [];
   const actions: { label: string; run: () => void; primary?: boolean }[] = [];
@@ -95,6 +97,7 @@ export function FlowInspector({
     rows.push({ label: "Subagents", value: node.title });
     rows.push({ label: "Running", value: node.subtitle });
     actions.push({ label: expanded ? "Collapse" : "Expand", run: () => onToggleSubagents(node.sessionId!), primary: true });
+    if (expanded && endedListed) actions.push({ label: "Hide ended subagents", run: () => onToggleEnded(node.sessionId!) });
     actions.push({ label: "Open session", run: () => onOpenSession(node.sessionId!) });
   } else if (node.kind === "taskgroup") {
     rows.push({ label: "Tasks", value: node.subtitle });
@@ -105,6 +108,7 @@ export function FlowInspector({
     if (node.sessionId) actions.push({ label: "Open session", run: () => onOpenSession(node.sessionId!), primary: true });
   } else if (node.kind === "more" && node.sessionId) {
     if (node.moreKind === "ended") actions.push({ label: "List ended subagents", run: () => onToggleEnded(node.sessionId!), primary: true });
+    if (node.moreKind === "overflow" && endedListed) actions.push({ label: "Hide ended subagents", run: () => onToggleEnded(node.sessionId!) });
     actions.push({ label: "Open session", run: () => onOpenSession(node.sessionId!), primary: node.moreKind !== "ended" });
   } else if (node.kind === "hub") {
     rows.push({ label: "Summary", value: node.subtitle });

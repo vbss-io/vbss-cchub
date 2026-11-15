@@ -2478,11 +2478,31 @@ export function matchText(text: string): string {
   return normalizeText(stripInlineMarkup(text));
 }
 
+export type TextFold = (text: string) => string;
+
+const TEXT_FOLDS: readonly TextFold[] = [normalizeText, matchText];
+
+export function firstFold<T>(attempt: (fold: TextFold) => T | undefined): T | undefined {
+  for (const fold of TEXT_FOLDS) {
+    const result = attempt(fold);
+    if (result !== undefined) return result;
+  }
+  return undefined;
+}
+
+export function anyFold(test: (fold: TextFold) => boolean): boolean {
+  return TEXT_FOLDS.some(test);
+}
+
 function resolveProjectLabel(label: string, projects: BoardProject[]): string | null {
-  const wanted = matchText(label);
-  if (wanted === "") return null;
-  const hits = projects.filter((project) => matchText(project.name) === wanted || matchText(project.title) === wanted);
-  return hits.length === 1 ? (hits[0] as BoardProject).id : null;
+  const resolved = firstFold((fold) => {
+    const wanted = fold(label);
+    if (wanted === "") return undefined;
+    const hits = projects.filter((project) => fold(project.name) === wanted || fold(project.title) === wanted);
+    if (hits.length === 0) return undefined;
+    return hits.length === 1 ? (hits[0] as BoardProject).id : null;
+  });
+  return resolved ?? null;
 }
 
 interface LabelSplit {
@@ -2523,20 +2543,23 @@ export interface TaskMatch {
   candidates: string[];
 }
 
-export function taskNeedle(text: string, config: TasksFeatureSettings): string {
+export function taskNeedle(text: string, config: TasksFeatureSettings, fold: TextFold = normalizeText): string {
   const clean = removePriorityTokens(splitSignifiers(text.trim(), config).text, config);
-  return matchText(matchPrefix(clean, config)?.title ?? clean);
+  return fold(matchPrefix(clean, config)?.title ?? clean);
 }
 
 function matchTask(text: string, projectId: string | null, pool: BoardTask[], config: TasksFeatureSettings): TaskMatch {
-  const needle = taskNeedle(text, config);
-  if (needle === "") return { task: null, candidates: [] };
+  return firstFold((fold) => rankTasks(taskNeedle(text, config, fold), fold, projectId, pool, config)) ?? { task: null, candidates: [] };
+}
+
+function rankTasks(needle: string, fold: TextFold, projectId: string | null, pool: BoardTask[], config: TasksFeatureSettings): TaskMatch | undefined {
+  if (needle === "") return undefined;
   let bestRank = Number.POSITIVE_INFINITY;
   let best: BoardTask[] = [];
   for (const task of pool) {
     if (projectId !== null && task.projectId !== projectId) continue;
-    const title = matchText(task.title);
-    const full = matchText(joinReason(task.title, task.reason, config.reasonSeparator));
+    const title = fold(task.title);
+    const full = fold(joinReason(task.title, task.reason, config.reasonSeparator));
     let rank = Number.POSITIVE_INFINITY;
     if (needle === full || needle === title) rank = 0;
     else if (prefixMatches(needle, full) || prefixMatches(needle, title)) rank = 1;
@@ -2547,6 +2570,7 @@ function matchTask(text: string, projectId: string | null, pool: BoardTask[], co
     }
     best.push(task);
   }
+  if (best.length === 0) return undefined;
   if (best.length === 1) return { task: best[0] as BoardTask, candidates: [] };
   return { task: null, candidates: best.slice(0, MAX_CANDIDATES).map((task) => task.id) };
 }
@@ -2634,12 +2658,19 @@ function recurrenceIndex(tasks: BoardTask[]): RecurrenceIndex {
   return { pool: flattenTasks(tasks).filter((task) => !excluded.has(task.id)), roots, originals: tasks.filter(isRecurringOriginal), occurrences };
 }
 
-function occurrenceOf(index: RecurrenceIndex, original: BoardTask, needle: string, copy: BoardTask): boolean {
-  const title = matchText(copy.title);
-  const own = matchText(original.title);
+type NeedleOf = (fold: TextFold) => string;
+
+function occurrenceUnder(fold: TextFold, index: RecurrenceIndex, original: BoardTask, needleOf: NeedleOf, copy: BoardTask): boolean | undefined {
+  const title = fold(copy.title);
+  const own = fold(original.title);
   if (title === own) return true;
-  if (index.originals.some((other) => other.id !== original.id && other.projectId === copy.projectId && matchText(other.title) === title)) return false;
-  return title === needle || prefixMatches(title, own) || prefixMatches(title, needle);
+  if (index.originals.some((other) => other.id !== original.id && other.projectId === copy.projectId && fold(other.title) === title)) return false;
+  const needle = needleOf(fold);
+  return title === needle || prefixMatches(title, own) || prefixMatches(title, needle) ? true : undefined;
+}
+
+function occurrenceOf(index: RecurrenceIndex, original: BoardTask, needleOf: NeedleOf, copy: BoardTask): boolean {
+  return firstFold((fold) => occurrenceUnder(fold, index, original, needleOf, copy)) ?? false;
 }
 
 function recurringRoot(index: RecurrenceIndex, task: BoardTask | null): BoardTask | null {
@@ -2647,9 +2678,9 @@ function recurringRoot(index: RecurrenceIndex, task: BoardTask | null): BoardTas
   return original && isRecurringOriginal(original) ? original : null;
 }
 
-function recurredOn(index: RecurrenceIndex, original: BoardTask | null, needle: string, date: string): boolean {
+function recurredOn(index: RecurrenceIndex, original: BoardTask | null, needleOf: NeedleOf, date: string): boolean {
   if (!original) return false;
-  return index.occurrences.some((copy) => copy.projectId === original.projectId && copy.doneAt === date && occurrenceOf(index, original, needle, copy));
+  return index.occurrences.some((copy) => copy.projectId === original.projectId && copy.doneAt === date && occurrenceOf(index, original, needleOf, copy));
 }
 
 export interface FocusChild {
@@ -2707,7 +2738,7 @@ function focusEntries(settings: DelegationSettings, date: string, content: strin
       const match = matchTask(split.text, split.projectId, index.pool, settings.tasks);
       blockEnd = entry.line + taskBlock(content, entry.line).split(LINE_SPLIT_RE).length;
       const root = recurringRoot(index, match.task);
-      const recurred = recurredOn(index, root, taskNeedle(split.text, settings.tasks), date);
+      const recurred = recurredOn(index, root, (fold) => taskNeedle(split.text, settings.tasks, fold), date);
       const held = root !== null && (date !== localDate() || match.task?.id !== root.id || recurred);
       current = { line: entry.line, raw: entry.raw, checkbox: entry.state, label: split.label, projectId: split.projectId, text: split.text, match, recurred, recurring: root !== null, held, children: [] };
       entries.push(current);
