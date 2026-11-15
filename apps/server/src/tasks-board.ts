@@ -1640,7 +1640,8 @@ function scheduledInsertAt(rest: string, spans: TokenSpan[], config: TasksFeatur
   return { at: body.trimEnd().length, before: false };
 }
 
-const LOOSE_SCHEDULED_RE = new RegExp(`(\\s*)${SCHEDULED_MARK}\\uFE0F?(?:[ \\t]*(?:\\d\\S*|\\p{L}[\\p{L}\\p{N}_-]*))?(\\s*)`, "gu");
+const LOOSE_SCHEDULED_RE = new RegExp(`(\\s*)${SCHEDULED_MARK}\\uFE0F?([ \\t]*\\d\\S*)?(\\s*)`, "gu");
+const SIGNIFIER_TAIL_RE = new RegExp(`^(?:\\s*(?:${STOP_SOURCE}(?:[ \\t]*[^\\s]+)?|\\^[A-Za-z0-9-]+))*\\s*$`, "u");
 const SCHEDULED_LEAD_RE = new RegExp(`^${SCHEDULED_MARK}\\uFE0F?[ \\t]*`, "u");
 const BLOCK_ID_RE = /\s+\^[A-Za-z0-9-]+\s*$/u;
 
@@ -1659,13 +1660,18 @@ function withoutSpans(rest: string, spans: TokenSpan[]): string {
   return next;
 }
 
-function scheduledSpans(rest: string, spans: TokenSpan[]): TokenSpan[] {
+function isSignifierTail(tail: string, config: TasksFeatureSettings): boolean {
+  return SIGNIFIER_TAIL_RE.test(removePriorityTokens(stripSignifiers(tail, signifierMatches(tail, config)), config));
+}
+
+function scheduledSpans(rest: string, spans: TokenSpan[], config: TasksFeatureSettings): TokenSpan[] {
   const own = spans.filter((span) => span.mark === SCHEDULED_MARK);
   const guarded = protectedSpans(rest);
   for (const match of rest.matchAll(LOOSE_SCHEDULED_RE)) {
     const at = match.index ?? 0;
     const start = at + (match[1] ?? "").length;
-    const end = at + match[0].length - (match[2] ?? "").length;
+    const end = at + match[0].length - (match[3] ?? "").length;
+    if (match[2] === undefined && !isSignifierTail(rest.slice(end), config)) continue;
     if (guarded.some(([from, to]) => start >= from && start < to)) continue;
     if (spans.some((span) => start < span.end && end > span.start)) continue;
     own.push({ mark: SCHEDULED_MARK, start, end });
@@ -1679,7 +1685,7 @@ export function withScheduledToken(raw: string, config: TasksFeatureSettings, sc
   const rest = parts[5] as string;
   const head = raw.slice(0, raw.length - rest.length);
   const spans = tokenSpans(rest, config);
-  const own = scheduledSpans(rest, spans);
+  const own = scheduledSpans(rest, spans, config);
   if (scheduled === null) return `${head}${withoutSpans(rest, own)}`;
   const [first, ...others] = own;
   if (first !== undefined) {

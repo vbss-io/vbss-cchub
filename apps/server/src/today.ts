@@ -504,6 +504,7 @@ interface BaselineState {
   unmatched: StoredUnmatched[];
   dismissed: string[];
   sync?: SyncSets;
+  inserted?: string[];
 }
 
 interface StoredHold {
@@ -579,7 +580,9 @@ function parseState(raw: string): BaselineState | null {
     }
   }
   const sync = parseSync(value.sync);
+  const inserted = parseStrings(value.inserted);
   return {
+    ...(inserted.length > 0 ? { inserted } : {}),
     marks,
     seen: parseSeen(value.seen),
     focus: parseSeen(value.focus),
@@ -2323,6 +2326,42 @@ function dropBlocks(doc: ParsedDoc, content: string, starts: number[], mirrors: 
   return doomed.size;
 }
 
+function hubCopies(content: string, texts: string[], plan: TickPlan, members: MemberLine[], inserted: readonly string[]): number[] {
+  if (inserted.length === 0) return [];
+  const written = new Set(inserted);
+  const fresh = new Set(members.filter((member) => plan.pairs.get(member.line) === undefined).map((member) => member.task.id));
+  const taken = new Set<string>();
+  const out: number[] = [];
+  for (const member of members) {
+    const text = texts[member.line] as string;
+    const base = plan.pairs.get(member.line);
+    if (base === undefined || plan.baseTexts[base] !== text || !written.has(text)) continue;
+    if (!fresh.has(member.task.id) || taken.has(member.task.id) || out.includes(member.line) || blockLength(content, member.line) !== 1) continue;
+    taken.add(member.task.id);
+    out.push(member.line);
+  }
+  return out;
+}
+
+function hubInserted(previous: readonly string[], pruned: readonly string[], added: readonly string[], finalTexts: readonly string[]): string[] {
+  const left = new Map<string, number>();
+  for (const text of finalTexts) left.set(text, (left.get(text) ?? 0) + 1);
+  const removed = [...pruned];
+  const out: string[] = [];
+  for (const text of [...previous, ...added]) {
+    const at = removed.indexOf(text);
+    if (at !== -1) {
+      removed.splice(at, 1);
+      continue;
+    }
+    const count = left.get(text) ?? 0;
+    if (count === 0) continue;
+    left.set(text, count - 1);
+    out.push(text);
+  }
+  return out;
+}
+
 function mirrorLines(members: MemberLine[], starts: number[]): Map<number, ReadonlySet<number>> {
   const out = new Map<number, ReadonlySet<number>>();
   for (const start of starts) {
@@ -2408,7 +2447,17 @@ function isFirstSightStable(settings: DelegationSettings, date: string, content:
 
 const HUB_WRITE_LIMIT = 64;
 const STABLE_SEPARATOR = `${KEY_SEPARATOR}${KEY_SEPARATOR}`;
+const MISSING_DAILY_KEY = `${STABLE_SEPARATOR}missing`;
 const hubWrites = new Set<string>();
+
+function isGoneForGood(settings: DelegationSettings, date: string, options: MirrorOptions): boolean {
+  if (options.stable === MISSING_DAILY_KEY) return true;
+  if (stableDelayMs > 0) {
+    waitForStable(date, MISSING_DAILY_KEY, options.source ?? "api");
+    return false;
+  }
+  return (stableReread ?? rereadDaily)(settings, date) === null;
+}
 
 const contentHash = (content: string): string => createHash("sha1").update(content).digest("hex");
 
@@ -2440,8 +2489,8 @@ function projectsKey(settings: DelegationSettings, projectIds: ReadonlySet<strin
   return parts.join(KEY_SEPARATOR);
 }
 
-function isSettled(settings: DelegationSettings, date: string, content: string, plan: Reconciled, projectPart: string, options: MirrorOptions): boolean {
-  const removal = plan.removed > 0;
+function isSettled(settings: DelegationSettings, date: string, content: string, plan: Reconciled, projectPart: string, options: MirrorOptions, pruning: boolean): boolean {
+  const removal = plan.removed > 0 || pruning;
   if (projectPart === "" && !removal && plan.schedule.length === 0) return true;
   const key = projectPart === "" ? content : `${content}${STABLE_SEPARATOR}${projectPart}`;
   if (options.stable === key) return true;
@@ -2478,7 +2527,7 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
   let applied = 0;
   try {
     const daily = readDailySafe(settings, date);
-    if (daily !== null && !daily.exists && getTodayBaseline(date) !== null) deleteTodayBaseline(date);
+    if (daily !== null && !daily.exists && getTodayBaseline(date) !== null && isGoneForGood(settings, date, options)) deleteTodayBaseline(date);
     if (daily === null || !daily.exists) return skip("no-daily");
     let data = loadBoardData(settings);
     if (data === null) return skip("no-board");
@@ -2504,8 +2553,9 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
       return memo === undefined ? null : resolveMemo(memo, resolver);
     };
     const reconciled = reconcile(date, base, synced, datedNow, data, options.hints ?? new Set<string>(), new Set(held.keys()), resolve);
+    const pruned = hubCopies(daily.content, texts, firstPlan, synced, baseline.state.inserted ?? []).filter((line) => !reconciled.drop.includes(line));
     const projectPart = reconciled.projects.size === 0 ? "" : projectsKey(settings, reconciled.projects);
-    if (projectPart === null || !isSettled(settings, date, daily.content, reconciled, projectPart, options)) return skip("unsettled");
+    if (projectPart === null || !isSettled(settings, date, daily.content, reconciled, projectPart, options, pruned.length > 0)) return skip("unsettled");
     if (applyDates(settings, date, reconciled) > 0) {
       data = loadBoardData(settings) ?? data;
       scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
@@ -2580,11 +2630,14 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
       const line = originals[link.line];
       if (line) line.text = withCheckbox(line.text, link.effective);
     }
-    dropBlocks(doc, daily.content, reconciled.drop, mirrorLines(members, reconciled.drop));
+    const drops = [...reconciled.drop, ...pruned];
+    dropBlocks(doc, daily.content, drops, mirrorLines(members, drops));
     const allowed = renderDoc(doc);
     const present = presenceOf(scanDaily(settings, date, allowed, data.projects, data.tasks)).lines;
     const wanted = computeFocus(settings, data, date).filter((entry) => reconciled.insert.has(entry.task.id) || present.has(entry.task.id));
+    const prior = new Set(doc.lines);
     const insertion = insertMissing(settings, date, doc, data, wanted, baseline.state, reconciled.insert);
+    const added = doc.lines.filter((line) => !prior.has(line)).map((line) => line.text);
     const next = renderDoc(doc);
     if (!keepsEveryLine(allowed, next)) {
       console.error(`focus mirror refused a change that would lose a line of ${date}`);
@@ -2643,9 +2696,11 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
       const at = positions.get(originals[item.index] as DocLine);
       return at === undefined ? [] : [{ ...item, index: at }];
     });
+    const inserted = hubInserted(baseline.state.inserted ?? [], pruned.map((line) => texts[line] as string), added, finalTexts);
     storeBaseline(date, daily.path, {
       content: renderDoc(baseDoc),
       state: {
+        ...(inserted.length > 0 ? { inserted } : {}),
         marks,
         seen: mergeSeen(baseline.state.seen, [...linkedTasks(finalScan), ...insertion.inserted, ...insertion.renamed]),
         focus: focusMemory(computeFocus(settings, data, date)),
