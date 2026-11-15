@@ -590,6 +590,11 @@ export interface TodayUnmatched {
   candidates: TodayUnmatchedCandidate[];
 }
 
+export interface TodayNoteLine {
+  line: string;
+  taskId: string | null;
+}
+
 export interface TodayData {
   date: string;
   focusSource: "scheduled" | "list";
@@ -599,6 +604,7 @@ export interface TodayData {
   captures: TodayCapture[];
   unlinked: string[];
   inNote?: string[];
+  inNoteLinks?: TodayNoteLine[];
   ambiguous?: TodayAmbiguous[];
   outOfSync?: TodayOutOfSync[];
   unmatched?: TodayUnmatched[];

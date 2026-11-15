@@ -38,6 +38,7 @@ import {
   flattenTasks,
   focusRange,
   joinReason,
+  matchText,
   mirrorsFocus,
   normalizeText,
   openDoc,
@@ -142,6 +143,11 @@ export interface LinkTickResult {
   unmatched: TodayUnmatched[];
 }
 
+export interface TodayNoteLine {
+  line: string;
+  taskId: string | null;
+}
+
 export interface TodayPayload {
   date: string;
   focusSource: FocusSource;
@@ -151,6 +157,7 @@ export interface TodayPayload {
   captures: TodayCapture[];
   unlinked: string[];
   inNote: string[];
+  inNoteLinks: TodayNoteLine[];
   ambiguous: TodayAmbiguous[];
   outOfSync?: TodayOutOfSync[];
   unmatched?: TodayUnmatched[];
@@ -1465,7 +1472,7 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
     const sameProject = openLine.projectId === null || openLine.projectId === task.projectId;
     const needle = taskNeedle(openLine.text, settings.tasks);
     const loose = before.memo?.loose === true;
-    const plausible = sameProject && (same ? !loose : needle.startsWith(normalizeText(task.title)) || coversTitle(needle, task.title));
+    const plausible = sameProject && (same ? !loose : needle.startsWith(matchText(task.title)) || coversTitle(needle, task.title));
     if (plausible) {
       plan.links.push({ line, checkbox, task, effective: projectCheckbox(task), userSynced: true, base, tracked: true, remembered: before.memo !== null });
       plan.continued.set(line, task);
@@ -1608,8 +1615,8 @@ function overlap(a: Set<string>, b: Set<string>): number {
 }
 
 function isProjectLabel(label: string, projects: BoardProject[]): boolean {
-  const wanted = normalizeText(label);
-  return wanted !== "" && projects.some((project) => [project.id, project.name, project.title].some((name) => normalizeText(name) === wanted));
+  const wanted = matchText(label);
+  return wanted !== "" && projects.some((project) => [project.id, project.name, project.title].some((name) => matchText(name) === wanted));
 }
 
 function bodyText(text: string, projects: BoardProject[]): string {
@@ -1625,21 +1632,23 @@ function projectLinksOf(text: string, projects: BoardProject[]): Set<string> {
   for (const match of text.matchAll(WIKILINK_RE)) {
     const target = ((match[1] ?? "").split("/").pop() ?? "").replace(/\.md$/i, "");
     const label = target.trim() === "" ? (match[2] ?? "") : target;
-    const wanted = normalizeText(label);
+    const wanted = matchText(label);
     for (const project of projects) {
-      if (wanted !== "" && [project.id, project.name, project.title].some((name) => normalizeText(name) === wanted)) out.add(project.id);
+      if (wanted !== "" && [project.id, project.name, project.title].some((name) => matchText(name) === wanted)) out.add(project.id);
     }
   }
   return out;
 }
 
 function namesTask(text: string, data: BoardData, seen: SeenTask[]): boolean {
-  const needle = normalizeText(bodyText(text, data.projects));
+  const body = bodyText(text, data.projects);
+  const needle = matchText(body);
   if (needle === "") return false;
-  if (seen.some((item) => item.title === needle)) return true;
+  const seenTitle = normalizeText(body);
+  if (seen.some((item) => item.title === seenTitle)) return true;
   return flattenTasks(data.tasks).some((task) => {
     if (!isOpenTask(task)) return false;
-    const title = normalizeText(task.title);
+    const title = matchText(task.title);
     return (title.length >= TITLE_HINT_MIN && needle.includes(title)) || (needle.length >= TITLE_HINT_MIN && title.includes(needle));
   });
 }
@@ -1782,6 +1791,42 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function focusIdentities(settings: DelegationSettings, content: string): Set<string> {
+  const texts = splitLines(content);
+  const range = focusRange(texts, settings);
+  const out = new Set<string>();
+  if (range === null) return out;
+  for (let index = range.heading + 1; index < range.end; index += 1) out.add(identityText(texts[index] as string));
+  return out;
+}
+
+function lateLineTasks(settings: DelegationSettings, date: string, baseline: Baseline, scan: FocusScan): BoardTask[] {
+  if (date !== localDate()) return [];
+  const before = focusIdentities(settings, baseline.content);
+  const seen = new Set(baseline.state.seen.map(seenKey));
+  const out = new Map<string, BoardTask>();
+  for (const entry of scan.entries) {
+    const task = entry.match.task;
+    if (task === null || entry.held || before.has(identityText(entry.raw))) continue;
+    if (seen.has(seenKey({ projectId: task.projectId, title: normalizeText(task.title) }))) continue;
+    if (migrationSkipOf(task, date) === null) out.set(task.id, task);
+  }
+  return [...out.values()];
+}
+
+function scheduleLateLines(settings: DelegationSettings, date: string, tasks: BoardTask[]): number {
+  let scheduled = 0;
+  for (const task of tasks) {
+    try {
+      writeBoardTask(settings, { projectId: task.projectId, line: task.line, raw: task.raw, scheduled: date });
+      scheduled += 1;
+    } catch (err) {
+      console.error(`focus mirror could not schedule ${task.id} from a new line of the daily: ${errorText(err)}`);
+    }
+  }
+  return scheduled;
+}
+
 interface UserTick {
   task: BoardTask;
   targets: Set<BoardCheckbox>;
@@ -1802,6 +1847,10 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
     const baseline = loadBaseline(date, daily.path) ?? adoptBaseline(settings, date, daily.path, daily.content, data);
     const texts = splitLines(daily.content);
     let scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
+    if (scheduleLateLines(settings, date, lateLineTasks(settings, date, baseline, scan)) > 0) {
+      data = loadBoardData(settings) ?? data;
+      scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
+    }
     let plan = planTicks(settings, date, baseline, texts, scan, data);
     const oldCheckbox = (link: SyncLink): BoardCheckbox | null => (link.base === undefined ? null : checkboxOfLine(plan.baseTexts[link.base] as string));
     const baseMemo = (link: SyncLink): MarkMemo | undefined => (link.base === undefined ? undefined : baseline.state.marks[plan.baseKeys[link.base] as string]);
@@ -2087,7 +2136,7 @@ function onDailyWritten(settings: DelegationSettings, date: string, content: str
 
 function isExactTitle(settings: DelegationSettings, text: string, task: BoardTask): boolean {
   const needle = taskNeedle(text, settings.tasks);
-  return needle === normalizeText(task.title) || needle === normalizeText(joinReason(task.title, task.reason, settings.tasks.reasonSeparator));
+  return needle === matchText(task.title) || needle === matchText(joinReason(task.title, task.reason, settings.tasks.reasonSeparator));
 }
 
 function onDailyComposed(settings: DelegationSettings, date: string, content: string, heads: string[]): void {
@@ -2306,6 +2355,7 @@ function listModeFocus(settings: DelegationSettings, date: string, daily: DailyR
 
 interface NoteView {
   inNote: string[];
+  inNoteLinks: TodayNoteLine[];
   unlinked: string[];
   ambiguous: TodayAmbiguous[];
 }
@@ -2322,11 +2372,12 @@ function noteView(settings: DelegationSettings, date: string, daily: DailyReadRe
     ambiguous.push(...insertMissing(settings, date, openDoc(content), data, focus, memory, new Set<string>()).ambiguous);
   }
   const range = focusRange(texts, settings);
-  if (!range) return { inNote: [], unlinked: [], ambiguous };
+  if (!range) return { inNote: [], inNoteLinks: [], unlinked: [], ambiguous };
   const focusIds = new Set(focus.flatMap((entry) => flattenTasks([entry.task]).map((task) => task.id)));
   const occurrences = new Set(focus.filter((entry) => isOccurrence(entry.task)).map((entry) => fingerprint(entry.task)));
   const entries = new Map(scan.entries.map((entry) => [entry.line, entry]));
   const inNote: string[] = [];
+  const inNoteLinks: TodayNoteLine[] = [];
   const unlinked: string[] = [];
   let index = range.heading + 1;
   while (index < range.end) {
@@ -2340,13 +2391,17 @@ function noteView(settings: DelegationSettings, date: string, daily: DailyReadRe
     const task = entry?.match.task ?? null;
     const focused = task !== null && (focusIds.has(task.id) || (entry?.recurred === true && occurrences.has(fingerprint(task))));
     if (!focused) {
-      const lines = texts.slice(index, end).filter((text) => !isBlankText(text) && !isPlaceholderLine(text));
+      const head = index;
+      const linkedId = task !== null && entry?.held !== true ? task.id : null;
+      const kept = texts.slice(index, end).flatMap((text, offset) => (isBlankText(text) || isPlaceholderLine(text) ? [] : [{ text, at: head + offset }]));
+      const lines = kept.map((item) => item.text);
       inNote.push(...lines);
+      inNoteLinks.push(...kept.map((item): TodayNoteLine => ({ line: item.text, taskId: item.at === head ? linkedId : null })));
       if (task === null) unlinked.push(...lines);
     }
     index = end;
   }
-  return { inNote, unlinked, ambiguous };
+  return { inNote, inNoteLinks, unlinked, ambiguous };
 }
 
 interface SyncReport {
@@ -2523,6 +2578,13 @@ function schedule(settings: DelegationSettings, input: ScheduleInput): { task: B
   return { task: result.task };
 }
 
+function migrationSkipOf(task: BoardTask, date: string): MigrationSkip["reason"] | null {
+  if (task.scheduled !== null) return "scheduled-elsewhere";
+  if (task.status === "archived") return "archived";
+  if (task.status === "done" && task.doneAt !== null && task.doneAt !== date) return "finished-earlier";
+  return null;
+}
+
 function migrateFocus(settings: DelegationSettings, date: string): MigrationResult {
   requireDailyFeature(settings);
   validateDate(date);
@@ -2544,12 +2606,8 @@ function migrateFocus(settings: DelegationSettings, date: string): MigrationResu
   }
   for (const task of linked.values()) {
     if (task.scheduled === date) continue;
-    const skipped = (reason: MigrationSkip["reason"]): void => {
-      result.skipped.push({ taskId: task.id, title: task.title, scheduled: task.scheduled, reason });
-    };
-    if (task.scheduled !== null) skipped("scheduled-elsewhere");
-    else if (task.status === "archived") skipped("archived");
-    else if (task.status === "done" && task.doneAt !== null && task.doneAt !== date) skipped("finished-earlier");
+    const reason = migrationSkipOf(task, date);
+    if (reason !== null) result.skipped.push({ taskId: task.id, title: task.title, scheduled: task.scheduled, reason });
     else {
       try {
         writeBoardTask(settings, { projectId: task.projectId, line: task.line, raw: task.raw, scheduled: date });
@@ -2665,7 +2723,7 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
   const lines = exists ? content.split(LINE_SPLIT_RE) : [];
   const scheduledFocus = focusSource === "scheduled";
   const focus = scheduledFocus ? computeFocus(settings, data, date) : exists && data ? listModeFocus(settings, date, daily as DailyReadResult, data) : [];
-  const view: NoteView = exists && data ? noteView(settings, date, daily as DailyReadResult, data, focus, scheduledFocus) : { inNote: [], unlinked: [], ambiguous: [] };
+  const view: NoteView = exists && data ? noteView(settings, date, daily as DailyReadResult, data, focus, scheduledFocus) : { inNote: [], inNoteLinks: [], unlinked: [], ambiguous: [] };
   const report: SyncReport = exists && data ? syncReport(settings, date, daily as DailyReadResult, data) : EMPTY_REPORT;
   return {
     date,
@@ -2676,6 +2734,7 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
     captures: capturesOf(settings, lines),
     unlinked: view.unlinked,
     inNote: view.inNote,
+    inNoteLinks: view.inNoteLinks,
     ambiguous: [...view.ambiguous, ...report.duplicates, ...report.unresolved],
     ...(report.outOfSync.length > 0 ? { outOfSync: report.outOfSync } : {}),
     ...(report.unmatched.length > 0 ? { unmatched: report.unmatched } : {}),

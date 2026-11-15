@@ -66,7 +66,9 @@ import { Markdown } from "../markdown";
 import { openExternal } from "../notify";
 import { addDays, doingTarget, previousSibling, nextSibling, type OutlineGroup, type OutlineNode } from "../outliner-model";
 import {
+  addableNoteTasks,
   ambiguityHint,
+  canAddToFocus,
   decodeDragTarget,
   describeDay,
   entryTaskIds,
@@ -77,7 +79,7 @@ import {
   localDay,
   moveSteps,
   nextDay,
-  noteOnlyLines,
+  noteLineItems,
   outlineGroupsOf,
   outOfSyncKey,
   parentOfTask,
@@ -273,9 +275,9 @@ function UnmatchedTicks({ items, tasks, projects, busyKeys, onLink }: UnmatchedT
   };
 
   return (
-    <section className="today__section" aria-label="Ticked in the note, no task">
+    <section className="today__section" aria-label="In the note, no matching task">
       <header className="today__section-head">
-        <h3>Ticked in the note - no task</h3>
+        <h3>In the note, no matching task</h3>
       </header>
       <ul className="today__plain">
         {items.map((item) => {
@@ -1005,14 +1007,16 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const projects = board?.projects ?? [];
   const focus = data?.focus ?? [];
   const carried = data?.carriedOver ?? [];
-  const noteLines = data ? noteOnlyLines(data) : [];
+  const boardTasks = board?.tasks ?? [];
+  const noteLines = data ? noteLineItems(data, boardTasks) : [];
+  const noteActions = data !== null && data.focusSource === "scheduled" && tasksEnabled && date >= today;
+  const addable = noteActions ? addableNoteTasks(noteLines, date) : [];
   const ambiguous = data?.ambiguous ?? [];
   const outOfSync = visibleOutOfSync(data?.outOfSync, kept);
   const unmatched = data?.unmatched ?? [];
   const groups: OutlineGroup[] = useMemo(() => outlineGroupsOf(focus), [focus]);
   const focusIds = useMemo(() => entryTaskIds(focus), [focus]);
   const excluded = useMemo(() => new Set([...focusIds, ...entryTaskIds(carried)]), [focusIds, carried]);
-  const boardTasks = board?.tasks ?? [];
   const drawerTask = drawerId === null || board === null ? null : findBoardTask(board.tasks, drawerId);
 
   useEffect(() => {
@@ -1118,6 +1122,21 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
         break;
       }
       markBusy(entry.task.id, false);
+    }
+    await refresh();
+  };
+
+  const addToFocus = async (tasks: readonly BoardTask[]) => {
+    for (const task of tasks) {
+      markBusy(task.id, true);
+      try {
+        await scheduleTask(date, { ...targetOfTask(task), date });
+      } catch (err) {
+        failWith(err, "could not add the task to focus");
+        markBusy(task.id, false);
+        break;
+      }
+      markBusy(task.id, false);
     }
     await refresh();
   };
@@ -1610,15 +1629,47 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
 
               {(noteLines.length > 0 || ambiguous.length > 0) && (
                 <details className="today__disclosure">
-                  <summary>Also in the note ({noteLines.length + ambiguous.length})</summary>
+                  <summary className="today__disclosure-head">
+                    <span>Also in the note ({noteLines.length + ambiguous.length})</span>
+                    {addable.length > 0 && (
+                      <button
+                        type="button"
+                        className="act"
+                        disabled={addable.some((task) => busyIds.has(task.id))}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void addToFocus(addable);
+                        }}
+                      >
+                        Add all ({addable.length})
+                      </button>
+                    )}
+                  </summary>
                   <p className="hint">These lines live in the note but are not in today's focus. The hub never removes or rewrites them; edit them in the Note tab.</p>
                   {noteLines.length > 0 && (
                     <ul className="today__plain">
-                      {noteLines.map((line, index) => (
-                        <li key={`${index}:${line}`} className="today__raw">
-                          {line.trim()}
-                        </li>
-                      ))}
+                      {noteLines.map(({ line, task }, index) => {
+                        const action = noteActions && task !== null && canAddToFocus(task, date) ? task : null;
+                        if (action === null) {
+                          return (
+                            <li key={`${index}:${line}`} className="today__raw">
+                              {line.trim()}
+                            </li>
+                          );
+                        }
+                        const busy = busyIds.has(action.id);
+                        return (
+                          <li key={`${index}:${line}`} className={`today__row today__note-line ${busy ? "today__row--busy" : ""}`} aria-busy={busy}>
+                            <span className="today__raw today__note-text">{line.trim()}</span>
+                            <span className="today__actions">
+                              <button type="button" className="act" disabled={busy} aria-label={`Add "${action.title}" to focus`} onClick={() => void addToFocus([action])}>
+                                Add to focus
+                              </button>
+                            </span>
+                          </li>
+                        );
+                      })}
                     </ul>
                   )}
                   {ambiguous.length > 0 && (

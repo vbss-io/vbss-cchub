@@ -905,7 +905,7 @@ describe("today routes", () => {
     assert.equal((await http("GET", "/delegation/today/not-a-date")).status, 400);
     const empty = await http("GET", `/delegation/today/${TODAY}`);
     assert.equal(empty.status, 200);
-    assert.deepEqual(Object.keys(empty.json).sort(), ["ambiguous", "captures", "carriedOver", "dailyExists", "dailyUpdatedAt", "date", "focus", "focusSource", "inNote", "meetings", "summary", "unlinked"]);
+    assert.deepEqual(Object.keys(empty.json).sort(), ["ambiguous", "captures", "carriedOver", "dailyExists", "dailyUpdatedAt", "date", "focus", "focusSource", "inNote", "inNoteLinks", "meetings", "summary", "unlinked"]);
     assert.equal(empty.json.dailyExists, false);
     assert.equal(empty.json.focusSource, "scheduled");
     assert.deepEqual((await http("POST", `/delegation/today/${TODAY}/create`)).json, { dailyExists: true });

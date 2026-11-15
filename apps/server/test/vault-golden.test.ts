@@ -983,6 +983,45 @@ describe("golden vault: today mirror", () => {
     assert.equal(taskNamed(root, "acme/acme", "Docs: refresh the onboarding guide").section, "done");
   });
 
+  it("schedules the tasks of focus lines written after the hub created today's daily, changing only their scheduled token", () => {
+    const root = freshVault();
+    const settings = settingsFor(root);
+    const date = localToday();
+    today.todayApi.createToday(settings, date);
+    const dailyFile = join(root, "daily", `${date}.md`);
+    const created = readFileSync(dailyFile, "utf8");
+    const late = [
+      "- [ ] [[acme|Acme Platform]] - Plain task without priority",
+      "- [-] [[alex-personal|Alex Personal]] - **Reading list** #p3",
+      "- [ ] [[initech|Initech Sandbox]] - Confirm sandbox credentials",
+    ];
+    const written = created.replace("## Focus\n", `## Focus\n\n${late.join("\n")}\n`);
+    writeFileSync(dailyFile, written);
+    const projectsBefore = new Map(PROJECT_FILES.map((projectId) => [projectId, readFileSync(pathOf(root, projectId))]));
+    today.todayApi.regenerateFocusMirror(settings, date);
+    assert.equal(readFileSync(dailyFile, "utf8"), written);
+    const expected: Record<string, string[]> = {
+      "acme/acme": [`- [ ] Plain task without priority ${SCHEDULED} ${date}`],
+      "alex-personal": [`- [-] Reading list #p3 ${SCHEDULED} ${date}`],
+      "globex/globex": [],
+      initech: [`- [ ] Confirm sandbox credentials #p2 ${SCHEDULED} ${date}`],
+    };
+    for (const projectId of PROJECT_FILES) {
+      const before = projectsBefore.get(projectId) as Buffer;
+      const after = readFileSync(pathOf(root, projectId));
+      const lines = changedLines(before.toString("utf8"), after.toString("utf8"));
+      assert.deepEqual(lines.map((index) => lineBytes(after)[index]), expected[projectId], projectId);
+      assert.equal(after.subarray(0, 3).equals(before.subarray(0, 3)), true, projectId);
+      assert.equal(before.includes("\r\n"), after.includes("\r\n"), projectId);
+    }
+    assert.deepEqual(
+      today.todayApi.focusOf(settings, date).map((entry) => entry.task.title).sort(),
+      ["Confirm sandbox credentials", "Plain task without priority", "Reading list"],
+    );
+    assert.equal(today.todayApi.regenerateFocusMirror(settings, date).changed, false);
+    assert.deepEqual(digestOf(GOLDEN), goldenDigest);
+  });
+
   it("never rewrites the committed fixture and never touches a past daily", () => {
     const root = freshVault();
     const settings = settingsFor(root);

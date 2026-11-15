@@ -38,6 +38,9 @@ import {
   pickerTasks,
   unmatchedKey,
   noteOnlyLines,
+  noteLineItems,
+  canAddToFocus,
+  addableNoteTasks,
   outOfSyncKey,
   parseDismissedOutOfSync,
   taskOfOutOfSync,
@@ -278,6 +281,39 @@ describe("note lines and ambiguity", () => {
   it("prefers the lines in the note and falls back to the unlinked ones of an older hub", () => {
     assert.deepEqual(noteOnlyLines({ unlinked: ["- free"], inNote: ["- [ ] [[a|A]] - Other day", "- free"] }), ["- [ ] [[a|A]] - Other day", "- free"]);
     assert.deepEqual(noteOnlyLines({ unlinked: ["- free"] }), ["- free"]);
+  });
+
+  it("pairs each line in the note with its linked task and falls back to no task on an older hub", () => {
+    const linked = task("a", "p", 4, { title: "Alpha" }, [task("a1", "p", 5)]);
+    const tasks = [linked, task("b", "p", 6)];
+    const data = {
+      unlinked: ["- free"],
+      inNote: ["- [ ] [[p|P]] - Alpha", "  - [ ] a1", "- free"],
+      inNoteLinks: [
+        { line: "- [ ] [[p|P]] - Alpha", taskId: "a" },
+        { line: "  - [ ] a1", taskId: null },
+        { line: "- free", taskId: null },
+      ],
+    };
+    assert.deepEqual(
+      noteLineItems(data, tasks).map((item) => [item.line, item.task?.id ?? null]),
+      [["- [ ] [[p|P]] - Alpha", "a"], ["  - [ ] a1", null], ["- free", null]],
+    );
+    assert.deepEqual(noteLineItems({ ...data, inNoteLinks: [{ line: "- gone", taskId: "zzz" }] }, tasks), [{ line: "- gone", task: null }]);
+    assert.deepEqual(noteLineItems({ unlinked: ["- free"], inNote: ["- x"] }, tasks), [{ line: "- x", task: null }]);
+  });
+
+  it("adds to focus only open tasks and tasks finished that day, once each", () => {
+    assert.equal(canAddToFocus(task("t", "p", 1), TODAY), true);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "blocked", scheduled: "2026-11-20" }), TODAY), true);
+    assert.equal(canAddToFocus(task("t", "p", 1, { scheduled: TODAY }), TODAY), false);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "archived" }), TODAY), false);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "done", doneAt: "2026-11-01" }), TODAY), false);
+    assert.equal(canAddToFocus(task("t", "p", 1, { status: "done", doneAt: TODAY }), TODAY), true);
+    const a = task("a", "p", 1);
+    const done = task("d", "p", 2, { status: "done", doneAt: "2026-11-01" });
+    const items = [{ line: "- a", task: a }, { line: "- a again", task: a }, { line: "- d", task: done }, { line: "- free", task: null }];
+    assert.deepEqual(addableNoteTasks(items, TODAY).map((item) => item.id), ["a"]);
   });
 
   it("gives a short hint for every reason", () => {

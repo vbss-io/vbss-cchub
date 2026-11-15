@@ -2445,10 +2445,43 @@ export function normalizeText(text: string): string {
     .replace(/[\s.,;:!?]+$/, "");
 }
 
+const INLINE_CODE_RE = /(?<!`)(`+)(?!`)([\s\S]*?)(?<!`)\1(?!`)/g;
+const EMPHASIS_RES: readonly RegExp[] = [
+  /\*\*(?=\S)([\s\S]*?\S)\*\*/g,
+  /(?<![\p{L}\p{N}_])__(?=\S)([\s\S]*?\S)__(?![\p{L}\p{N}_])/gu,
+  /\*(?=[^\s*])([\s\S]*?[^\s*])\*/g,
+  /(?<![\p{L}\p{N}_])_(?=[^\s_])([\s\S]*?[^\s_])_(?![\p{L}\p{N}_])/gu,
+];
+
+function stripEmphasis(text: string): string {
+  let current = text;
+  let previous = "";
+  while (current !== previous) {
+    previous = current;
+    for (const re of EMPHASIS_RES) current = current.replace(re, "$1");
+  }
+  return current;
+}
+
+function stripInlineMarkup(text: string): string {
+  let out = "";
+  let position = 0;
+  for (const span of text.matchAll(INLINE_CODE_RE)) {
+    const at = span.index ?? 0;
+    out += stripEmphasis(text.slice(position, at)) + (span[2] ?? "");
+    position = at + span[0].length;
+  }
+  return out + stripEmphasis(text.slice(position));
+}
+
+export function matchText(text: string): string {
+  return normalizeText(stripInlineMarkup(text));
+}
+
 function resolveProjectLabel(label: string, projects: BoardProject[]): string | null {
-  const wanted = normalizeText(label);
+  const wanted = matchText(label);
   if (wanted === "") return null;
-  const hits = projects.filter((project) => normalizeText(project.name) === wanted || normalizeText(project.title) === wanted);
+  const hits = projects.filter((project) => matchText(project.name) === wanted || matchText(project.title) === wanted);
   return hits.length === 1 ? (hits[0] as BoardProject).id : null;
 }
 
@@ -2492,7 +2525,7 @@ export interface TaskMatch {
 
 export function taskNeedle(text: string, config: TasksFeatureSettings): string {
   const clean = removePriorityTokens(splitSignifiers(text.trim(), config).text, config);
-  return normalizeText(matchPrefix(clean, config)?.title ?? clean);
+  return matchText(matchPrefix(clean, config)?.title ?? clean);
 }
 
 function matchTask(text: string, projectId: string | null, pool: BoardTask[], config: TasksFeatureSettings): TaskMatch {
@@ -2502,8 +2535,8 @@ function matchTask(text: string, projectId: string | null, pool: BoardTask[], co
   let best: BoardTask[] = [];
   for (const task of pool) {
     if (projectId !== null && task.projectId !== projectId) continue;
-    const title = normalizeText(task.title);
-    const full = normalizeText(joinReason(task.title, task.reason, config.reasonSeparator));
+    const title = matchText(task.title);
+    const full = matchText(joinReason(task.title, task.reason, config.reasonSeparator));
     let rank = Number.POSITIVE_INFINITY;
     if (needle === full || needle === title) rank = 0;
     else if (prefixMatches(needle, full) || prefixMatches(needle, title)) rank = 1;
@@ -2602,10 +2635,10 @@ function recurrenceIndex(tasks: BoardTask[]): RecurrenceIndex {
 }
 
 function occurrenceOf(index: RecurrenceIndex, original: BoardTask, needle: string, copy: BoardTask): boolean {
-  const title = normalizeText(copy.title);
-  const own = normalizeText(original.title);
+  const title = matchText(copy.title);
+  const own = matchText(original.title);
   if (title === own) return true;
-  if (index.originals.some((other) => other.id !== original.id && other.projectId === copy.projectId && normalizeText(other.title) === title)) return false;
+  if (index.originals.some((other) => other.id !== original.id && other.projectId === copy.projectId && matchText(other.title) === title)) return false;
   return title === needle || prefixMatches(title, own) || prefixMatches(title, needle);
 }
 

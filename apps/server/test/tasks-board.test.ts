@@ -2784,3 +2784,63 @@ describe("round 4 verifier fixes: stamp edge cases and title-less status tasks",
     assert.equal(readFileSync(join(root, "proj.md"), "utf8"), original);
   });
 });
+
+describe("daily matching ignores markdown emphasis and inline code", () => {
+  const root = mkdtempSync(join(tmpdir(), "cch-tasks-emphasis-"));
+  after(() => rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  writeTree(root, {
+    "workai.md": [
+      "# Workai",
+      "",
+      "## Open loops",
+      "",
+      "- [-] **Feegow**: levar os recursos da Medware pro Feegow #p1",
+      "- [ ] Ship the release notes",
+      "- [ ] Fix `parse_date` helper",
+      "- [ ] Rename snake_case_value in the exporter",
+      "- [ ] Rename snakecasevalue in the importer",
+      "- [ ] Review the *draft* contract with Ana",
+      "- [ ] Review the draft contract with Bruno",
+      "",
+    ].join("\n"),
+  });
+  const settings = (): DelegationSettings => ({ ...settingsFor(root, { section: "Open loops", priorityTag: "p" }), daily: { ...store.getSettings().daily, headings: { focus: "Focus", meetings: "Meetings", sessions: "Sessions" } } });
+  const linkOf = (line: string): { taskTitle: string | null; candidates: number } => {
+    const current = settings();
+    const payload = board.readBoard(current);
+    const scan = board.scanDaily(current, "2026-11-15", `# 2026-11-15\n\n## Focus\n\n${line}\n`, payload.projects, payload.tasks);
+    const entry = scan.entries[0];
+    assert.ok(entry, line);
+    return { taskTitle: entry.match.task?.title ?? null, candidates: entry.match.candidates.length };
+  };
+
+  it("matches an exact title and a prefix like before", () => {
+    assert.equal(linkOf("- [ ] [[workai|Workai]] - Ship the release notes").taskTitle, "Ship the release notes");
+    assert.equal(linkOf("- [ ] [[workai|Workai]] - Ship the release notes and the changelog").taskTitle, "Ship the release notes");
+  });
+
+  it("matches when only the task has bold", () => {
+    assert.equal(linkOf("- [-] [[workai|Workai]] - Feegow: levar os recursos da Medware pro Feegow #p1").taskTitle, "**Feegow**: levar os recursos da Medware pro Feegow");
+  });
+
+  it("matches when only the daily line has bold, italics or inline code", () => {
+    assert.equal(linkOf("- [ ] [[workai|Workai]] - **Ship** the __release__ notes").taskTitle, "Ship the release notes");
+    assert.equal(linkOf("- [ ] [[workai|Workai]] - Ship the _release_ *notes*").taskTitle, "Ship the release notes");
+    assert.equal(linkOf("- [ ] [[workai|Workai]] - Fix parse_date helper").taskTitle, "Fix `parse_date` helper");
+    assert.equal(linkOf("- [ ] [[workai|Workai]] - Review the draft contract with **Ana**").taskTitle, "Review the *draft* contract with Ana");
+  });
+
+  it("keeps underscores inside words", () => {
+    assert.equal(linkOf("- [ ] [[workai|Workai]] - Rename snake_case_value in the exporter").taskTitle, "Rename snake_case_value in the exporter");
+    assert.equal(linkOf("- [ ] [[workai|Workai]] - Rename snakecasevalue in the exporter").taskTitle, null);
+    assert.equal(linkOf("- [ ] [[workai|Workai]] - Rename snake_case_value in the importer").taskTitle, null);
+  });
+
+  it("keeps an ambiguous line ambiguous", () => {
+    assert.deepEqual(linkOf("- [ ] [[workai|Workai]] - Review the **draft** contract"), { taskTitle: null, candidates: 2 });
+  });
+
+  it("resolves a project label written with emphasis", () => {
+    assert.equal(linkOf("- [ ] **Workai** - Ship the release notes").taskTitle, "Ship the release notes");
+  });
+});

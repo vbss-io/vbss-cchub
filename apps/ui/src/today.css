@@ -493,6 +493,21 @@
   margin-bottom: 8px;
 }
 
+.today__disclosure-head > .act {
+  margin-left: 10px;
+  vertical-align: middle;
+}
+
+.today__note-line {
+  align-items: flex-start;
+  padding: 2px 0;
+}
+
+.today__note-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .today__raw {
   color: var(--muted);
   font-family: Consolas, "Cascadia Mono", ui-monospace, monospace;

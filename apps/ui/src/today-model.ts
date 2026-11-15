@@ -2,6 +2,7 @@ import { findBoardTask, groupTasksByProject, type ProjectTaskGroup } from "./boa
 import { mergeTrailIntoSummary, parseMeetings } from "./daily-plan";
 import type {
   BoardProject,
+  BoardStatus,
   BoardTarget,
   BoardTask,
   DailyCloseYesterdayInput,
@@ -237,6 +238,30 @@ export function countBacklog(groups: readonly ProjectTaskGroup[]): number {
 }
 
 export const noteOnlyLines = (data: Pick<TodayData, "inNote" | "unlinked">): string[] => data.inNote ?? data.unlinked;
+
+export interface NoteLineItem {
+  line: string;
+  task: BoardTask | null;
+}
+
+export function noteLineItems(data: Pick<TodayData, "inNote" | "unlinked" | "inNoteLinks">, tasks: BoardTask[]): NoteLineItem[] {
+  if (data.inNoteLinks === undefined) return noteOnlyLines(data).map((line) => ({ line, task: null }));
+  return data.inNoteLinks.map((item) => ({ line: item.line, task: item.taskId === null ? null : findBoardTask(tasks, item.taskId) }));
+}
+
+const FOCUSABLE_STATUSES: ReadonlySet<BoardStatus> = new Set<BoardStatus>(["todo", "doing", "blocked", "hold"]);
+
+export function canAddToFocus(task: Pick<BoardTask, "status" | "scheduled" | "doneAt">, date: string): boolean {
+  if (task.scheduled === date) return false;
+  if (FOCUSABLE_STATUSES.has(task.status)) return true;
+  return task.status === "done" && (task.doneAt === null || task.doneAt === date);
+}
+
+export function addableNoteTasks(items: readonly NoteLineItem[], date: string): BoardTask[] {
+  const out = new Map<string, BoardTask>();
+  for (const item of items) if (item.task !== null && canAddToFocus(item.task, date)) out.set(item.task.id, item.task);
+  return [...out.values()];
+}
 
 const AMBIGUITY_HINT: Record<TodayAmbiguityReason, string> = {
   "same-title": "Another task has the same title, so it was not added to the note.",
