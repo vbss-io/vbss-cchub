@@ -264,6 +264,7 @@ const parentOf = (alias: string): string => `(
 const SESSION_SELECT = `
   SELECT s.*,
     (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.session_id AND a.status = 'running') AS agents_running,
+    (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.session_id AND a.status = 'running' AND a.updated_at > CAST(strftime('%s', 'now') AS INTEGER) * 1000 - ${STALE_MS}) AS agents_working,
     (SELECT COUNT(*) FROM agents a WHERE a.session_id = s.session_id) AS agents_total,
     (SELECT COUNT(*) FROM hub_share_forks f WHERE f.parent_session_id = s.session_id) AS forks,
     (SELECT COUNT(*) FROM hub_share_forks f JOIN sessions fs ON fs.session_id = f.session_id WHERE f.parent_session_id = s.session_id AND fs.status != 'ended') AS forks_live,
@@ -309,6 +310,7 @@ interface SessionRow {
   seen_at: number | null;
   turn_ended_at: number | null;
   agents_running: number;
+  agents_working: number;
   agents_total: number;
   started_at: number;
   updated_at: number;
@@ -321,9 +323,11 @@ const isUnread = (row: SessionRow): boolean =>
   (row.seen_at == null || row.turn_ended_at > row.seen_at) &&
   !(row.model == null && row.context_tokens == null);
 
+const workingInBackground = (row: SessionRow): boolean => row.status === "idle" && (row.agents_working ?? 0) > 0;
+
 const toRecord = (row: SessionRow): SessionRecord => ({
   sessionId: row.session_id,
-  status: row.status as SessionStatus,
+  status: (workingInBackground(row) ? "active" : row.status) as SessionStatus,
   cwd: row.cwd,
   source: row.source,
   hostPid: row.host_pid,
@@ -352,7 +356,7 @@ const toRecord = (row: SessionRow): SessionRecord => ({
   archivedAt: row.archived_at,
   favoriteAt: row.favorite_at,
   seenAt: row.seen_at ?? null,
-  unread: isUnread(row),
+  unread: !workingInBackground(row) && isUnread(row),
   agentsRunning: row.agents_running ?? 0,
   agentsTotal: row.agents_total ?? 0,
   startedAt: row.started_at,

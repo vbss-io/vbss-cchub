@@ -230,6 +230,23 @@ it("subagent events never change the session status", () => {
   assert.equal(fresh.status, "active");
 });
 
+it("an idle session with a subagent still running reads as active until the subagent stops", () => {
+  db.applyHook(payload({ sessionId: "bg-sess", kind: "user_prompt" }));
+  db.applyHook(payload({ sessionId: "bg-sess", kind: "subagent_start", agentId: "bg-1", agentType: "general-purpose" }));
+  const turnEnded = db.applyHook(payload({ sessionId: "bg-sess", kind: "stop" }));
+  assert.equal(turnEnded.status, "active");
+  assert.equal(turnEnded.unread, false);
+  const done = db.applyHook(payload({ sessionId: "bg-sess", kind: "subagent_stop", agentId: "bg-1", agentType: "general-purpose" }));
+  assert.equal(done.status, "idle");
+});
+
+it("a subagent left running for longer than the stale window no longer keeps the session active", () => {
+  const old = Date.now() - 5 * 3_600_000;
+  db.applyHook(payload({ sessionId: "bg-old", kind: "subagent_start", agentId: "bg-old-1", agentType: "Explore" }), old);
+  const turnEnded = db.applyHook(payload({ sessionId: "bg-old", kind: "stop" }));
+  assert.equal(turnEnded.status, "idle");
+});
+
 it("an idle-prompt notification means idle, a permission prompt means waiting", () => {
   const idle = db.applyHook(payload({ sessionId: "np-sess", kind: "notification", message: "Claude is waiting for your input", notificationType: "idle_prompt" }));
   assert.equal(idle.status, "idle");
