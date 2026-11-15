@@ -1596,6 +1596,25 @@ function commitFile(file: WalkedFile, next: string): number {
   return statSync(file.abs).mtimeMs;
 }
 
+export interface RestoreLineInput {
+  projectId: string;
+  line: number;
+  raw: string;
+  restored: string;
+}
+
+export function restoreTaskLine(settings: DelegationSettings, input: RestoreLineInput): void {
+  if (/[\r\n]/.test(input.restored)) throw new BadRequestError("the restored line must be a single line");
+  const file = locateProject(settings, input.projectId);
+  const content = readProjectFile(file);
+  const doc = openDoc(content);
+  const target = doc.lines[input.line];
+  if (target === undefined || target.text !== input.raw) throw new TaskConflictError(findTaskAt(parseBoardTasks(content, file.id, settings.tasks), input.line));
+  target.text = input.restored;
+  const next = renderDoc(doc);
+  if (next !== content) commitFile(file, next);
+}
+
 export function writeBoardTask(settings: DelegationSettings, input: BoardWriteInput): BoardWriteResult {
   validateChange(input, settings.tasks);
   const file = locateProject(settings, input.projectId);

@@ -301,15 +301,15 @@ describe("focus and carried over", () => {
     assert.equal(settings.daily.focusSource, "scheduled");
   });
 
-  it("lists the lines outside the focus as in the note and the ones linked to no task as unlinked, without the empty placeholder", () => {
+  it("G00c: puts a labelled linked line in the focus, lists the other lines as in the note and the ones linked to no task as unlinked, without the empty placeholder", () => {
     const root = lab({ lab: "# Lab\n\n## Open loops\n\n- [ ] Unscheduled task\n" }, { [TODAY]: dailyWith(TODAY, ["- [ ] [[lab|Lab]] - Unscheduled task", "- [ ] free", "-", "  - nested free"]) });
     const settings = useVault(root);
     const file = join(root, "daily", `${TODAY}.md`);
     const before = readFileSync(file);
     store.setSetting(`today.migrated.${TODAY}`, "1");
     const payload = today.readToday(settings, TODAY);
-    assert.deepEqual(payload.focus, []);
-    assert.deepEqual(payload.inNote, ["- [ ] [[lab|Lab]] - Unscheduled task", "- [ ] free", "  - nested free"]);
+    assert.deepEqual(payload.focus.map((entry) => entry.task.title), ["Unscheduled task"]);
+    assert.deepEqual(payload.inNote, ["- [ ] free", "  - nested free"]);
     assert.deepEqual(payload.unlinked, ["- [ ] free", "  - nested free"]);
     assert.deepEqual(payload.ambiguous, []);
     assert.equal(readFileSync(file).equals(before), true);
@@ -474,25 +474,22 @@ describe("mirror", () => {
     assert.ok(today.readToday(settings, TODAY).inNote.includes("- [ ] [[lab|Lab Project]] - Epsilon"));
   });
 
-  it("leaves the daily alone when a task is taken out of the day or moved to another date", () => {
+  it("G00c: takes the block of a task out of the daily when it leaves the day or moves to another date, its scheduled subtasks moving with it", () => {
     const root = lab({ lab: labProject() }, { [TODAY]: dailyWith(TODAY, FOCUS_BEFORE) });
     const settings = useVault(root);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     const primed = read(root, `daily/${TODAY}.md`);
     scheduleOf(settings, "lab", "Alpha", null);
-    assert.equal(read(root, `daily/${TODAY}.md`), primed);
+    const withoutAlpha = primed.replace("- [ ] [[lab|Lab Project]] - Alpha\n  - [ ] Alpha child\n  - a free note under alpha\n", "");
+    assert.equal(read(root, `daily/${TODAY}.md`), withoutAlpha);
     scheduleOf(settings, "lab", "Gamma", shift(TODAY, 3));
-    assert.equal(read(root, `daily/${TODAY}.md`), primed);
+    assert.equal(read(root, `daily/${TODAY}.md`), withoutAlpha.replace("- [x] [[lab|Lab Project]] - Gamma\n  - [ ] Gamma child\n", ""));
+    assert.equal(taskIn(settings, "lab", "Gamma").scheduled, shift(TODAY, 3));
+    assert.equal(taskIn(settings, "lab", "Gamma child").scheduled, shift(TODAY, 3));
     store.setSetting(`today.migrated.${TODAY}`, "1");
     const payload = today.readToday(settings, TODAY);
-    assert.deepEqual(payload.inNote.slice(0, 6), [
-      "- [ ] Remember to buy coffee",
-      "- [ ] [[lab|Lab Project]] - Alpha",
-      "  - [ ] Alpha child",
-      "  - a free note under alpha",
-      "- Call the bank about the card",
-      "- [x] [[lab|Lab Project]] - Gamma",
-    ]);
+    assert.deepEqual(payload.inNote, ["- [ ] Remember to buy coffee", "- Call the bank about the card"]);
+    assert.equal(payload.focus.some((entry) => entry.task.title === "Alpha" || entry.task.title === "Gamma"), false);
   });
 
   it("keeps a linked line of a task that was never scheduled, the way an added line has always behaved", () => {
@@ -519,7 +516,7 @@ describe("mirror", () => {
     assert.equal(today.todayApi.regenerateFocusMirror(settings, TODAY).changed, false);
   });
 
-  it("inserts nothing for two tasks that share a title and reports them as ambiguous", () => {
+  it("G00c: inserts nothing for two tasks that share a title, keeps them out of the focus and reports them as ambiguous", () => {
     const root = lab(
       { lab: `# Lab\n\n## Open loops\n\n- [ ] Same title ${SCHEDULED} ${TODAY}\n- [ ] Same title ${SCHEDULED} ${TODAY}\n` },
       { [TODAY]: dailyWith(TODAY, ["- [ ]"]) },
@@ -531,7 +528,7 @@ describe("mirror", () => {
     assert.equal(readFileSync(file).equals(before), true);
     store.setSetting(`today.migrated.${TODAY}`, "1");
     const payload = today.readToday(settings, TODAY);
-    assert.equal(payload.focus.length, 2);
+    assert.equal(payload.focus.length, 0);
     assert.deepEqual(
       payload.ambiguous.map((item) => [item.kind, item.text, item.reason]),
       [
@@ -674,11 +671,12 @@ describe("migration", () => {
     assert.equal(taskIn(settings, "lab", "Ticked in the daily").status, "todo");
   });
 
-  it("runs on its own the first time the day is read, once per date, and never when the source is list", () => {
+  it("G00c: runs on its own the first time the day is read, once per date, and never when the source is list; the focus follows the lines", () => {
     const root = lab({ lab: PROJECT }, { [TODAY]: dailyWith(TODAY, DAILY_FOCUS) });
     const settings = useVault(root);
     const first = today.readToday(settings, TODAY);
-    assert.deepEqual(first.focus.map((entry) => entry.task.title), ["Mig one", "Mig three"]);
+    assert.deepEqual(first.focus.map((entry) => entry.task.title), ["Mig one", "Mig two", "Mig three"]);
+    assert.equal(taskIn(settings, "lab", "Mig two").scheduled, TOMORROW);
     assert.equal(store.getSetting(`today.migrated.${TODAY}`), "1");
     const file = join(root, "projects", "lab.md");
     const afterFirst = readFileSync(file);
@@ -942,18 +940,18 @@ describe("note blocks", () => {
   const NOTE_FOCUS = ["- [ ] [[lab|Lab]] - Unscheduled task", "  - a note under it", "- [ ] [[lab|Lab]] - Write the **spec** for _v2_", "- [ ] free"];
   const NOTE_PROJECT = "# Lab\n\n## Open loops\n\n- [ ] Unscheduled task\n";
 
-  it("describes each block outside the focus with its line index, linked task, labelled project and body text", () => {
+  it("G00c: describes each block outside the focus with its line index, labelled project and body text, the labelled linked line being in the focus", () => {
     const root = lab({ lab: NOTE_PROJECT }, { [TODAY]: dailyWith(TODAY, NOTE_FOCUS) });
     const settings = useVault(root);
     store.setSetting(`today.migrated.${TODAY}`, "1");
     const lines = read(root, `daily/${TODAY}.md`).split(/\r\n|\n/);
     const payload = today.readToday(settings, TODAY);
     assert.deepEqual(payload.noteBlocks, [
-      { line: NOTE_FOCUS[0], lineIndex: lines.indexOf(NOTE_FOCUS[0] as string), taskId: taskIn(settings, "lab", "Unscheduled task").id, projectId: "lab", text: "Unscheduled task", children: ["  - a note under it"] },
       { line: NOTE_FOCUS[2], lineIndex: lines.indexOf(NOTE_FOCUS[2] as string), taskId: null, projectId: "lab", text: "Write the **spec** for _v2_", children: [] },
       { line: NOTE_FOCUS[3], lineIndex: lines.indexOf(NOTE_FOCUS[3] as string), taskId: null, projectId: null, text: "free", children: [] },
     ]);
-    assert.deepEqual(payload.inNote, NOTE_FOCUS);
+    assert.deepEqual(payload.inNote, NOTE_FOCUS.slice(2));
+    assert.deepEqual(payload.focus.map((entry) => entry.task.title), ["Unscheduled task"]);
   });
 
   it("leaves noteBlocks out when nothing in the note is outside the focus", () => {
@@ -979,7 +977,7 @@ describe("note blocks", () => {
     assert.equal(projectAfter.length, projectBefore.length + 1);
     assert.equal(readFileSync(dailyFile).equals(dailyBefore), true);
     const payload = today.readToday(settings, TODAY);
-    assert.deepEqual(payload.focus.map((entry) => entry.task.title), ["Write the **spec** for _v2_"]);
+    assert.deepEqual(payload.focus.map((entry) => entry.task.title), ["Unscheduled task", "Write the **spec** for _v2_"]);
     assert.equal(payload.noteBlocks?.some((item) => item.line === NOTE_FOCUS[2]), false);
     assert.equal(payload.unlinked.includes(NOTE_FOCUS[2] as string), false);
     assert.equal(readFileSync(dailyFile).equals(dailyBefore), true);

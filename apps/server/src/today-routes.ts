@@ -64,8 +64,37 @@ export function todayRouter(): Router {
       const body = (req.body ?? {}) as Body;
       const target = body.date;
       if (target !== null && typeof target !== "string") throw new BadRequestError("date must be a YYYY-MM-DD string or null");
-      const result = todayApi.schedule(getSettings(), { projectId: requireString(body, "projectId"), line: requireLine(body), raw: requireString(body, "raw"), date: target });
+      const result = todayApi.schedule(getSettings(), { projectId: requireString(body, "projectId"), line: requireLine(body), raw: requireString(body, "raw"), date: target, from: date });
       res.json(result);
+    } catch (err) {
+      sendTodayError(res, err);
+    }
+  });
+
+  router.post("/:date/reorder", (req, res) => {
+    try {
+      const date = dateOf(req.params.date);
+      const body = (req.body ?? {}) as Body;
+      const direction = body.direction;
+      if (direction !== "up" && direction !== "down") throw new BadRequestError("direction must be up or down");
+      res.json(todayApi.reorderFocus(getSettings(), date, { projectId: requireString(body, "projectId"), line: requireLine(body), raw: requireString(body, "raw"), direction }));
+    } catch (err) {
+      sendTodayError(res, err);
+    }
+  });
+
+  router.post("/:date/clear", (req, res) => {
+    try {
+      res.json(todayApi.clearToday(getSettings(), dateOf(req.params.date)));
+    } catch (err) {
+      sendTodayError(res, err);
+    }
+  });
+
+  router.post("/:date/clear/undo", (req, res) => {
+    try {
+      const date = dateOf(req.params.date);
+      res.json(todayApi.undoClear(getSettings(), date, requireString((req.body ?? {}) as Body, "token")));
     } catch (err) {
       sendTodayError(res, err);
     }

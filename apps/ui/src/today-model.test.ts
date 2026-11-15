@@ -54,6 +54,8 @@ import {
   visibleOutOfSync,
   focusFact,
   recentlyDoneTasks,
+  clearedNotice,
+  movesInNote,
 } from "./today-model";
 
 const TODAY = "2026-11-12";
@@ -643,5 +645,18 @@ describe("backlog priority and in-Today filters", () => {
     assert.deepEqual(windowBacklogGroups(groups, 4).map((group) => group.tasks.length), [3, 1]);
     assert.deepEqual(windowBacklogGroups(groups, 0), []);
     assert.deepEqual([...backlogPriorityCounts(tasks).entries()], [[0, 2], [2, 1], [null, 1]]);
+  });
+});
+
+describe("G00c: the focus follows the lines of the note", () => {
+  it("moves only a top item through the note and keeps subtasks on the board", () => {
+    assert.equal(movesInNote({ depth: 0 }), true);
+    assert.equal(movesInNote({ depth: 1 }), false);
+  });
+
+  it("describes a clear with its counts and an empty clear plainly", () => {
+    assert.equal(clearedNotice({ lines: 3, unscheduled: 2 }, true), "Cleared today: 3 lines out of the note, 2 dates out of the projects");
+    assert.equal(clearedNotice({ lines: 1, unscheduled: 1 }, false), "Cleared this day: 1 line out of the note, 1 date out of the projects");
+    assert.equal(clearedNotice({ lines: 0, unscheduled: 0 }, true), "Nothing to clear for today");
   });
 });

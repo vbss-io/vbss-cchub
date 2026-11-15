@@ -43,6 +43,7 @@ import {
   addCapture,
   addMeeting,
   BoardConflictError,
+  clearToday,
   createBoardItem,
   createTodayNote,
   delegateBoardTask,
@@ -56,9 +57,11 @@ import {
   openBoardProjectInEditor,
   patchBoardItem,
   promoteCapture,
+  reorderFocus,
   reparentBoardTask,
   scheduleTask,
   TodayUnavailableError,
+  undoClearToday,
   type BoardChange,
   type BoardCreateInput,
   type BoardPayload,
@@ -119,10 +122,20 @@ import {
   taskOfOutOfSync,
   TODAY_DRAG_MIME,
   visibleOutOfSync,
+  CLEAR_UNDO_MS,
+  clearedNotice,
+  movesInNote,
   type LinkTarget,
   type PickerTask,
 } from "../today-model";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { DAILY_ORGANIZE_EVENT, DAILY_REFINE_EVENT, DailyView, useDailySessions, type DailyEntryInfo } from "./DailyView";
+
+interface ClearUndo {
+  date: string;
+  token: string;
+  text: string;
+}
 
 interface Props {
   settings: DelegationSettings | null;
@@ -1087,6 +1100,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const [forcedDate, setForcedDate] = useState<string | null>(null);
   const [modeSlot, setModeSlot] = useState<HTMLElement | null>(null);
   const [kept, setKept] = useState<string[]>(() => parseDismissedOutOfSync(readStored(KEPT_TASKS_KEY)));
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearUndo, setClearUndo] = useState<ClearUndo | null>(null);
   const narrow = useNarrow();
 
   const requestRef = useRef(0);
@@ -1189,6 +1204,12 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   useEffect(() => {
     if (quickFocus > 0) quickInput.current?.focus();
   }, [quickFocus]);
+
+  useEffect(() => {
+    if (clearUndo === null) return;
+    const timer = window.setTimeout(() => setClearUndo(null), CLEAR_UNDO_MS);
+    return () => window.clearTimeout(timer);
+  }, [clearUndo]);
 
   const setCollapse = (next: FocusCollapse) => {
     setCollapseState(next);
@@ -1377,6 +1398,10 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
 
   const onMove = (node: OutlineNode, dir: "up" | "down") =>
     withRefresh(async () => {
+      if (movesInNote(node)) {
+        await reorderFocus(date, { ...targetOfNode(node), direction: dir });
+        return;
+      }
       const neighbour = dir === "up" ? previousSibling(groups, node) : nextSibling(groups, node);
       const steps = neighbour === null ? 1 : moveSteps(boardTasks, node.id, neighbour.id);
       let current = targetOfNode(node);
@@ -1423,6 +1448,29 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
       const root = rootNodeOf(groups, node);
       await scheduleTask(date, { ...targetOfNode(root), date: target });
     });
+
+  const runClear = async () => {
+    setConfirmClear(false);
+    try {
+      const result = await clearToday(date);
+      setClearUndo({ date, token: result.token, text: clearedNotice(result, isToday) });
+    } catch (err) {
+      failWith(err, "could not clear the day");
+    } finally {
+      await refresh();
+    }
+  };
+
+  const runUndoClear = async (undo: ClearUndo) => {
+    setClearUndo(null);
+    try {
+      await undoClearToday(undo.date, undo.token);
+    } catch (err) {
+      failWith(err, "could not undo the clear");
+    } finally {
+      await refresh();
+    }
+  };
 
   const openNode = (node: OutlineNode) => setDrawerId(node.id);
 
@@ -1757,10 +1805,28 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                       items={[
                         { id: "expand", label: "Expand all", disabled: isAllExpanded(collapse, groups), onSelect: () => setCollapse(expandAllFocus(collapse, groups)) },
                         { id: "collapse", label: "Collapse all", disabled: isAllCollapsed(collapse, groups), onSelect: () => setCollapse(collapseAllFocus(collapse, groups)) },
+                        {
+                          id: "clear",
+                          label: isToday ? "Clear today" : "Clear this day",
+                          title: "Remove the task lines from the focus of the note and their dates from the projects",
+                          disabled: !noteActions || !dailyExists,
+                          onSelect: () => setConfirmClear(true),
+                        },
                       ]}
                     />
                   )}
                 </header>
+                {clearUndo !== null && clearUndo.date === date && (
+                  <div className="today__undo" role="status">
+                    <span className="today__undo-text">{clearUndo.text}</span>
+                    <button type="button" className="act" onClick={() => void runUndoClear(clearUndo)}>
+                      Undo
+                    </button>
+                    <button type="button" className="act act--icon" aria-label="Dismiss" onClick={() => setClearUndo(null)}>
+                      <IconClose />
+                    </button>
+                  </div>
+                )}
                 {canAddFromToday && (
                   <div className="today__quick" role="group" aria-label="Add to focus">
                     <CountedProjectSelect
@@ -1980,6 +2046,17 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
               />
             </aside>
           ) : null}
+        />
+      )}
+
+      {confirmClear && (
+        <ConfirmDialog
+          title={isToday ? "Clear today?" : "Clear this day?"}
+          body={`Removes the ${focus.length === 1 ? "task line" : `${focus.length} task lines`} from the focus of the note, with the notes under them, and takes their ⏳ ${date} out of the projects. Free lines stay. You can undo right after.`}
+          confirmLabel="Clear"
+          danger
+          onCancel={() => setConfirmClear(false)}
+          onConfirm={() => void runClear()}
         />
       )}
 

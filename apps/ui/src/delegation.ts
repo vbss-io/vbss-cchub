@@ -662,6 +662,25 @@ export const linkTick = (date: string, input: TodayLinkTickInput): Promise<unkno
 
 export const migrateToday = (date: string): Promise<{ scheduled: number }> => call("POST", todayPath(date, "migrate"));
 
+export interface TodayReorderInput {
+  projectId: string;
+  line: number;
+  raw: string;
+  direction: "up" | "down";
+}
+
+export interface TodayClearResult {
+  token: string;
+  lines: number;
+  unscheduled: number;
+}
+
+export const reorderFocus = (date: string, input: TodayReorderInput): Promise<{ moved: boolean }> => call("POST", todayPath(date, "reorder"), input);
+
+export const clearToday = (date: string): Promise<TodayClearResult> => call("POST", todayPath(date, "clear"));
+
+export const undoClearToday = (date: string, token: string): Promise<{ restored: true }> => call("POST", todayPath(date, "clear/undo"), { token });
+
 export const listWorkspaces = (): Promise<WorkspaceRecord[]> => call("GET", "/workspaces");
 
 export const createWorkspace = (name: string, repos: string[]): Promise<WorkspaceRecord> =>

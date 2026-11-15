@@ -189,7 +189,7 @@ describe("late lines: a skill writes the focus after the hub created the daily",
     assert.equal(read(root, dailyRel(TODAY)), content);
   });
 
-  it("never schedules again a task the user took out of the day while its line stays", () => {
+  it("G00c: taking a task out of the day removes its line, and only a line typed again schedules it again", () => {
     const root = lab();
     const settings = useVault(root);
     today.todayApi.createToday(settings, TODAY);
@@ -198,20 +198,18 @@ describe("late lines: a skill writes the focus after the hub created the daily",
     today.todayApi.schedule(settings, { projectId: "cemig", line: teams.line, raw: teams.raw, date: null });
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "cemig", "Teams (fase 4): melhorar a experiência no Teams").scheduled, null);
+    const file = join(root, dailyRel(TODAY));
+    assert.equal(readFileSync(file, "utf8").includes(LATE[0] as string), false);
+    assert.ok(readFileSync(file, "utf8").includes(`${LATE[1] as string}\n${LATE[2] as string}\n`));
     appendToFocus(root, TODAY, ["- [ ] typed by hand"]);
     assert.equal(taskIn(settings, "cemig", "Teams (fase 4): melhorar a experiência no Teams").scheduled, null);
-    const file = join(root, dailyRel(TODAY));
-    const reworded = readFileSync(file, "utf8").replace(LATE[0] as string, `${LATE[0] as string} (pedir acesso)`);
-    writeFileSync(file, reworded);
-    today.queueDailyDiskChange(TODAY);
-    today.flushMirrors(settings);
-    assert.equal(taskIn(settings, "cemig", "Teams (fase 4): melhorar a experiência no Teams").scheduled, null);
-    assert.equal(taskIn(settings, "cemig", "Teams (fase 4): melhorar a experiência no Teams").raw.includes(SCHEDULED), false);
-    assert.equal(readFileSync(file, "utf8"), reworded);
-    assert.ok(today.readToday(settings, TODAY).inNote.includes(`${LATE[0] as string} (pedir acesso)`));
+    const typed = appendToFocus(root, TODAY, [`${LATE[0] as string} (pedir acesso)`]);
+    assert.equal(taskIn(settings, "cemig", "Teams (fase 4): melhorar a experiência no Teams").scheduled, TODAY);
+    assert.equal(readFileSync(file, "utf8"), typed);
+    assert.ok(today.readToday(settings, TODAY).focus.some((entry) => entry.task.id === teams.id));
   });
 
-  it("leaves a task scheduled for another date, a task finished earlier and an ambiguous line alone", () => {
+  it("G00c: a new line moves a task scheduled for another date to this day, and leaves a task finished earlier and an ambiguous line alone", () => {
     const root = lab();
     const settings = useVault(root);
     today.todayApi.createToday(settings, TODAY);
@@ -223,18 +221,18 @@ describe("late lines: a skill writes the focus after the hub created the daily",
       "- [ ] [[workai|Workai]] - Review the draft contract",
     ];
     const written = appendToFocus(root, TODAY, lines);
-    assert.equal(read(root, "projects/workai.md"), workai);
+    assert.equal(read(root, "projects/workai.md"), workai.replace(`Planejar a migração do banco ${SCHEDULED} ${TOMORROW}`, `Planejar a migração do banco ${SCHEDULED} ${TODAY}`));
     assert.equal(read(root, "projects/cemig.md"), cemig);
     assert.equal(read(root, dailyRel(TODAY)), written);
-    assert.equal(taskIn(settings, "workai", "Planejar a migração do banco").scheduled, TOMORROW);
+    assert.equal(taskIn(settings, "workai", "Planejar a migração do banco").scheduled, TODAY);
+    assert.equal(taskIn(settings, "workai", "Fechar o relatório antigo").scheduled, null);
     const payload = today.readToday(settings, TODAY);
-    assert.deepEqual(payload.focus, []);
-    assert.deepEqual(payload.inNote, lines);
-    assert.deepEqual(payload.inNoteLinks, [
-      { line: lines[0], taskId: taskIn(settings, "workai", "Planejar a migração do banco").id },
-      { line: lines[1], taskId: taskIn(settings, "workai", "Fechar o relatório antigo").id },
-      { line: lines[2], taskId: null },
-    ]);
+    assert.deepEqual(
+      payload.focus.map((entry) => entry.task.title),
+      ["Planejar a migração do banco", "Fechar o relatório antigo"],
+    );
+    assert.deepEqual(payload.inNote, [lines[2]]);
+    assert.deepEqual(payload.inNoteLinks, [{ line: lines[2], taskId: null }]);
     assert.deepEqual(
       payload.ambiguous.map((item) => item.text),
       ["- [ ] [[workai|Workai]] - Review the draft contract"],
@@ -262,9 +260,10 @@ describe("late lines: a skill writes the focus after the hub created the daily",
     appendToFocus(root, TODAY, ["- [ ] typed by hand"]);
     assert.equal(read(root, "projects/cemig.md"), cemig);
     const payload = today.readToday(settings, TODAY);
-    assert.deepEqual(payload.inNote.filter((line) => line.includes("Teams")), [LATE[0]]);
     const teams = taskIn(settings, "cemig", "Teams (fase 4): melhorar a experiência no Teams");
-    assert.deepEqual(payload.inNoteLinks.filter((item) => item.taskId !== null), [{ line: LATE[0], taskId: teams.id }]);
+    assert.equal(teams.scheduled, null);
+    assert.deepEqual(payload.focus.map((entry) => entry.task.id), [teams.id]);
+    assert.deepEqual(payload.inNoteLinks.filter((item) => item.taskId !== null), []);
     const before = read(root, dailyRel(TODAY));
     today.todayApi.schedule(settings, { projectId: "cemig", line: teams.line, raw: teams.raw, date: TODAY });
     const after = today.readToday(settings, TODAY);
@@ -293,7 +292,7 @@ function acmeLab(): { root: string; settings: DelegationSettings } {
 }
 
 describe("late lines: only plain, labeled, open, unscheduled tasks are scheduled", () => {
-  it("never schedules from a line without a project label, even an exact one, and still offers the line", () => {
+  it("G00c: schedules an unlabeled line only when it is the exact title of one task, and still offers the prefix line", () => {
     const { root, settings } = acmeLab();
     today.todayApi.createToday(settings, TODAY);
     const acme = read(root, "projects/acme.md");
@@ -301,12 +300,12 @@ describe("late lines: only plain, labeled, open, unscheduled tasks are scheduled
     const lines = ["- [ ] revisar o contrato do aluguel com a imobiliária", "- [ ] Relatório mensal"];
     appendToFocus(root, TODAY, lines);
     assert.equal(read(root, "projects/acme.md"), acme);
-    assert.equal(read(root, "projects/cemig.md"), cemig);
+    assert.equal(read(root, "projects/cemig.md"), cemig.replace("- [ ] Relatório mensal", `- [ ] Relatório mensal ${SCHEDULED} ${TODAY}`));
     assert.equal(taskIn(settings, "acme", "Revisar o contrato").scheduled, null);
-    assert.equal(taskIn(settings, "cemig", "Relatório mensal").scheduled, null);
+    assert.equal(taskIn(settings, "cemig", "Relatório mensal").scheduled, TODAY);
     const payload = today.readToday(settings, TODAY);
-    assert.deepEqual(payload.inNote, lines);
-    assert.deepEqual(payload.inNoteLinks.find((item) => item.line === lines[1])?.taskId, taskIn(settings, "cemig", "Relatório mensal").id);
+    assert.deepEqual(payload.inNote, [lines[0]]);
+    assert.deepEqual(payload.focus.map((entry) => entry.task.title), ["Relatório mensal"]);
   });
 
   it("still schedules a labeled prefix line inside its own project", () => {

@@ -147,6 +147,23 @@
   gap: 8px;
 }
 
+.today__undo {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--brand) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--brand) 8%, transparent);
+  font-size: 13px;
+}
+
+.today__undo-text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
 .today__section-head h3 {
   margin: 0;
   color: var(--muted);

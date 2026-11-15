@@ -527,3 +527,15 @@ export const closeYesterdayBody = (yesterday: Pick<DailyYesterday, "date">): Dai
   yesterday: yesterday.date,
   tasks: [],
 });
+
+export const CLEAR_UNDO_MS = 20000;
+
+export const movesInNote = (node: Pick<OutlineNode, "depth">): boolean => node.depth === 0;
+
+const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
+
+export function clearedNotice(result: { lines: number; unscheduled: number }, isToday: boolean): string {
+  const day = isToday ? "today" : "this day";
+  if (result.lines === 0 && result.unscheduled === 0) return `Nothing to clear for ${day}`;
+  return `Cleared ${day}: ${plural(result.lines, "line", "lines")} out of the note, ${plural(result.unscheduled, "date", "dates")} out of the projects`;
+}

@@ -149,7 +149,7 @@ function editDaily(root: string, change: (content: string) => string): void {
 }
 
 describe("finding 1: a focus line linked to a task of another date", () => {
-  it("keeps the line and its custom text through every mirror run and lists it as in the note", () => {
+  it("G00c: keeps the line and its custom text through every mirror run and brings the carried task to the day of the line", () => {
     const root = lab(
       {
         alpha: project("Alpha Project", [`- [ ] Ship release ${SCHEDULED} ${TODAY}`]),
@@ -170,8 +170,10 @@ describe("finding 1: a focus line linked to a task of another date", () => {
     const content = readFileSync(dailyPath(root), "utf8");
     assert.ok(content.split("\n").includes(custom));
     assert.deepEqual(missingLines(edited.split("\n"), content), []);
-    assert.equal(taskIn(settings, "beta", "Old carried thing").scheduled, YESTERDAY);
-    assert.ok(today.readToday(settings, TODAY).inNote.includes(custom));
+    assert.equal(taskIn(settings, "beta", "Old carried thing").scheduled, TODAY);
+    const payload = today.readToday(settings, TODAY);
+    assert.equal(payload.inNote.includes(custom), false);
+    assert.ok(payload.focus.some((entry) => entry.task.title === "Old carried thing"));
   });
 });
 
@@ -189,17 +191,17 @@ describe("finding 2: unschedule, reschedule, rename and move keep the daily as i
     return { root, settings, primed };
   };
 
-  it("unschedule leaves the custom text and lists the line as in the note", () => {
+  it("G00c: unschedule removes the line of the task from the daily and nothing else", () => {
     const { root, settings, primed } = setup();
     scheduleOf(settings, "alpha", "Ship release", null);
     today.flushMirrors(settings);
-    assert.equal(readFileSync(dailyPath(root), "utf8"), primed);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), primed.replace(`${LINE}\n\n`, ""));
     const payload = today.readToday(settings, TODAY);
     assert.deepEqual(payload.focus, []);
-    assert.deepEqual(payload.inNote, [LINE]);
+    assert.deepEqual(payload.inNote, []);
   });
 
-  it("rename through the board item write keeps the custom line and adds no generated line", () => {
+  it("G00c: rename through the board item write keeps the custom line, adds no generated line and keeps the task in the focus", () => {
     const { root, settings, primed } = setup();
     const task = taskIn(settings, "alpha", "Ship release");
     board.writeBoardTaskSynced(settings, { projectId: "alpha", line: task.line, raw: task.raw, title: "Ship the new release" });
@@ -207,21 +209,28 @@ describe("finding 2: unschedule, reschedule, rename and move keep the daily as i
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     assert.equal(readFileSync(dailyPath(root), "utf8"), primed);
     assert.equal(primed.includes("Ship the new release"), false);
-    assert.deepEqual(today.readToday(settings, TODAY).inNote, [LINE]);
+    const payload = today.readToday(settings, TODAY);
+    assert.deepEqual(payload.inNote, []);
+    assert.deepEqual(payload.focus.map((entry) => entry.task.title), ["Ship the new release"]);
+    assert.equal(taskIn(settings, "alpha", "Ship the new release").scheduled, TODAY);
   });
 
-  it("reschedule to another date and move to another project leave the daily alone", () => {
+  it("G00c: reschedule to another date moves the line out, bringing it back writes a fresh line, and a move to another project leaves the daily alone", () => {
     const { root, settings, primed } = setup();
     scheduleOf(settings, "alpha", "Ship release", TOMORROW);
-    assert.equal(readFileSync(dailyPath(root), "utf8"), primed);
+    const moved = primed.replace(`${LINE}\n\n`, "");
+    assert.equal(readFileSync(dailyPath(root), "utf8"), moved);
+    assert.equal(taskIn(settings, "alpha", "Ship release").scheduled, TOMORROW);
     scheduleOf(settings, "alpha", "Ship release", TODAY);
-    assert.equal(readFileSync(dailyPath(root), "utf8"), primed);
+    const back = readFileSync(dailyPath(root), "utf8");
+    assert.deepEqual(missingLines(moved.split("\n"), back), []);
+    assert.ok(back.includes("- [ ] [[alpha|Alpha Project]] - Ship release\n"));
     const task = taskIn(settings, "alpha", "Ship release");
     board.moveTaskToProject(settings, { projectId: "alpha", line: task.line, raw: task.raw, targetProjectId: "beta", parent: null });
     today.flushMirrors(settings);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     assert.equal(taskIn(settings, "beta", "Ship release").scheduled, TODAY);
-    assert.equal(readFileSync(dailyPath(root), "utf8"), primed);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), back);
   });
 });
 
@@ -377,7 +386,7 @@ describe("finding 5: the plan wizard compose schedules the picks", () => {
 });
 
 describe("finding 6: notes nested under a task that leaves the day", () => {
-  it("stay under the line where the user put them", () => {
+  it("G00c: leave with the line of the task, and the block of a task that stays keeps its notes", () => {
     const focus = ["- [ ] [[lab|Lab]] - Leaving task", "  - note A that belongs to leaving", "  - [ ] Leaving sub", "- [ ] [[lab|Lab]] - Staying task", "  - note B"];
     const root = lab(
       { lab: project("Lab", [`- [ ] Leaving task ${SCHEDULED} ${TODAY}`, "  - [ ] Leaving sub", `- [ ] Staying task ${SCHEDULED} ${TODAY}`]) },
@@ -389,12 +398,12 @@ describe("finding 6: notes nested under a task that leaves the day", () => {
     assert.ok(primed.includes(`${focus.join("\n")}\n`));
     scheduleOf(settings, "lab", "Leaving task", null);
     today.flushMirrors(settings);
-    assert.equal(readFileSync(dailyPath(root), "utf8"), primed);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), primed.replace(`${focus.slice(0, 3).join("\n")}\n`, ""));
     const staying = taskIn(settings, "lab", "Staying task");
     board.createBoardTask(settings, { projectId: "lab", title: "New staying sub", status: "todo", parentLine: staying.line, parentRaw: staying.raw });
     today.flushMirrors(settings);
     const after = readFileSync(dailyPath(root), "utf8");
-    assert.ok(after.includes(`${focus.slice(0, 3).join("\n")}\n- [ ] [[lab|Lab]] - Staying task\n  - note B\n  - [ ] New staying sub\n`));
+    assert.ok(after.includes("## Focus\n\n- [ ] [[lab|Lab]] - Staying task\n  - note B\n  - [ ] New staying sub\n"));
   });
 });
 
