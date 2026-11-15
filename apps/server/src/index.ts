@@ -43,16 +43,12 @@ import {
 import { sessionLive } from "./live.js";
 import { runtimeSnapshot } from "./runtimes.js";
 import { ensureExtension } from "./ensure-extension.js";
-import { abortActiveRuns, delegationRouter } from "./delegation-routes.js";
-import { usageRouter, warmUsage } from "./usage-routes.js";
-import { limitsRouter } from "./limits-routes.js";
-import { backupsRouter } from "./backups-routes.js";
-import { uiPrefsRouter } from "./ui-prefs-routes.js";
-import { todayRouter } from "./today-routes.js";
+import { warmUsage } from "./usage-routes.js";
+import { mountPlugins } from "./plugins/index.js";
 import { recordAppVersion, runDailyMaintenance } from "./backups.js";
 import { enableVaultSnapshots } from "./vault-snapshot.js";
 import { startLimitsPolling, stopLimitsPolling } from "./limits.js";
-import { resolveWorkspaceTarget } from "./delegation-launch.js";
+import { abortActiveRuns, resolveWorkspaceTarget } from "./delegation-launch.js";
 import { getSettings, markRunningAsInterrupted, migratePluginFlags } from "./delegation-store.js";
 import { watchDaily } from "./daily.js";
 import { watchTasksBoard } from "./tasks-board.js";
@@ -540,12 +536,7 @@ app.post("/api/hooks/uninstall", async (_req, res) => {
 
 migratePluginFlags();
 
-app.use("/delegation/ui-prefs", uiPrefsRouter());
-app.use("/delegation", delegationRouter());
-app.use("/delegation/usage", usageRouter());
-app.use("/delegation/limits", limitsRouter());
-app.use("/delegation/backups", backupsRouter());
-app.use("/delegation/today", todayRouter());
+mountPlugins(app);
 
 app.get("/api/events", (_req, res) => {
   res.writeHead(200, {

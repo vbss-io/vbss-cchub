@@ -37,7 +37,7 @@ before(async () => {
   await fetch(`${hub.base}/delegation/settings`, {
     method: "PUT",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ workspacesRoot: box.root }),
+    body: JSON.stringify({ workspacesRoot: box.root, features: { daily: true, delegated: true, workspaces: true, reports: true, share: true } }),
   });
   mcp = spawn(process.execPath, ["--import", "tsx", join(serverDir, "src", "mcp.ts")], {
     cwd: serverDir,

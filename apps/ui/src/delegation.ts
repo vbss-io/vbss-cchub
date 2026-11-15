@@ -1,4 +1,5 @@
 import { hubBase } from "./api";
+import type { HubPluginInfo } from "./agent-tools";
 import { usageResponseState } from "./usage-format";
 import { emptyUiPrefs, normalizeUiPrefs } from "./plugins/ui-prefs";
 
@@ -364,6 +365,8 @@ async function optionalJson<T>(path: string): Promise<T | null> {
 }
 
 export const fetchLimits = (): Promise<LimitsSnapshot | null> => optionalJson("/limits");
+
+export const fetchPlugins = (): Promise<HubPluginInfo[] | null> => optionalJson("/plugins");
 
 export const refreshLimits = (): Promise<LimitsSnapshot> => call("POST", "/limits/refresh");
 

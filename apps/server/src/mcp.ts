@@ -3,6 +3,7 @@ import { config } from "./config.js";
 const PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18"];
 const DEFAULT_PROTOCOL = "2025-06-18";
 const MAX_TEXT_CHARS = 80_000;
+const PLUGINS_TIMEOUT_MS = 1500;
 
 type Json = Record<string, unknown>;
 
@@ -11,6 +12,13 @@ interface ToolDefinition {
   description: string;
   inputSchema: Json;
   call: (args: Json) => Promise<unknown>;
+}
+
+interface PluginState {
+  id: string;
+  name: string;
+  enabled: boolean;
+  tools: string[];
 }
 
 interface RpcRequest {
@@ -351,11 +359,53 @@ const TOOLS: ToolDefinition[] = [
   },
 ];
 
-const INSTRUCTIONS = [
-  "CC Hub is the machine-local hub where every agent arrives and reports.",
-  "Call hub_overview first to see what is running. Use hub_workspaces to resolve repo paths; never ask the user where a project lives.",
-  "Delegate long work with hub_delegate (workspace + prompt), follow it with hub_task, steer it with hub_continue, and leave a trail with hub_report so other conversations can pick it up.",
-].join(" ");
+const isPluginState = (value: unknown): value is PluginState => {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.id === "string" &&
+    typeof item.name === "string" &&
+    typeof item.enabled === "boolean" &&
+    Array.isArray(item.tools) &&
+    item.tools.every((tool) => typeof tool === "string")
+  );
+};
+
+async function pluginStates(): Promise<PluginState[] | null> {
+  try {
+    const res = await fetch(`${base}/delegation/plugins`, { signal: AbortSignal.timeout(PLUGINS_TIMEOUT_MS) });
+    if (!res.ok) return null;
+    const json: unknown = await res.json();
+    return Array.isArray(json) && json.every(isPluginState) ? json : null;
+  } catch {
+    return null;
+  }
+}
+
+const offPluginOf = (states: PluginState[] | null, tool: string): PluginState | null => {
+  const owner = states?.find((plugin) => plugin.tools.includes(tool));
+  return owner && !owner.enabled ? owner : null;
+};
+
+const availableTools = (states: PluginState[] | null): ToolDefinition[] => TOOLS.filter((tool) => offPluginOf(states, tool.name) === null);
+
+const pluginOffMessage = (plugin: PluginState): string => `The ${plugin.name} plugin is off in CC Hub (Settings > Plugins)`;
+
+const instructionsFor = (tools: readonly ToolDefinition[]): string => {
+  const has = (name: string): boolean => tools.some((tool) => tool.name === name);
+  const parts = [
+    "CC Hub is the machine-local hub where every agent arrives and reports.",
+    "Call hub_overview first to see what is running. Use hub_workspaces to resolve repo paths; never ask the user where a project lives.",
+  ];
+  if (has("hub_delegate") && has("hub_report")) {
+    parts.push("Delegate long work with hub_delegate (workspace + prompt), follow it with hub_task, steer it with hub_continue, and leave a trail with hub_report so other conversations can pick it up.");
+  } else if (has("hub_delegate")) {
+    parts.push("Delegate long work with hub_delegate (workspace + prompt), follow it with hub_task and steer it with hub_continue.");
+  } else if (has("hub_report")) {
+    parts.push("Leave a trail with hub_report so other conversations can pick it up.");
+  }
+  return parts.join(" ");
+};
 
 const respond = (id: RpcRequest["id"], result: unknown): void => {
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
@@ -381,7 +431,7 @@ async function handle(message: RpcRequest): Promise<void> {
         protocolVersion: requested && PROTOCOL_VERSIONS.includes(requested) ? requested : DEFAULT_PROTOCOL,
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: "vbss-cchub", version: "1" },
-        instructions: INSTRUCTIONS,
+        instructions: instructionsFor(availableTools(await pluginStates())),
       });
       return;
     }
@@ -390,7 +440,7 @@ async function handle(message: RpcRequest): Promise<void> {
       return;
     case "tools/list":
       respond(id, {
-        tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+        tools: availableTools(await pluginStates()).map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
       });
       return;
     case "tools/call": {
@@ -398,6 +448,11 @@ async function handle(message: RpcRequest): Promise<void> {
       const tool = TOOLS.find((item) => item.name === name);
       if (!tool) {
         fail(id, -32602, `unknown tool: ${name ?? "(none)"}`);
+        return;
+      }
+      const offPlugin = offPluginOf(await pluginStates(), tool.name);
+      if (offPlugin) {
+        respond(id, { content: [{ type: "text", text: pluginOffMessage(offPlugin) }], isError: true });
         return;
       }
       const args = (params?.arguments && typeof params.arguments === "object" ? params.arguments : {}) as Json;
