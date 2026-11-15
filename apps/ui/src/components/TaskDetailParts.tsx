@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { RunRecord } from "../delegation";
 import type { WorktreeStatus } from "../delegation-actions";
 import { Markdown } from "../markdown";
@@ -6,10 +6,28 @@ import { runStatusTone } from "../runs-model";
 import { relativeTime } from "../time";
 import type { LogLine } from "../use-task-detail";
 import { TASK_STATUS_LABEL } from "./TaskCard";
+import { LOG_WINDOW, countLines, logWindow } from "../show-more";
+import { ClampText, ShowMoreButtons, useShowMore } from "./ShowMore";
 
-export function LiveLog({ lines, running }: { lines: LogLine[]; running: boolean }) {
+export function LiveLog({ lines, running, resetKey = "log" }: { lines: LogLine[]; running: boolean; resetKey?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const fromBottom = useRef<number | null>(null);
+  const totalLines = useMemo(() => lines.reduce((sum, line) => sum + countLines(line.text), 0), [lines]);
+  const paging = useShowMore(totalLines, resetKey, LOG_WINDOW);
+  const shownLines = paging.view.shown;
+  const windowed = useMemo(() => logWindow(lines, shownLines).items, [lines, shownLines]);
+  const keepPosition = (action: () => void) => () => {
+    const element = ref.current;
+    if (element) fromBottom.current = element.scrollHeight - element.scrollTop;
+    action();
+  };
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element || fromBottom.current === null) return;
+    element.scrollTop = element.scrollHeight - fromBottom.current;
+    fromBottom.current = null;
+  }, [shownLines]);
   useEffect(() => {
     const element = ref.current;
     if (element && stick.current) element.scrollTop = element.scrollHeight;
@@ -24,7 +42,8 @@ export function LiveLog({ lines, running }: { lines: LogLine[]; running: boolean
       }}
     >
       {lines.length === 0 && <p className="muted">{running ? "Waiting for the first output…" : "No output was captured for this run."}</p>}
-      {lines.map((line) => (
+      <ShowMoreButtons paging={{ ...paging, more: keepPosition(paging.more), all: keepPosition(paging.all) }} from="end" unit="lines" />
+      {windowed.map((line) => (
         <div key={line.key} className={`log__line log__line--${line.kind}`}>
           {line.kind === "tool" && <span className="log__badge">tool</span>}
           {line.kind === "status" && <span className="log__badge log__badge--status">status</span>}
@@ -49,13 +68,19 @@ export function RunCard({ run }: { run: RunRecord }) {
         {run.permissionMode && <span className="chip">{run.permissionMode}</span>}
         <time className="muted run__time">{relativeTime(run.finishedAt ?? run.startedAt)}</time>
       </header>
-      <p className="run__prompt">{run.prompt}</p>
+      <ClampText className="run__prompt" lines={4} scopeKey={`run-prompt:${run.id}`}>
+        {run.prompt}
+      </ClampText>
       {run.result && (
-        <div className="run__result">
+        <ClampText className="run__result" markdown scopeKey={`run-result:${run.id}`}>
           <Markdown text={run.result} />
-        </div>
+        </ClampText>
       )}
-      {run.error && <p className="run__error">{run.error}</p>}
+      {run.error && (
+        <ClampText className="run__error" lines={4} scopeKey={`run-error:${run.id}`}>
+          {run.error}
+        </ClampText>
+      )}
     </article>
   );
 }

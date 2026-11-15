@@ -1,6 +1,7 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReportRecord } from "../delegation";
 import { Toggletip } from "../components/Toggletip";
+import { ClampText, ShowMoreList } from "../components/ShowMore";
 import { IconSearch } from "../icons";
 import {
   ALL_WORKSPACES,
@@ -59,37 +60,10 @@ export function ReportRow({ report, onOpenTask }: { report: ReportRecord; onOpen
         {report.sessionId && <span className="muted">session {report.sessionId.slice(0, 8)}</span>}
         <time className="report__time">{relativeTime(report.createdAt)}</time>
       </header>
-      <p className="report__text">{report.text}</p>
+      <ClampText className="report__text" scopeKey={`report:${report.id}`}>
+        {report.text}
+      </ClampText>
     </li>
-  );
-}
-
-function ReportText({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
-  const paragraph = useRef<HTMLParagraphElement>(null);
-  const textId = useId();
-
-  useLayoutEffect(() => {
-    const element = paragraph.current;
-    if (!element || expanded) return;
-    const measure = () => setOverflowing(element.scrollHeight > element.clientHeight + 1);
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [text, expanded]);
-
-  return (
-    <>
-      <p ref={paragraph} id={textId} className={`rep-card__text ${expanded ? "" : "rep-card__text--clamped"}`}>
-        {text}
-      </p>
-      {(overflowing || expanded) && (
-        <button type="button" className="rep-card__more" aria-expanded={expanded} aria-controls={textId} onClick={() => setExpanded((value) => !value)}>
-          {expanded ? "Show less" : "Show more"}
-        </button>
-      )}
-    </>
   );
 }
 
@@ -107,7 +81,9 @@ function ReportCard({ report, onOpenTask }: { report: ReportRecord; onOpenTask: 
         )}
         <time className="rep-card__time">{relativeTime(report.createdAt)}</time>
       </header>
-      <ReportText text={report.text} />
+      <ClampText className="rep-card__text" lines={2}>
+        {report.text}
+      </ClampText>
       {meta && <span className="rep-card__meta">{meta}</span>}
     </li>
   );
@@ -157,12 +133,18 @@ export function ReportsView({ reports, enabled, onOpenTask }: Props) {
         </div>
       </div>
       {!enabled && <p className="callout">The hub surface is off on this server, so nothing can report yet. See Settings › Hooks and connections.</p>}
-      <ul className="reports">
-        {shown.map((report) => (
-          <ReportCard key={report.id} report={report} onOpenTask={onOpenTask} />
-        ))}
-        {shown.length === 0 && <li className="empty">{reports.length === 0 ? "No reports yet." : "No reports match these filters."}</li>}
-      </ul>
+      <ShowMoreList
+        items={shown}
+        resetKey={`${kind}|${workspace}|${query}`}
+        noun="reports"
+        wrap={(rows) => (
+          <ul className="reports">
+            {rows}
+            {shown.length === 0 && <li className="empty">{reports.length === 0 ? "No reports yet." : "No reports match these filters."}</li>}
+          </ul>
+        )}
+        render={(report) => <ReportCard key={report.id} report={report} onOpenTask={onOpenTask} />}
+      />
     </div>
   );
 }

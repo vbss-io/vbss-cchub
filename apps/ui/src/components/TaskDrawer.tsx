@@ -12,9 +12,12 @@ import { ReportRow } from "../views/ReportsView";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 import { LiveLog, RunCard, WorktreePanel } from "./TaskDetailParts";
+import { ClampScope, ClampText, ShowMoreList } from "./ShowMore";
 import { taskOrigin, taskStatusLabel, whyOf, worktreeLabel } from "./TaskCard";
 
 type Tab = "live" | "asked" | "runs" | "worktree" | "reports" | "details";
+
+const ASKED_LINES = 12;
 
 interface Props {
   taskId: string;
@@ -230,95 +233,97 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
         </div>
 
         <div className="drawer__body">
-          {!state.detail && <p className="hint">Loading the task…</p>}
-          {state.detail && tab === "live" && <LiveLog lines={state.logLines} running={running} />}
-          {state.detail && tab === "asked" && (
-            <div className="askbox__body">
-              <Markdown text={state.detail.task.prompt} />
-            </div>
-          )}
-          {state.detail && tab === "runs" && (
-            <div className="runs">
-              {runs.map((run) => (
-                <RunCard key={run.id} run={run} />
-              ))}
-              {runs.length === 0 && <p className="muted">No runs recorded yet.</p>}
-            </div>
-          )}
-          {state.detail && tab === "worktree" && (
-            <WorktreePanel
-              worktree={state.worktree}
-              busy={state.busy}
-              running={running}
-              canMerge={canMerge}
-              confirmDiscard={confirmDiscard}
-              onConfirmDiscard={setConfirmDiscard}
-              onDiscard={state.discard}
-              onMerge={mergeNow}
-            />
-          )}
-          {state.detail && tab === "reports" && (
-            <ul className="reports">
-              {reports.map((report) => (
-                <ReportRow key={report.id} report={report} />
-              ))}
-            </ul>
-          )}
-          {state.detail && tab === "details" && task && (
-            <dl className="details">
-              <dt>Task id</dt>
-              <dd>
-                <code>{task.id}</code>
-              </dd>
-              <dt>Workspace</dt>
-              <dd>
-                {task.workspace}
-                {task.repo ? ` / ${task.repo}` : ""}
-              </dd>
-              <dt>Runner</dt>
-              <dd>
-                {task.runner}
-                {task.requestedModel ? ` · ${task.requestedModel}` : ""}
-                {task.permissionMode ? ` · ${task.permissionMode}` : ""}
-              </dd>
-              <dt>Runs in</dt>
-              <dd className="path">{task.cwd}</dd>
-              <dt>Repos attached</dt>
-              <dd className="path">{task.addDirs.length > 0 ? task.addDirs.join(", ") : "—"}</dd>
-              <dt>Worktree</dt>
-              <dd className="path">{isolated ? `${worktreeLabel(task) ?? "worktree"}${state.worktree?.path ? ` · ${state.worktree.path}` : ""}` : "shared checkout"}</dd>
-              <dt>Ports</dt>
-              <dd>{task.portBase != null && task.portEnd != null ? `${task.portBase}–${task.portEnd}` : "—"}</dd>
-              <dt>Origin</dt>
-              <dd>
-                {origin?.sessionId ? (
-                  <button className="linklike" onClick={() => onOpenSession(origin.sessionId ?? "")}>
-                    {origin.label}
-                  </button>
-                ) : (
-                  (origin?.label ?? "—")
-                )}
-              </dd>
-              <dt>Hub session</dt>
-              <dd>
-                {task.sessionId ? (
-                  <button className="linklike" onClick={() => onOpenSession(task.sessionId ?? "")}>
-                    <code>{task.sessionId}</code>
-                  </button>
-                ) : (
-                  "—"
-                )}
-              </dd>
-              <dt>Started</dt>
-              <dd>{new Date(task.createdAt).toLocaleString()}</dd>
-              <dt>Duration</dt>
-              <dd>{timing?.duration ?? "—"}</dd>
-              <dt>Runs</dt>
-              <dd>{timing?.runs ?? "—"}</dd>
-              <dt>Updated</dt>
-              <dd>{new Date(task.updatedAt).toLocaleString()}</dd>
-            </dl>
-          )}
+          <ClampScope resetKey={taskId}>
+            {!state.detail && <p className="hint">Loading the task…</p>}
+            {state.detail && tab === "live" && <LiveLog lines={state.logLines} running={running} resetKey={`${taskId}:${runs[runs.length - 1]?.id ?? "none"}`} />}
+            {state.detail && tab === "asked" && (
+              <ClampText className="askbox__body" markdown lines={ASKED_LINES} scopeKey="asked">
+                <Markdown text={state.detail.task.prompt} />
+              </ClampText>
+            )}
+            {state.detail && tab === "runs" && (
+              <div className="runs">
+                <ShowMoreList items={runs} resetKey={`runs:${taskId}`} from="end" noun="runs" render={(run) => <RunCard key={run.id} run={run} />} />
+                {runs.length === 0 && <p className="muted">No runs recorded yet.</p>}
+              </div>
+            )}
+            {state.detail && tab === "worktree" && (
+              <WorktreePanel
+                worktree={state.worktree}
+                busy={state.busy}
+                running={running}
+                canMerge={canMerge}
+                confirmDiscard={confirmDiscard}
+                onConfirmDiscard={setConfirmDiscard}
+                onDiscard={state.discard}
+                onMerge={mergeNow}
+              />
+            )}
+            {state.detail && tab === "reports" && (
+              <ShowMoreList
+                items={reports}
+                resetKey={`reports:${taskId}`}
+                noun="reports"
+                wrap={(rows) => <ul className="reports">{rows}</ul>}
+                render={(report) => <ReportRow key={report.id} report={report} />}
+              />
+            )}
+            {state.detail && tab === "details" && task && (
+              <dl className="details">
+                <dt>Task id</dt>
+                <dd>
+                  <code>{task.id}</code>
+                </dd>
+                <dt>Workspace</dt>
+                <dd>
+                  {task.workspace}
+                  {task.repo ? ` / ${task.repo}` : ""}
+                </dd>
+                <dt>Runner</dt>
+                <dd>
+                  {task.runner}
+                  {task.requestedModel ? ` · ${task.requestedModel}` : ""}
+                  {task.permissionMode ? ` · ${task.permissionMode}` : ""}
+                </dd>
+                <dt>Runs in</dt>
+                <dd className="path">{task.cwd}</dd>
+                <dt>Repos attached</dt>
+                <dd className="path">{task.addDirs.length > 0 ? task.addDirs.join(", ") : "—"}</dd>
+                <dt>Worktree</dt>
+                <dd className="path">{isolated ? `${worktreeLabel(task) ?? "worktree"}${state.worktree?.path ? ` · ${state.worktree.path}` : ""}` : "shared checkout"}</dd>
+                <dt>Ports</dt>
+                <dd>{task.portBase != null && task.portEnd != null ? `${task.portBase}–${task.portEnd}` : "—"}</dd>
+                <dt>Origin</dt>
+                <dd>
+                  {origin?.sessionId ? (
+                    <button className="linklike" onClick={() => onOpenSession(origin.sessionId ?? "")}>
+                      {origin.label}
+                    </button>
+                  ) : (
+                    (origin?.label ?? "—")
+                  )}
+                </dd>
+                <dt>Hub session</dt>
+                <dd>
+                  {task.sessionId ? (
+                    <button className="linklike" onClick={() => onOpenSession(task.sessionId ?? "")}>
+                      <code>{task.sessionId}</code>
+                    </button>
+                  ) : (
+                    "—"
+                  )}
+                </dd>
+                <dt>Started</dt>
+                <dd>{new Date(task.createdAt).toLocaleString()}</dd>
+                <dt>Duration</dt>
+                <dd>{timing?.duration ?? "—"}</dd>
+                <dt>Runs</dt>
+                <dd>{timing?.runs ?? "—"}</dd>
+                <dt>Updated</dt>
+                <dd>{new Date(task.updatedAt).toLocaleString()}</dd>
+              </dl>
+            )}
+          </ClampScope>
         </div>
         {drawerWidth.resizable && (
           <ResizableDrawerEdge

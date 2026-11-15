@@ -69,35 +69,6 @@
   overflow-wrap: anywhere;
 }
 
-.rep-card__text--clamped {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  overflow: hidden;
-}
-
-.rep-card__more {
-  align-self: flex-start;
-  padding: 0;
-  background: none;
-  border: none;
-  color: var(--brand);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.rep-card__more:hover {
-  text-decoration: underline;
-}
-
-.rep-card__more:focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-
 .rep-card__meta {
   color: var(--muted);
   font-size: 11px;

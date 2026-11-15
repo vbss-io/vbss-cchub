@@ -18,6 +18,8 @@ import { RunChip } from "./RunChips";
 import { Toggletip } from "./Toggletip";
 import { sessionMenuKeys, sessionPrimaryAction, sessionRelations, sessionTabs, visibleTab, type SessionMenuKey, type SessionTab } from "../drawer-model";
 import { shortFolder } from "../wsmatch";
+import { LIST_WINDOW } from "../show-more";
+import { ClampScope, ClampText, ShowMoreList } from "./ShowMore";
 
 interface Props {
   session: SessionRecord;
@@ -47,45 +49,45 @@ function entryKey(entry: TranscriptEntry, seen: Map<string, number>): string {
   return count === 0 ? base : `${base}#${count}`;
 }
 
+const SUBAGENT_TURNS = 3;
+
 const isConversation = (entry: TranscriptEntry): boolean => entry.role === "user" || entry.role === "assistant";
 
-export function Timeline({ entries, empty, detail, onShowDetail, assistantLabel = ROLE_LABEL.assistant }: { entries: TranscriptEntry[]; empty: string; detail: boolean; onShowDetail: () => void; assistantLabel?: string }) {
-  const [open, setOpen] = useState<Set<string>>(() => new Set());
+interface TimelineProps {
+  entries: TranscriptEntry[];
+  empty: string;
+  detail: boolean;
+  onShowDetail: () => void;
+  assistantLabel?: string;
+  resetKey?: string;
+  initial?: number;
+}
+
+export function Timeline({ entries, empty, detail, onShowDetail, assistantLabel = ROLE_LABEL.assistant, resetKey = "timeline", initial = LIST_WINDOW.initial }: TimelineProps) {
   if (entries.length === 0) return <p className="hint">{empty}</p>;
-  const toggle = (key: string) => {
-    setOpen((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
   const shown = detail ? entries : entries.filter(isConversation);
   const hidden = entries.length - shown.length;
   const seen = new Map<string, number>();
+  const keyed = shown.map((entry) => ({ entry, key: entryKey(entry, seen) }));
   return (
     <>
-      <ol className="timeline">
-        {shown.map((entry) => {
-          const key = entryKey(entry, seen);
-          const long = (entry.text ?? "").length > 240 || (entry.text ?? "").split("\n").length > 5;
-          const isOpen = open.has(key);
-          return (
-            <li
-              key={key}
-              className={`timeline__item timeline__item--${entry.role} ${long ? "timeline__item--expandable" : ""} ${isOpen ? "timeline__item--open" : ""}`}
-              onClick={() => long && toggle(key)}
-              title={long ? (isOpen ? "Click to collapse" : "Click to read everything") : undefined}
-            >
-              <span className="timeline__role">{entry.tool ?? (entry.role === "assistant" ? assistantLabel : ROLE_LABEL[entry.role])}</span>
-              <span className="timeline__text">
-                {entry.role === "assistant" ? <Markdown text={entry.text || "(empty)"} /> : entry.text || "(empty)"}
-              </span>
-              {entry.at && <time className="timeline__time">{relativeTime(entry.at)}</time>}
-            </li>
-          );
-        })}
-      </ol>
+      <ShowMoreList
+        items={keyed}
+        resetKey={`${resetKey}:${detail ? "detail" : "conversation"}`}
+        from="end"
+        options={{ ...LIST_WINDOW, initial }}
+        noun="turns"
+        wrap={(rows) => <ol className="timeline">{rows}</ol>}
+        render={({ entry, key }) => (
+          <li key={key} className={`timeline__item timeline__item--${entry.role}`}>
+            <span className="timeline__role">{entry.tool ?? (entry.role === "assistant" ? assistantLabel : ROLE_LABEL[entry.role])}</span>
+            <ClampText className="timeline__text" markdown={entry.role === "assistant"} scopeKey={`${resetKey}:${key}`}>
+              {entry.role === "assistant" ? <Markdown text={entry.text || "(empty)"} /> : entry.text || "(empty)"}
+            </ClampText>
+            {entry.at && <time className="timeline__time">{relativeTime(entry.at)}</time>}
+          </li>
+        )}
+      />
       {!detail && hidden > 0 && (
         <button type="button" className="timeline__hidden" onClick={onShowDetail}>
           {hidden} tool step{hidden === 1 ? "" : "s"} hidden · Detailed
@@ -287,178 +289,218 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
       </div>
 
       <div className="drawer__body">
-        {error && <p className="error">{error}</p>}
-        {tab === "activity" && (
-          <>
-            <div className="timeline__bar">
-              <Toggletip label="About this activity">
-                Last turns read from the session transcript. Refreshes every {current.status === "ended" ? "15" : "3"} seconds.
-              </Toggletip>
-              <div className="pillpair">
-                <button className={`pill ${detail ? "" : "pill--on"}`} onClick={() => setDetail(false)}>
-                  Conversation
-                </button>
-                <button className={`pill ${detail ? "pill--on" : ""}`} onClick={() => setDetail(true)}>
-                  Detailed
-                </button>
-              </div>
-            </div>
-            <Timeline
-              entries={live?.transcript ?? []}
-              empty={live ? "No transcript yet for this session." : "Loading…"}
-              detail={detail}
-              onShowDetail={() => setDetail(true)}
-            />
-          </>
-        )}
-        {tab === "agents" && (
-          <>
-            {agents.length === 0 && <p className="hint">{live ? "This session has not spawned subagents." : "Loading subagents…"}</p>}
-            {shownAgents.map((agent) => (
-              <section key={agent.agentId} className={`agent agent--${agent.status}`}>
-                <header className="agent__head">
-                  <span className="agent__type">{agent.agentType ?? "agent"}</span>
-                  <span className={`tag tag--${agent.status === "running" ? "active" : "ended"}`}>{agent.status}</span>
-                  <time>{relativeTime(agent.updatedAt)}</time>
-                </header>
-                {agent.lastMessage && <p className="agent__last">{agent.lastMessage}</p>}
-                <Timeline entries={agent.transcript} empty="No transcript for this subagent yet." detail={detail} onShowDetail={() => setDetail(true)} />
-              </section>
-            ))}
-            {silentGroups.map(([type, count]) => (
-              <section key={`silent-${type}`} className="agent agent--ended">
-                <header className="agent__head">
-                  <span className="agent__type">{type}</span>
-                  <span className="tag tag--ended">ended</span>
-                  <span className="muted small">{count === 1 ? "1 run" : `${count} runs`} · no transcript on disk</span>
-                </header>
-              </section>
-            ))}
-          </>
-        )}
-        {tab === "asks" && (
-          <>
-            <div className="timeline__bar">
-              <Toggletip label="About asks">Questions other people asked this session through a share, each in its own fork (the original stays untouched).</Toggletip>
-            </div>
-            {asks === null && <p className="hint">Loading asks…</p>}
-            {asks && asks.forks.length > 0 && (
-              <ul className="plainlist">
-                {asks.forks.map((fork) => (
-                  <li key={`${fork.shareId}-${fork.asker}`} title={`fork ${fork.sessionId}`}>
-                    <strong>{fork.asker}</strong> · {fork.questions} question{fork.questions === 1 ? "" : "s"} · last {relativeTime(fork.lastUsedAt)}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {asks && asks.asks.length === 0 && <p className="hint">Nobody asked this session yet.</p>}
-            <ul className="activity">
-              {(asks?.asks ?? []).map((item) => (
-                <li key={item.id} className="activity__item">
-                  <div className="activity__head">
-                    <span className={`tag tag--req-${item.status}`}>{item.status}</span>
-                    <strong>{item.asker ?? "someone"}</strong>
-                    <span className="muted small">{relativeTime(item.createdAt)}</span>
-                  </div>
-                  <p className="activity__prompt">{item.prompt}</p>
-                  {item.answer && (
-                    <details className="activity__answer">
-                      <summary>answer</summary>
-                      <pre>{item.answer}</pre>
-                    </details>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-        {tab === "delegated" && (
-          <>
-            {delegated === null && <p className="hint">Loading delegated tasks…</p>}
-            {delegated !== null && delegated.length === 0 && <p className="hint">This session has not delegated work to the hub.</p>}
-            {delegated?.map((task) => (
-              <section key={task.id} className={`agent agent--${task.status === "running" || task.status === "pending" ? "running" : "ended"} ${task.archivedAt != null ? "agent--archived" : ""}`}>
-                <header className="agent__head">
-                  <span className="agent__type">{task.runner}</span>
-                  <span className={`tag tag--${taskStatusTone(task)}`} data-status={task.status}>{TASK_STATUS_LABEL[task.status]}</span>
-                  {task.archivedAt != null && <span className="tag tag--muted">archived</span>}
-                  <time>{relativeTime(task.updatedAt)}</time>
-                </header>
-                <p className="agent__last">
-                  <button className="link" onClick={() => onOpenTask?.(task.id)} disabled={!onOpenTask} title="Open in Delegated">
-                    {task.title}
+        <ClampScope resetKey={session.sessionId}>
+          {error && <p className="error">{error}</p>}
+          {tab === "activity" && (
+            <>
+              <div className="timeline__bar">
+                <Toggletip label="About this activity">
+                  Last turns read from the session transcript. Refreshes every {current.status === "ended" ? "15" : "3"} seconds.
+                </Toggletip>
+                <div className="pillpair">
+                  <button className={`pill ${detail ? "" : "pill--on"}`} onClick={() => setDetail(false)}>
+                    Conversation
                   </button>
-                </p>
-                {task.lastError && <p className="agent__last error">{task.lastError}</p>}
-              </section>
-            ))}
-          </>
-        )}
-        {tab === "details" && (
-          <dl className="details">
-            <dt>Session id</dt>
-            <dd>
-              <code>{current.sessionId}</code>
-            </dd>
-            <dt>Client</dt>
-            <dd>{claudeClient(current.client).label}</dd>
-            <dt>Source</dt>
-            <dd>{current.source ?? "—"}</dd>
-            <dt>Working directory</dt>
-            <dd className="path">{current.cwd ?? "—"}</dd>
-            <dt>Model</dt>
-            <dd>{current.model ?? "—"}</dd>
-            <dt>Tokens</dt>
-            <dd>
-              in {current.tokensIn ?? "—"} · out {current.tokensOut ?? "—"} · context {current.contextTokens ?? "—"}
-            </dd>
-            <dt>Processes</dt>
-            <dd>
-              claude {current.claudePid ?? "—"} · window {current.hostPid ?? "—"}
-            </dd>
-            <dt>Delegated</dt>
-            <dd>
-              {current.delegatedTasks ?? 0} total · {current.delegatedRunning ?? 0} running
-            </dd>
-            <dt>Forks</dt>
-            <dd>
-              {current.forks ?? 0} total · {current.forksLive ?? 0} live · {current.remoteAsks ?? 0} asks
-            </dd>
-            <dt>Fork of</dt>
-            <dd>{relations.fork}</dd>
-            <dt>Helpers</dt>
-            <dd>{relations.helpers}</dd>
-            <dt>Peers</dt>
-            <dd>{relations.peers}</dd>
-            <dt>Subagents</dt>
-            <dd>
-              {current.agentsRunning ?? 0} running · {current.agentsTotal ?? 0} spawned
-            </dd>
-            <dt>Transcript</dt>
-            <dd className="path">{current.transcriptPath ?? "—"}</dd>
-            <dt>Started</dt>
-            <dd>{new Date(current.startedAt).toLocaleString()}</dd>
-            <dt>Updated</dt>
-            <dd>{new Date(current.updatedAt).toLocaleString()}</dd>
-            <dt>File claims</dt>
-            <dd>
-              {claims.length === 0 && "—"}
-              {claims.length > 0 && (
-                <ul className="plainlist">
-                  {claims.map((claim) => (
-                    <li key={claim.id}>
-                      {claim.paths.join(", ")} · until {new Date(claim.expiresAt).toLocaleString()}
-                      {claim.note ? ` · ${claim.note}` : ""}{" "}
-                      <button className="linklike" onClick={() => onReleaseClaim?.(claim.id)} disabled={!onReleaseClaim}>
-                        Release
-                      </button>
+                  <button className={`pill ${detail ? "pill--on" : ""}`} onClick={() => setDetail(true)}>
+                    Detailed
+                  </button>
+                </div>
+              </div>
+              <Timeline
+                entries={live?.transcript ?? []}
+                empty={live ? "No transcript yet for this session." : "Loading…"}
+                detail={detail}
+                onShowDetail={() => setDetail(true)}
+                resetKey={`activity:${session.sessionId}`}
+              />
+            </>
+          )}
+          {tab === "agents" && (
+            <>
+              {agents.length === 0 && <p className="hint">{live ? "This session has not spawned subagents." : "Loading subagents…"}</p>}
+              <ShowMoreList
+                items={shownAgents}
+                resetKey={`agents:${session.sessionId}`}
+                noun="subagents"
+                render={(agent) => (
+                  <section key={agent.agentId} className={`agent agent--${agent.status}`}>
+                    <header className="agent__head">
+                      <span className="agent__type">{agent.agentType ?? "agent"}</span>
+                      <span className={`tag tag--${agent.status === "running" ? "active" : "ended"}`}>{agent.status}</span>
+                      <time>{relativeTime(agent.updatedAt)}</time>
+                    </header>
+                    {agent.lastMessage && (
+                      <ClampText className="agent__last" lines={3} scopeKey={`agent-last:${agent.agentId}`}>
+                        {agent.lastMessage}
+                      </ClampText>
+                    )}
+                    <Timeline
+                      entries={agent.transcript}
+                      empty="No transcript for this subagent yet."
+                      detail={detail}
+                      onShowDetail={() => setDetail(true)}
+                      resetKey={`agent:${agent.agentId}`}
+                      initial={SUBAGENT_TURNS}
+                    />
+                  </section>
+                )}
+              />
+              {silentGroups.map(([type, count]) => (
+                <section key={`silent-${type}`} className="agent agent--ended">
+                  <header className="agent__head">
+                    <span className="agent__type">{type}</span>
+                    <span className="tag tag--ended">ended</span>
+                    <span className="muted small">{count === 1 ? "1 run" : `${count} runs`} · no transcript on disk</span>
+                  </header>
+                </section>
+              ))}
+            </>
+          )}
+          {tab === "asks" && (
+            <>
+              <div className="timeline__bar">
+                <Toggletip label="About asks">Questions other people asked this session through a share, each in its own fork (the original stays untouched).</Toggletip>
+              </div>
+              {asks === null && <p className="hint">Loading asks…</p>}
+              {asks && asks.forks.length > 0 && (
+                <ShowMoreList
+                  items={asks.forks}
+                  resetKey={`forks:${session.sessionId}`}
+                  noun="forks"
+                  wrap={(rows) => <ul className="plainlist">{rows}</ul>}
+                  render={(fork) => (
+                    <li key={`${fork.shareId}-${fork.asker}`} title={`fork ${fork.sessionId}`}>
+                      <strong>{fork.asker}</strong> · {fork.questions} question{fork.questions === 1 ? "" : "s"} · last {relativeTime(fork.lastUsedAt)}
                     </li>
-                  ))}
-                </ul>
+                  )}
+                />
               )}
-            </dd>
-          </dl>
-        )}
+              {asks && asks.asks.length === 0 && <p className="hint">Nobody asked this session yet.</p>}
+              <ShowMoreList
+                items={asks?.asks ?? []}
+                resetKey={`asks:${session.sessionId}`}
+                noun="asks"
+                wrap={(rows) => <ul className="activity">{rows}</ul>}
+                render={(item) => (
+                  <li key={item.id} className="activity__item">
+                    <div className="activity__head">
+                      <span className={`tag tag--req-${item.status}`}>{item.status}</span>
+                      <strong>{item.asker ?? "someone"}</strong>
+                      <span className="muted small">{relativeTime(item.createdAt)}</span>
+                    </div>
+                    <ClampText className="activity__prompt" scopeKey={`ask:${item.id}`}>
+                      {item.prompt}
+                    </ClampText>
+                    {item.answer && (
+                      <details className="activity__answer">
+                        <summary>answer</summary>
+                        <ClampText className="activity__answer-pre" scopeKey={`answer:${item.id}`}>
+                          {item.answer}
+                        </ClampText>
+                      </details>
+                    )}
+                  </li>
+                )}
+              />
+            </>
+          )}
+          {tab === "delegated" && (
+            <>
+              {delegated === null && <p className="hint">Loading delegated tasks…</p>}
+              {delegated !== null && delegated.length === 0 && <p className="hint">This session has not delegated work to the hub.</p>}
+              <ShowMoreList
+                items={delegated ?? []}
+                resetKey={`delegated:${session.sessionId}`}
+                noun="tasks"
+                render={(task) => (
+                  <section key={task.id} className={`agent agent--${task.status === "running" || task.status === "pending" ? "running" : "ended"} ${task.archivedAt != null ? "agent--archived" : ""}`}>
+                    <header className="agent__head">
+                      <span className="agent__type">{task.runner}</span>
+                      <span className={`tag tag--${taskStatusTone(task)}`} data-status={task.status}>{TASK_STATUS_LABEL[task.status]}</span>
+                      {task.archivedAt != null && <span className="tag tag--muted">archived</span>}
+                      <time>{relativeTime(task.updatedAt)}</time>
+                    </header>
+                    <p className="agent__last">
+                      <button className="link" onClick={() => onOpenTask?.(task.id)} disabled={!onOpenTask} title="Open in Delegated">
+                        {task.title}
+                      </button>
+                    </p>
+                    {task.lastError && (
+                      <ClampText className="agent__last error" lines={3} scopeKey={`task-error:${task.id}`}>
+                        {task.lastError}
+                      </ClampText>
+                    )}
+                  </section>
+                )}
+              />
+            </>
+          )}
+          {tab === "details" && (
+            <dl className="details">
+              <dt>Session id</dt>
+              <dd>
+                <code>{current.sessionId}</code>
+              </dd>
+              <dt>Client</dt>
+              <dd>{claudeClient(current.client).label}</dd>
+              <dt>Source</dt>
+              <dd>{current.source ?? "—"}</dd>
+              <dt>Working directory</dt>
+              <dd className="path">{current.cwd ?? "—"}</dd>
+              <dt>Model</dt>
+              <dd>{current.model ?? "—"}</dd>
+              <dt>Tokens</dt>
+              <dd>
+                in {current.tokensIn ?? "—"} · out {current.tokensOut ?? "—"} · context {current.contextTokens ?? "—"}
+              </dd>
+              <dt>Processes</dt>
+              <dd>
+                claude {current.claudePid ?? "—"} · window {current.hostPid ?? "—"}
+              </dd>
+              <dt>Delegated</dt>
+              <dd>
+                {current.delegatedTasks ?? 0} total · {current.delegatedRunning ?? 0} running
+              </dd>
+              <dt>Forks</dt>
+              <dd>
+                {current.forks ?? 0} total · {current.forksLive ?? 0} live · {current.remoteAsks ?? 0} asks
+              </dd>
+              <dt>Fork of</dt>
+              <dd>{relations.fork}</dd>
+              <dt>Helpers</dt>
+              <dd>{relations.helpers}</dd>
+              <dt>Peers</dt>
+              <dd>{relations.peers}</dd>
+              <dt>Subagents</dt>
+              <dd>
+                {current.agentsRunning ?? 0} running · {current.agentsTotal ?? 0} spawned
+              </dd>
+              <dt>Transcript</dt>
+              <dd className="path">{current.transcriptPath ?? "—"}</dd>
+              <dt>Started</dt>
+              <dd>{new Date(current.startedAt).toLocaleString()}</dd>
+              <dt>Updated</dt>
+              <dd>{new Date(current.updatedAt).toLocaleString()}</dd>
+              <dt>File claims</dt>
+              <dd>
+                {claims.length === 0 && "—"}
+                {claims.length > 0 && (
+                  <ul className="plainlist">
+                    {claims.map((claim) => (
+                      <li key={claim.id}>
+                        {claim.paths.join(", ")} · until {new Date(claim.expiresAt).toLocaleString()}
+                        {claim.note ? ` · ${claim.note}` : ""}{" "}
+                        <button className="linklike" onClick={() => onReleaseClaim?.(claim.id)} disabled={!onReleaseClaim}>
+                          Release
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </dd>
+            </dl>
+          )}
+        </ClampScope>
       </div>
       {drawerWidth.resizable && (
         <ResizableDrawerEdge

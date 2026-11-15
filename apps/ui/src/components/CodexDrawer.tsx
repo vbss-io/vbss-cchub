@@ -11,6 +11,7 @@ import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 import { RunChip } from "./RunChips";
 import { Toggletip } from "./Toggletip";
+import { ClampScope } from "./ShowMore";
 
 interface Props {
   thread: CodexSessionRecord;
@@ -173,67 +174,70 @@ export function CodexDrawer({ thread, workspace, delegatedEnabled, codexAppRunni
         </div>
 
         <div className="drawer__body">
-          {error && <p className="error">{error}</p>}
-          {tab === "activity" && (
-            <>
-              <div className="timeline__bar">
-                <Toggletip label="About this activity">Read from the Codex rollout. {live ? "Refreshes every 5 seconds." : "This thread has ended."}</Toggletip>
-                <div className="pillpair">
-                  <button className={`pill ${detail ? "" : "pill--on"}`} onClick={() => setDetail(false)}>
-                    Conversation
-                  </button>
-                  <button className={`pill ${detail ? "pill--on" : ""}`} onClick={() => setDetail(true)}>
-                    Detailed
-                  </button>
+          <ClampScope resetKey={thread.id}>
+            {error && <p className="error">{error}</p>}
+            {tab === "activity" && (
+              <>
+                <div className="timeline__bar">
+                  <Toggletip label="About this activity">Read from the Codex rollout. {live ? "Refreshes every 5 seconds." : "This thread has ended."}</Toggletip>
+                  <div className="pillpair">
+                    <button className={`pill ${detail ? "" : "pill--on"}`} onClick={() => setDetail(false)}>
+                      Conversation
+                    </button>
+                    <button className={`pill ${detail ? "pill--on" : ""}`} onClick={() => setDetail(true)}>
+                      Detailed
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <Timeline
-                assistantLabel="codex"
-                entries={entries ?? []}
-                empty={entries ? "No transcript yet for this thread." : "Loading…"}
-                detail={detail}
-                onShowDetail={() => setDetail(true)}
-              />
-            </>
-          )}
-          {tab === "details" && (
-            <dl className="details">
-              <dt>Thread id</dt>
-              <dd>
-                <code>{thread.id}</code>
-              </dd>
-              <dt>Client</dt>
-              <dd>{clientInfo.label}</dd>
-              <dt>Working directory</dt>
-              <dd className="path">{thread.cwd ?? "—"}</dd>
-              <dt>Rollout file</dt>
-              <dd className="path">{thread.file}</dd>
-              <dt>Originator</dt>
-              <dd>{thread.originator ?? "—"}</dd>
-              <dt>Source</dt>
-              <dd>{sourceLabel(thread)}</dd>
-              <dt>Turns</dt>
-              <dd>{thread.turns}</dd>
-              <dt>Started</dt>
-              <dd>{new Date(thread.startedAt).toLocaleString()}</dd>
-              <dt>Updated</dt>
-              <dd>{new Date(thread.updatedAt).toLocaleString()}</dd>
-              {hubTaskId && (
-                <>
-                  <dt>Hub task</dt>
-                  <dd>
-                    {delegatedEnabled ? (
-                      <button className="linklike" onClick={() => onOpenTask(hubTaskId)} title="Open in Delegated">
+                <Timeline
+                  assistantLabel="codex"
+                  entries={entries ?? []}
+                  empty={entries ? "No transcript yet for this thread." : "Loading…"}
+                  detail={detail}
+                  onShowDetail={() => setDetail(true)}
+                  resetKey={`codex:${thread.id}`}
+                />
+              </>
+            )}
+            {tab === "details" && (
+              <dl className="details">
+                <dt>Thread id</dt>
+                <dd>
+                  <code>{thread.id}</code>
+                </dd>
+                <dt>Client</dt>
+                <dd>{clientInfo.label}</dd>
+                <dt>Working directory</dt>
+                <dd className="path">{thread.cwd ?? "—"}</dd>
+                <dt>Rollout file</dt>
+                <dd className="path">{thread.file}</dd>
+                <dt>Originator</dt>
+                <dd>{thread.originator ?? "—"}</dd>
+                <dt>Source</dt>
+                <dd>{sourceLabel(thread)}</dd>
+                <dt>Turns</dt>
+                <dd>{thread.turns}</dd>
+                <dt>Started</dt>
+                <dd>{new Date(thread.startedAt).toLocaleString()}</dd>
+                <dt>Updated</dt>
+                <dd>{new Date(thread.updatedAt).toLocaleString()}</dd>
+                {hubTaskId && (
+                  <>
+                    <dt>Hub task</dt>
+                    <dd>
+                      {delegatedEnabled ? (
+                        <button className="linklike" onClick={() => onOpenTask(hubTaskId)} title="Open in Delegated">
+                          <code>{hubTaskId}</code>
+                        </button>
+                      ) : (
                         <code>{hubTaskId}</code>
-                      </button>
-                    ) : (
-                      <code>{hubTaskId}</code>
-                    )}
-                  </dd>
-                </>
-              )}
-            </dl>
-          )}
+                      )}
+                    </dd>
+                  </>
+                )}
+              </dl>
+            )}
+          </ClampScope>
         </div>
         {drawerWidth.resizable && (
           <ResizableDrawerEdge

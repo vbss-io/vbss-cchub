@@ -3,6 +3,7 @@ import type { TaskRecord } from "../delegation";
 import { IconClose } from "../icons";
 import type { CodexSessionRecord, SessionRecord } from "../types";
 import type { FlowNode } from "../flow-layout";
+import { ClampText } from "./ShowMore";
 
 interface Props {
   node: FlowNode;
@@ -119,7 +120,9 @@ export function FlowInspector({
         {rows.map((row) => (
           <div key={row.label} className="flow-inspect__row">
             <dt>{row.label}</dt>
-            <dd>{row.value}</dd>
+            <dd>
+              <ClampText lines={3}>{row.value}</ClampText>
+            </dd>
           </div>
         ))}
       </dl>

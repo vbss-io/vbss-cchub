@@ -24,9 +24,12 @@ import {
 } from "./BoardParts";
 import { useDrawerWidth, DRAWER_WIDTH } from "../use-layout-size";
 import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
+import { ShowMoreList } from "./ShowMore";
 import "../board-drawer.css";
 
 type FocusMode = "scheduled" | "list";
+
+const TREE_WINDOW = { initial: 50, step: 50, showAllUnder: 25 };
 
 const FOCUS_MODE_TTL_MS = 30_000;
 
@@ -145,8 +148,18 @@ function DrawerItems({ owner, context }: { owner: BoardTask; context: TreeContex
   const busy = context.pending.has(owner.id) || context.organizing;
   const locked = context.finished.has(owner.id);
   return (
-    <ul className="board-tree">
-      {orderedChildren(owner).map((item) =>
+    <ShowMoreList
+      items={orderedChildren(owner)}
+      resetKey={`tree:${owner.id}`}
+      noun="notes and subtasks"
+      options={TREE_WINDOW}
+      wrap={(rows) => (
+        <ul className="board-tree">
+          {rows}
+          {!locked && <BoardNoteAdd task={owner} disabled={busy} onAdd={context.noteActions.onAdd} />}
+        </ul>
+      )}
+      render={(item) =>
         item.kind === "note" ? (
           <BoardNoteRow
             key={`note:${item.note.line}:${item.note.raw}`}
@@ -162,10 +175,9 @@ function DrawerItems({ owner, context }: { owner: BoardTask; context: TreeContex
           />
         ) : (
           <DrawerNode key={item.task.id} task={item.task} context={context} />
-        ),
-      )}
-      {!locked && <BoardNoteAdd task={owner} disabled={busy} onAdd={context.noteActions.onAdd} />}
-    </ul>
+        )
+      }
+    />
   );
 }
 

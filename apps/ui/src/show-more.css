@@ -1,0 +1,60 @@
+.show-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin: 2px 0;
+}
+
+.show-more__btn {
+  align-self: flex-start;
+  padding: 2px 0;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.show-more__btn:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.show-more__btn:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.clamp {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.clamp__body {
+  width: 100%;
+  min-width: 0;
+}
+
+.clamp__body--text.clamp__body--collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--clamp-lines, 6);
+  line-clamp: var(--clamp-lines, 6);
+  overflow: hidden;
+}
+
+.clamp__body--md.clamp__body--collapsed {
+  max-height: calc(var(--clamp-lines, 6) * 1.6em);
+  overflow: hidden;
+}
+
+.clamp__body--md.clamp__body--overflowing {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 2.4em), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 2.4em), transparent);
+}
