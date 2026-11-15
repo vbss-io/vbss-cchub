@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FINISHED_OCCURRENCE_HINT, isSubtask, noteMoveAvailability, orderedChildren, taskMenuEntries, taskMoveAvailability, type MoveDirection } from "../board-model";
+import { FINISHED_OCCURRENCE_HINT, isSubtask, noteMoveAvailability, orderedChildren, taskMenuEntries, taskMoveAvailability, type MoveDirection, type OwnedItem } from "../board-model";
 import type { BoardChange, BoardCheckbox, BoardNoteItem, BoardProject, BoardStatus, BoardTask } from "../delegation";
 import { getSettings } from "../delegation";
 import { IconClose, IconExpand, IconRun } from "../icons";
@@ -30,6 +30,8 @@ import "../board-drawer.css";
 type FocusMode = "scheduled" | "list";
 
 const TREE_WINDOW = { initial: 50, step: 50, showAllUnder: 25 };
+
+const treeItemKey = (item: OwnedItem): string => (item.kind === "note" ? `n:${item.note.raw}` : `t:${item.task.raw}`);
 
 const FOCUS_MODE_TTL_MS = 30_000;
 
@@ -153,6 +155,7 @@ function DrawerItems({ owner, context }: { owner: BoardTask; context: TreeContex
       resetKey={`tree:${owner.id}`}
       noun="notes and subtasks"
       options={TREE_WINDOW}
+      itemKey={treeItemKey}
       wrap={(rows) => (
         <ul className="board-tree">
           {rows}

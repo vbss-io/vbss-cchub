@@ -76,6 +76,18 @@ export interface SessionLive {
   agents: LiveAgent[];
 }
 
+export interface LiveAgentSummary extends AgentRecord {
+  turns: number;
+  lastMessageTruncated: boolean;
+}
+
+export interface SessionLiveSummary {
+  session: SessionRecord;
+  transcript: TranscriptEntry[];
+  agents: LiveAgentSummary[];
+  agentCounts: { total: number; running: number };
+}
+
 export type CodexSessionStatus = "active" | "idle" | "ended";
 
 export type CodexClient = "codex-app" | "codex-cli" | "codex-exec" | "codex-vscode";

@@ -4,6 +4,7 @@ import { config } from "./config.js";
 import { getSession, listAgents } from "./db.js";
 import { readTranscriptTailAsync, type TranscriptEntry } from "./transcript.js";
 import type { AgentRecord, SessionRecord } from "./types.js";
+import { summarizeAgent, type SessionLiveSummary } from "./live-summary.js";
 
 export interface LiveAgent extends AgentRecord {
   transcript: TranscriptEntry[];
@@ -56,4 +57,26 @@ export async function sessionLive(sessionId: string, limit = 40): Promise<Sessio
     ),
   ]);
   return { session: { ...session, transcriptPath }, transcript, agents };
+}
+
+export async function sessionLiveSummary(sessionId: string, limit = 40): Promise<SessionLiveSummary | null> {
+  const live = await sessionLive(sessionId, limit);
+  if (!live) return null;
+  const agents = live.agents.map(summarizeAgent);
+  return {
+    session: live.session,
+    transcript: live.transcript,
+    agents,
+    agentCounts: { total: agents.length, running: agents.filter((agent) => agent.status === "running").length },
+  };
+}
+
+export async function subagentLive(sessionId: string, agentId: string): Promise<{ agent: LiveAgent } | "no-session" | "no-agent"> {
+  const session = getSession(sessionId);
+  if (!session) return "no-session";
+  const agent = listAgents(sessionId).find((item) => item.agentId === agentId);
+  if (!agent) return "no-agent";
+  const sessionTranscript = session.transcriptPath ?? guessTranscriptPath(config.homeDir, session.cwd, sessionId);
+  const path = agent.transcriptPath ?? subagentTranscriptPath(sessionTranscript, sessionId, agent.agentId);
+  return { agent: { ...agent, transcriptPath: path, transcript: await readTranscriptTailAsync(path, 12) } };
 }

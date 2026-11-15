@@ -40,7 +40,8 @@ import {
   setCodexTitle,
   unarchiveCodexThread,
 } from "./codex-store.js";
-import { sessionLive } from "./live.js";
+import { sessionLive, sessionLiveSummary, subagentLive } from "./live.js";
+import { parseLiveQuery } from "./live-summary.js";
 import { runtimeSnapshot } from "./runtimes.js";
 import { ensureExtension } from "./ensure-extension.js";
 import { warmUsage } from "./usage-routes.js";
@@ -206,7 +207,16 @@ app.get("/api/sessions/:id/asks", (req, res) => {
 });
 
 app.get("/api/sessions/:id/live", (req, res) => {
-  void sessionLive(req.params.id).then((live) => {
+  const query = parseLiveQuery(req.query);
+  if (query.mode === "agent") {
+    void subagentLive(req.params.id, query.agentId).then((found) => {
+      if (found === "no-session") res.status(404).json({ error: "session not found" });
+      else if (found === "no-agent") res.status(404).json({ error: "subagent not found" });
+      else res.json(found);
+    });
+    return;
+  }
+  void (query.mode === "summary" ? sessionLiveSummary(req.params.id) : sessionLive(req.params.id)).then((live) => {
     if (!live) {
       res.status(404).json({ error: "session not found" });
       return;

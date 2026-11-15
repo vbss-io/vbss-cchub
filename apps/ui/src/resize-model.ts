@@ -10,6 +10,16 @@ export function clampSize(size: number, min: number, max: number): number {
   return Math.min(high, Math.max(min, Math.round(size)));
 }
 
+export const PANEL_NAV_WIDTH = 232;
+export const PANEL_MAIN_MIN = 240;
+export const DRAWER_VIEWPORT_RESERVE = 96;
+
+export function drawerReserve(inGrid: boolean, navWidth: number | null): number {
+  if (!inGrid) return DRAWER_VIEWPORT_RESERVE;
+  const nav = navWidth !== null && Number.isFinite(navWidth) && navWidth > 0 ? Math.round(navWidth) : PANEL_NAV_WIDTH;
+  return nav + PANEL_MAIN_MIN;
+}
+
 export function effectiveMax(min: number, max: number, containerSize: number, reserve: number): number {
   if (!Number.isFinite(containerSize) || containerSize <= 0) return Math.max(min, max);
   return Math.max(min, Math.min(max, containerSize - reserve));

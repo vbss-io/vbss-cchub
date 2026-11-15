@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { sessionRelations } from "./drawer-model";
+import { sessionRelations, splitAgents, toggleExpanded } from "./drawer-model";
 import { codexMenuKeys, codexPrimaryAction, sessionMenuKeys, sessionPrimaryAction, sessionTabs, visibleTab, type SessionTabInput } from "./drawer-model";
 
 const empty: SessionTabInput = { agentsTotal: 0, agentsRunning: 0, asks: 0, forks: 0, delegated: 0, delegatedOn: true };
@@ -105,5 +105,29 @@ describe("sessionRelations", () => {
       peers: "3 other live agents in this folder",
     });
     assert.equal(sessionRelations({ ...none, helperOf: "99887766aabb", helperParentName: "main" }).helpers, "helper of main");
+  });
+});
+
+describe("splitAgents", () => {
+  const agent = (agentId: string, status: "running" | "ended", turns: number, agentType: string | null = "Explore") => ({ agentId, status, turns, agentType });
+
+  it("keeps running agents and agents with turns, and folds the silent ended ones by type", () => {
+    const result = splitAgents([agent("a", "running", 0), agent("b", "ended", 3), agent("c", "ended", 0, "Plan"), agent("d", "ended", 0, null), agent("e", "ended", 0, "Plan")]);
+    assert.deepEqual(result.shown.map((item) => item.agentId), ["a", "b"]);
+    assert.deepEqual(result.silent, [["Plan", 2], ["agent", 1]]);
+  });
+
+  it("returns empty groups for no agents", () => {
+    assert.deepEqual(splitAgents([]), { shown: [], silent: [] });
+  });
+});
+
+describe("toggleExpanded", () => {
+  it("adds and removes an id without mutating the input", () => {
+    const start = new Set(["a"]);
+    const added = toggleExpanded(start, "b");
+    assert.deepEqual([...added], ["a", "b"]);
+    assert.deepEqual([...toggleExpanded(added, "a")], ["b"]);
+    assert.deepEqual([...start], ["a"]);
   });
 });

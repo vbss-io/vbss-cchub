@@ -6,9 +6,12 @@ import {
   clampOverflows,
   countLines,
   logWindow,
+  newItemIndex,
+  revealedOffset,
   showMoreAll,
   showMoreLabels,
   showMoreNext,
+  showMoreReveal,
   showMoreStart,
   showMoreSync,
   showMoreView,
@@ -168,5 +171,65 @@ describe("toggleKey", () => {
     assert.deepEqual([...opened].sort(), ["a", "b"]);
     assert.deepEqual([...toggleKey(opened, "a")], ["b"]);
     assert.deepEqual([...start], ["a"]);
+  });
+});
+
+describe("newItemIndex", () => {
+  it("finds the last item that was not in the previous list", () => {
+    assert.equal(newItemIndex(["a", "b", "c"], ["a", "b", "c", "d"]), 3);
+    assert.equal(newItemIndex(["a", "b", "c"], ["a", "x", "b", "c"]), 1);
+    assert.equal(newItemIndex(["a", "b"], ["y", "a", "b", "z"]), 3);
+  });
+
+  it("counts repeated keys so a duplicate text is still new", () => {
+    assert.equal(newItemIndex(["n:todo", "n:todo"], ["n:todo", "n:todo", "n:todo"]), 2);
+  });
+
+  it("returns -1 when nothing was added", () => {
+    assert.equal(newItemIndex(["a", "b"], ["a", "b"]), -1);
+    assert.equal(newItemIndex(["a", "b"], ["b"]), -1);
+    assert.equal(newItemIndex(["a", "b"], ["b", "a"]), -1);
+  });
+});
+
+describe("showMoreReveal", () => {
+  const options: ShowMoreOptions = { initial: 50, step: 50, showAllUnder: 25 };
+
+  it("grows a list read from the start until the item is shown", () => {
+    const start = showMoreStart("k", options);
+    const revealed = showMoreReveal(start, 50, 51, "start");
+    assert.equal(revealed.visible, 51);
+    assert.equal(showMoreView(revealed, 51, options).hidden, 0);
+    assert.equal(visibleRange(51, showMoreView(revealed, 51, options).shown, "start").end, 51);
+  });
+
+  it("grows a list read from the end until the item is shown", () => {
+    const start = showMoreStart("k", options);
+    const revealed = showMoreReveal(start, 2, 80, "end");
+    assert.equal(revealed.visible, 78);
+    assert.equal(visibleRange(80, showMoreView(revealed, 80, options).shown, "end").start, 2);
+  });
+
+  it("keeps the state when the item is already visible", () => {
+    const start = showMoreStart("k", options);
+    assert.equal(showMoreReveal(start, 10, 60, "start"), start);
+    assert.equal(showMoreReveal(start, 30, 60, "end"), start);
+    assert.equal(showMoreReveal(start, -1, 60, "start"), start);
+  });
+});
+
+describe("revealedOffset", () => {
+  it("points at the first newly revealed row of a list read from the start", () => {
+    assert.equal(revealedOffset({ start: 0, end: 20 }, { start: 0, end: 70 }, "start"), 20);
+  });
+
+  it("points at the top row of a list read from the end", () => {
+    assert.equal(revealedOffset({ start: 50, end: 70 }, { start: 0, end: 70 }, "end"), 0);
+    assert.equal(revealedOffset({ start: 50, end: 70 }, { start: 30, end: 70 }, "end"), 0);
+  });
+
+  it("returns null when nothing new is shown", () => {
+    assert.equal(revealedOffset({ start: 0, end: 20 }, { start: 0, end: 20 }, "start"), null);
+    assert.equal(revealedOffset({ start: 10, end: 30 }, { start: 10, end: 30 }, "end"), null);
   });
 });

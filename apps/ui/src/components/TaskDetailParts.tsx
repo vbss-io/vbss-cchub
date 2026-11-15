@@ -42,7 +42,7 @@ export function LiveLog({ lines, running, resetKey = "log" }: { lines: LogLine[]
       }}
     >
       {lines.length === 0 && <p className="muted">{running ? "Waiting for the first output…" : "No output was captured for this run."}</p>}
-      <ShowMoreButtons paging={{ ...paging, more: keepPosition(paging.more), all: keepPosition(paging.all) }} from="end" unit="lines" />
+      <ShowMoreButtons paging={{ ...paging, more: keepPosition(paging.more), all: keepPosition(paging.all) }} from="end" unit="lines" focusTarget={() => ref.current} />
       {windowed.map((line) => (
         <div key={line.key} className={`log__line log__line--${line.kind}`}>
           {line.kind === "tool" && <span className="log__badge">tool</span>}

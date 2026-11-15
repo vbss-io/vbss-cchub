@@ -80,6 +80,22 @@
     flex-wrap: wrap;
   }
 
+  .rep-bar .filters {
+    flex: 1 1 100%;
+    min-width: 0;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .rep-bar .filters::-webkit-scrollbar {
+    display: none;
+  }
+
+  .rep-bar .filters > .pill {
+    flex-shrink: 0;
+  }
+
   .rep-bar__right {
     flex-wrap: wrap;
     width: 100%;

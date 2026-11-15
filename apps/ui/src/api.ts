@@ -3,9 +3,11 @@ import type {
   CodexSessionRecord,
   GroupRecord,
   HooksStatus,
+  LiveAgent,
   RunEventMessage,
   RuntimeSnapshot,
   SessionLive,
+  SessionLiveSummary,
   SessionRecord,
   TranscriptEntry,
 } from "./types";
@@ -90,6 +92,12 @@ export const fetchAgents = (sessionId: string): Promise<AgentRecord[]> =>
 
 export const fetchSessionLive = (sessionId: string, limit = 40): Promise<SessionLive> =>
   getJson(`/api/sessions/${encodeURIComponent(sessionId)}/live?limit=${limit}`);
+
+export const fetchSessionLiveSummary = (sessionId: string, limit = 40): Promise<SessionLiveSummary> =>
+  getJson(`/api/sessions/${encodeURIComponent(sessionId)}/live?limit=${limit}&subagents=summary`);
+
+export const fetchSubagentLive = (sessionId: string, agentId: string): Promise<{ agent: LiveAgent }> =>
+  getJson(`/api/sessions/${encodeURIComponent(sessionId)}/live?subagent=${encodeURIComponent(agentId)}`);
 
 export const getHooks = (): Promise<HooksStatus> => getJson("/api/hooks");
 

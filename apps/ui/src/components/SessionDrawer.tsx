@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchSessionLive, focusSession, markSessionSeen, type ClaimRecord } from "../api";
+import { fetchSessionLiveSummary, fetchSubagentLive, focusSession, markSessionSeen, type ClaimRecord } from "../api";
 import { claudeClient, sessionClient } from "../clients";
-import { IconClose, IconExpand, IconFocus } from "../icons";
+import { IconChevron, IconClose, IconExpand, IconFocus } from "../icons";
 import { fetchSessionAsks, type SessionAsks } from "../api";
 import { relativeTime } from "../time";
-import type { SessionLive, SessionRecord, TranscriptEntry } from "../types";
+import type { LiveAgent, SessionLiveSummary, SessionRecord, TranscriptEntry } from "../types";
 import { folderPeers } from "../peers";
 import { taskStatusTone } from "../runs-model";
 import { prettyModel } from "./SessionCard";
@@ -16,7 +16,7 @@ import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 import { RunChip } from "./RunChips";
 import { Toggletip } from "./Toggletip";
-import { sessionMenuKeys, sessionPrimaryAction, sessionRelations, sessionTabs, visibleTab, type SessionMenuKey, type SessionTab } from "../drawer-model";
+import { sessionMenuKeys, sessionPrimaryAction, sessionRelations, sessionTabs, splitAgents, toggleExpanded, visibleTab, type SessionMenuKey, type SessionTab } from "../drawer-model";
 import { shortFolder } from "../wsmatch";
 import { LIST_WINDOW } from "../show-more";
 import { ClampScope, ClampText, ShowMoreList } from "./ShowMore";
@@ -101,7 +101,9 @@ const shortName = (session: SessionRecord): string => session.customTitle ?? ses
 
 export function SessionDrawer({ session, sessions = {}, workspace, claims = [], delegatedEnabled, onReleaseClaim, onClose, onShare, onArchive, onOpenTask }: Props) {
   const [pickedTab, setTab] = useState<SessionTab>("activity");
-  const [live, setLive] = useState<SessionLive | null>(null);
+  const [live, setLive] = useState<SessionLiveSummary | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [agentTurns, setAgentTurns] = useState<Record<string, LiveAgent>>({});
   const liveAgents = live?.agents ?? [];
   const tabs = sessionTabs({
     agentsTotal: Math.max(liveAgents.length, session.agentsTotal ?? 0),
@@ -153,7 +155,7 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
     let retries = 0;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     const load = (): Promise<void> =>
-      fetchSessionLive(session.sessionId)
+      fetchSessionLiveSummary(session.sessionId)
         .then((value) => {
           if (mounted) {
             setLive(value);
@@ -177,6 +179,33 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
       clearInterval(id);
     };
   }, [session.sessionId, session.status, session.updatedAt]);
+
+  useEffect(() => {
+    setExpanded(new Set());
+    setAgentTurns({});
+  }, [session.sessionId]);
+
+  const expandedKey = [...expanded].sort().join("|");
+  useEffect(() => {
+    const ids = expandedKey ? expandedKey.split("|") : [];
+    if (ids.length === 0) return;
+    let mounted = true;
+    const load = () => {
+      for (const agentId of ids) {
+        void fetchSubagentLive(session.sessionId, agentId)
+          .then(({ agent }) => {
+            if (mounted) setAgentTurns((current) => ({ ...current, [agentId]: agent }));
+          })
+          .catch(() => undefined);
+      }
+    };
+    load();
+    const id = setInterval(load, session.status === "ended" ? 15_000 : 3_000);
+    return () => {
+      mounted = false;
+      clearInterval(id);
+    };
+  }, [expandedKey, session.sessionId, session.status]);
 
   const [detail, setDetail] = useState<boolean>(() => {
     try {
@@ -223,9 +252,7 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
   const finished = current.unread === true && current.status === "idle";
   const name = current.customTitle ?? current.title ?? current.sessionId.slice(0, 8);
   const agents = liveAgents;
-  const silentAgents = agents.filter((agent) => agent.status !== "running" && agent.transcript.length === 0);
-  const shownAgents = agents.filter((agent) => !silentAgents.includes(agent));
-  const silentGroups = [...silentAgents.reduce((map, agent) => map.set(agent.agentType ?? "agent", (map.get(agent.agentType ?? "agent") ?? 0) + 1), new Map<string, number>())];
+  const { shown: shownAgents, silent: silentGroups } = splitAgents(agents);
   const primary = sessionPrimaryAction({ status: current.status, stale: current.stale === true });
   const clientInfo = sessionClient(current);
   const canShare = !!onShare && !!workspace && current.status !== "ended";
@@ -322,28 +349,49 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
                 items={shownAgents}
                 resetKey={`agents:${session.sessionId}`}
                 noun="subagents"
-                render={(agent) => (
-                  <section key={agent.agentId} className={`agent agent--${agent.status}`}>
-                    <header className="agent__head">
-                      <span className="agent__type">{agent.agentType ?? "agent"}</span>
-                      <span className={`tag tag--${agent.status === "running" ? "active" : "ended"}`}>{agent.status}</span>
-                      <time>{relativeTime(agent.updatedAt)}</time>
-                    </header>
-                    {agent.lastMessage && (
-                      <ClampText className="agent__last" lines={3} scopeKey={`agent-last:${agent.agentId}`}>
-                        {agent.lastMessage}
-                      </ClampText>
-                    )}
-                    <Timeline
-                      entries={agent.transcript}
-                      empty="No transcript for this subagent yet."
-                      detail={detail}
-                      onShowDetail={() => setDetail(true)}
-                      resetKey={`agent:${agent.agentId}`}
-                      initial={SUBAGENT_TURNS}
-                    />
-                  </section>
-                )}
+                render={(agent) => {
+                  const open = expanded.has(agent.agentId);
+                  const loaded = open ? agentTurns[agent.agentId] : undefined;
+                  const lastMessage = loaded?.lastMessage ?? agent.lastMessage;
+                  const type = agent.agentType ?? "agent";
+                  return (
+                    <section key={agent.agentId} className={`agent agent--${agent.status}`}>
+                      <header className="agent__head">
+                        <button
+                          type="button"
+                          className="agent__toggle"
+                          aria-expanded={open}
+                          aria-label={`${open ? "Hide" : "Show"} turns of ${type} ${agent.agentId}`}
+                          onClick={() => setExpanded((current) => toggleExpanded(current, agent.agentId))}
+                        >
+                          <span className={`agent__chev ${open ? "agent__chev--open" : ""}`}>
+                            <IconChevron size={12} />
+                          </span>
+                          <span className="agent__type">{type}</span>
+                        </button>
+                        <span className={`tag tag--${agent.status === "running" ? "active" : "ended"}`}>{agent.status}</span>
+                        {agent.turns > 0 && <span className="muted small">{agent.turns} turns</span>}
+                        <time>{relativeTime(agent.updatedAt)}</time>
+                      </header>
+                      {lastMessage && (
+                        <ClampText className="agent__last" lines={3} scopeKey={`agent-last:${agent.agentId}:${loaded ? "full" : "preview"}`}>
+                          {lastMessage}
+                        </ClampText>
+                      )}
+                      {open && !loaded && <p className="hint">Loading turns…</p>}
+                      {loaded && (
+                        <Timeline
+                          entries={loaded.transcript}
+                          empty="No transcript for this subagent yet."
+                          detail={detail}
+                          onShowDetail={() => setDetail(true)}
+                          resetKey={`agent:${agent.agentId}`}
+                          initial={SUBAGENT_TURNS}
+                        />
+                      )}
+                    </section>
+                  );
+                }}
               />
               {silentGroups.map(([type, count]) => (
                 <section key={`silent-${type}`} className="agent agent--ended">

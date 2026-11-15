@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { useViewportWidth } from "./components/ResizableSplit";
-import { clampSize, DEFAULT_COLLAPSE_BELOW, effectiveMax, isStacked } from "./resize-model";
+import { clampSize, DEFAULT_COLLAPSE_BELOW, drawerReserve, effectiveMax, isStacked } from "./resize-model";
 import { layoutSize, withLayoutSize } from "./ui-prefs-layout";
 import { useUiPrefs } from "./ui-prefs-context";
 import { useDebouncedCallback } from "./use-debounced";
@@ -8,10 +8,7 @@ import { useDebouncedCallback } from "./use-debounced";
 const SAVE_DELAY = 400;
 
 export const DRAWER_WIDTH = { default: 560, min: 380, max: 1000 } as const;
-const DRAWER_VIEWPORT_RESERVE = 96;
 const PANEL_LAYOUT_ABOVE = 1100;
-const PANEL_NAV_WIDTH = 232;
-const PANEL_MAIN_MIN = 240;
 
 export function useLayoutSize(screen: string, key: string, fallback: number): [number, (size: number) => void] {
   const { uiPrefs, updateUiPrefs } = useUiPrefs();
@@ -42,6 +39,21 @@ export function useLayoutSize(screen: string, key: string, fallback: number): [n
   return [size, change];
 }
 
+export function useNavWidth(): number | null {
+  const [width, setWidth] = useState<number | null>(null);
+  useEffect(() => {
+    const nav = document.querySelector<HTMLElement>(".shell > .nav");
+    if (!nav) return undefined;
+    const measure = () => setWidth(Math.round(nav.getBoundingClientRect().width));
+    measure();
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, []);
+  return width;
+}
+
 export interface DrawerWidth {
   width: number;
   maxWidth: number;
@@ -53,9 +65,10 @@ export interface DrawerWidth {
 export function useDrawerWidth(key: string, full: boolean, publishToRoot = false): DrawerWidth {
   const [stored, setWidth] = useLayoutSize("drawers", key, DRAWER_WIDTH.default);
   const viewport = useViewportWidth();
+  const navWidth = useNavWidth();
   const resizable = !full && !isStacked(viewport, DEFAULT_COLLAPSE_BELOW);
   const inGrid = publishToRoot && viewport > PANEL_LAYOUT_ABOVE;
-  const reserve = inGrid ? PANEL_NAV_WIDTH + PANEL_MAIN_MIN : DRAWER_VIEWPORT_RESERVE;
+  const reserve = drawerReserve(inGrid, navWidth);
   const maxWidth = effectiveMax(DRAWER_WIDTH.min, DRAWER_WIDTH.max, viewport, reserve);
   const width = clampSize(stored, DRAWER_WIDTH.min, maxWidth);
   const style = resizable ? ({ "--drawer-w": `${width}px` } as CSSProperties) : undefined;

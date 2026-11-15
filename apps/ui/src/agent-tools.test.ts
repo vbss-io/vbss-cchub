@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { agentToolsCountText, agentToolsFor, type HubPluginInfo } from "./agent-tools";
+import { agentToolsCountText, agentToolsFor, hubPluginId, type HubPluginInfo } from "./agent-tools";
 
 const hubPlugins: HubPluginInfo[] = [
   { id: "core", name: "Core", enabled: true, tools: ["hub_overview", "hub_workspaces"] },
@@ -26,8 +26,18 @@ describe("agentToolsFor", () => {
 
   it("returns null to hide the line when the hub has no list or does not know the page plugins", () => {
     assert.equal(agentToolsFor(["share"], null), null);
-    assert.equal(agentToolsFor(["sessions", "widget"], hubPlugins), null);
+    assert.equal(agentToolsFor(["widget"], hubPlugins), null);
     assert.equal(agentToolsFor([], hubPlugins), null);
+  });
+});
+
+describe("hub plugin ids", () => {
+  it("maps the Sessions plugin of the UI to the core plugin of the hub", () => {
+    assert.equal(hubPluginId("sessions"), "core");
+    assert.equal(hubPluginId("share"), "share");
+    assert.deepEqual(agentToolsFor(["sessions"], hubPlugins), ["hub_overview", "hub_workspaces"]);
+    assert.deepEqual(agentToolsFor(["sessions", "widget"], hubPlugins), ["hub_overview", "hub_workspaces"]);
+    assert.equal(agentToolsCountText(agentToolsFor(["sessions"], hubPlugins)), "2 agent tools");
   });
 });
 
@@ -39,7 +49,7 @@ describe("agentToolsCountText", () => {
 
   it("shows nothing when the plugin has no tools or the hub does not list it", () => {
     assert.equal(agentToolsCountText(agentToolsFor(["usage"], hubPlugins)), null);
-    assert.equal(agentToolsCountText(agentToolsFor(["sessions"], hubPlugins)), null);
+    assert.equal(agentToolsCountText(agentToolsFor(["widget"], hubPlugins)), null);
     assert.equal(agentToolsCountText(null), null);
     assert.equal(agentToolsCountText([]), null);
   });

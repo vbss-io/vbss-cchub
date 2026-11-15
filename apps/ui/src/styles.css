@@ -1597,6 +1597,35 @@ h3 {
   font-weight: 600;
 }
 
+.agent__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.agent__toggle:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.agent__chev {
+  display: inline-flex;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.agent__chev--open {
+  transform: rotate(90deg);
+}
+
 .agent__last {
   margin: 0;
   font-size: 13px;

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   clampSize,
+  drawerReserve,
   effectiveMax,
   isStacked,
   KEY_STEP,
@@ -32,6 +33,29 @@ describe("clampSize", () => {
 
   it("never returns less than the minimum when max is smaller", () => {
     assert.equal(clampSize(300, 400, 100), 400);
+  });
+});
+
+describe("drawerReserve", () => {
+  it("reserves the measured sidebar plus the main column in the panel grid", () => {
+    assert.equal(drawerReserve(true, 232), 472);
+    assert.equal(drawerReserve(true, 56), 296);
+    assert.equal(drawerReserve(true, 56.4), 296);
+  });
+
+  it("lets the drawer grow 176 px wider with the collapsed rail", () => {
+    assert.equal(effectiveMax(380, 1000, 1280, drawerReserve(true, 56)) - effectiveMax(380, 1000, 1280, drawerReserve(true, 232)), 176);
+  });
+
+  it("falls back to the full sidebar when the sidebar is not measured", () => {
+    assert.equal(drawerReserve(true, null), 472);
+    assert.equal(drawerReserve(true, 0), 472);
+    assert.equal(drawerReserve(true, Number.NaN), 472);
+  });
+
+  it("keeps the viewport reserve outside the panel grid", () => {
+    assert.equal(drawerReserve(false, 56), 96);
+    assert.equal(drawerReserve(false, null), 96);
   });
 });
 

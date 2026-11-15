@@ -86,3 +86,32 @@ export function sessionRelations({ forkOf, forkParentName, helperOf, helperParen
     peers: peers > 0 ? `${peers} other live agent${peers === 1 ? "" : "s"} in this folder` : NONE,
   };
 }
+
+export interface AgentLike {
+  agentId: string;
+  status: "running" | "ended";
+  turns: number;
+  agentType: string | null;
+}
+
+export interface AgentSplit<A extends AgentLike> {
+  shown: A[];
+  silent: [string, number][];
+}
+
+export function splitAgents<A extends AgentLike>(agents: readonly A[]): AgentSplit<A> {
+  const shown: A[] = [];
+  const silent = new Map<string, number>();
+  for (const agent of agents) {
+    if (agent.status === "running" || agent.turns > 0) shown.push(agent);
+    else silent.set(agent.agentType ?? "agent", (silent.get(agent.agentType ?? "agent") ?? 0) + 1);
+  }
+  return { shown, silent: [...silent] };
+}
+
+export function toggleExpanded(expanded: ReadonlySet<string>, id: string): Set<string> {
+  const next = new Set(expanded);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  return next;
+}

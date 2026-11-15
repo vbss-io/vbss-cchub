@@ -53,6 +53,34 @@ export function visibleRange(total: number, shown: number, from: ShowMoreFrom): 
   return from === "start" ? { start: 0, end: count } : { start: total - count, end: total };
 }
 
+export function showMoreReveal(state: ShowMoreState, index: number, total: number, from: ShowMoreFrom): ShowMoreState {
+  if (index < 0 || index >= total) return state;
+  const needed = from === "start" ? index + 1 : total - index;
+  return state.visible >= needed ? state : { ...state, visible: needed };
+}
+
+export function newItemIndex(previous: readonly string[], next: readonly string[]): number {
+  const seen = new Map<string, number>();
+  for (const key of previous) seen.set(key, (seen.get(key) ?? 0) + 1);
+  let found = -1;
+  next.forEach((key, index) => {
+    const left = seen.get(key) ?? 0;
+    if (left > 0) seen.set(key, left - 1);
+    else found = index;
+  });
+  return found;
+}
+
+export interface RowRange {
+  start: number;
+  end: number;
+}
+
+export function revealedOffset(before: RowRange, after: RowRange, from: ShowMoreFrom): number | null {
+  if (from === "start") return after.end > before.end ? before.end - after.start : null;
+  return after.start < before.start ? 0 : null;
+}
+
 export function showMoreLabels(view: ShowMoreView, from: ShowMoreFrom, unit?: string): ShowMoreLabel[] {
   const suffix = unit ? ` ${unit}` : "";
   const labels: ShowMoreLabel[] = [];

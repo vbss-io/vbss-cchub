@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from "react";
 import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusCodexApp, focusSession, getHooks, hubBase, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type DailyStreamEvent, type HooksStatus, type ShareStreamEvent, type TasksBoardStreamEvent } from "./api";
-import { attentionCount } from "./attention";
+import { attentionCount, sessionsBadge, sessionsBadgeTitle } from "./attention";
 import { isHubRun } from "./clients";
 import { BrandMark, Wordmark } from "./components/BrandMark";
 import { CodexDrawer } from "./components/CodexDrawer";
@@ -162,6 +162,7 @@ interface NavMoreItem {
   label: string;
   icon: ReactElement;
   badge: number;
+  title: string;
 }
 
 function NavMore({ items, activeKey, onPick, rail }: { items: NavMoreItem[]; activeKey: string; onPick: (key: View) => void; rail: boolean }) {
@@ -271,6 +272,7 @@ function NavMore({ items, activeKey, onPick, rail }: { items: NavMoreItem[]; act
                 tabIndex={-1}
                 className={`nav__item nav__item--sub ${activeKey === item.key ? "nav__item--on" : ""}`}
                 href={`#/${item.key}`}
+                title={item.badge > 0 ? item.title : undefined}
                 aria-current={activeKey === item.key ? "page" : undefined}
                 onClick={() => {
                   onPick(item.key);
@@ -907,7 +909,9 @@ export function App() {
   useEffect(() => {
     saveSidebarHint(sidebarCollapsed);
   }, [sidebarCollapsed]);
-  const badgeOf = (key: View): number => (key === "sessions" ? attention : 0);
+  const sessionsNavBadge = sessionsBadge(liveSessions, tasks, delegatedEnabled);
+  const badgeOf = (key: View): number => (key === "sessions" ? sessionsNavBadge.count : 0);
+  const navTitle = (key: View, label: string): string => (key === "sessions" ? sessionsBadgeTitle(label, sessionsNavBadge) : railItemTitle(label, badgeOf(key)));
   const navCurrent = navCurrentKey(effectiveView, runsMode, flowEnabled);
   const railTip = (tip: string, title: string = tip): { title?: string; "data-tip"?: string } => (rail ? { "data-tip": tip } : { title });
   const pickNav = (key: View): void => {
@@ -919,6 +923,7 @@ export function App() {
     label: item.label,
     icon: item.icon,
     badge: badgeOf(item.key),
+    title: navTitle(item.key, item.label),
   }));
 
   const viewRef = useRef<View>(effectiveView);
@@ -1125,8 +1130,8 @@ export function App() {
                   <a
                     className={`nav__item ${navCurrent === item.key ? "nav__item--on" : ""}`}
                     href={`#/${item.key}`}
-                    {...railTip(railItemTitle(item.label, badge), item.label)}
-                    aria-label={rail ? railItemTitle(item.label, badge) : undefined}
+                    {...railTip(navTitle(item.key, item.label), badge > 0 ? navTitle(item.key, item.label) : item.label)}
+                    aria-label={rail ? navTitle(item.key, item.label) : undefined}
                     aria-current={navCurrent === item.key ? "page" : undefined}
                     onClick={() => pickNav(item.key)}
                   >
