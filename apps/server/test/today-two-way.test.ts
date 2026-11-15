@@ -372,11 +372,19 @@ describe("G00c D3: hub actions write the daily first", () => {
   it("G00c: Remove from focus of a line whose task moved to a later daily deletes the line and keeps that date", () => {
     const root = lab(
       { alpha: ALPHA(TODAY), beta: BETA(TODAY) },
-      { [TODAY]: dailyOf(TODAY, [LINE_ONE, "- [ ] [[alpha|Alpha]] - Task three"]), [TOMORROW]: dailyOf(TOMORROW, ["- [ ] [[alpha|Alpha]] - Task three"]) },
+      { [TODAY]: dailyOf(TODAY, [LINE_ONE]), [TOMORROW]: dailyOf(TOMORROW, ["- [ ] free line of tomorrow"]) },
     );
     const settings = useVault(root);
+    const THREE = "- [ ] [[alpha|Alpha]] - Task three";
+    today.todayApi.regenerateFocusMirror(settings, TODAY);
+    today.todayApi.regenerateFocusMirror(settings, TOMORROW);
+    assert.ok(read(root, dailyRel(TOMORROW)).includes(`${THREE}\n`));
+    editDaily(root, TODAY, (content) => content.replace(`${LINE_ONE}\n`, `${LINE_ONE}\n${THREE}\n`));
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     assert.equal(taskIn(settings, "alpha", "Task three").scheduled, TODAY);
+    editDaily(root, TOMORROW, (content) => content.replace(`${THREE}\n`, ""));
+    today.todayApi.regenerateFocusMirror(settings, TOMORROW);
+    editDaily(root, TOMORROW, (content) => content.replace("- [ ] free line of tomorrow\n", `- [ ] free line of tomorrow\n${THREE}\n`));
     today.todayApi.regenerateFocusMirror(settings, TOMORROW);
     assert.equal(taskIn(settings, "alpha", "Task three").scheduled, TOMORROW);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
@@ -436,7 +444,7 @@ describe("G00c D3: hub actions write the daily first", () => {
     editDaily(root, TODAY, (content) => content.replace("- 10:00 Standup", "- 10:00 Standup moved"));
     today.flushMirrors(settings);
     const after = snapshot(root, RELS(TODAY));
-    assert.throws(() => today.todayApi.undoClear(settings, TODAY, cleared.token), new RegExp(`^Error: the daily of ${TODAY} changed after Clear today, nothing was restored$`));
+    assert.throws(() => today.todayApi.undoClear(settings, TODAY, cleared.token), new RegExp(`^Error: daily/${TODAY}\\.md changed after Clear today, nothing was restored$`));
     assert.deepEqual(snapshot(root, RELS(TODAY)), after);
   });
 });

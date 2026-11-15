@@ -1,7 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { relative, sep } from "node:path";
 import {
   DailyConflictError,
   dailyFile,
+  dailyRoot,
   dailyTemplateText,
   findHeadingIndex,
   isPlaceholderLine,
@@ -525,6 +527,7 @@ interface SyncSets {
   held?: StoredHold[];
   yielded?: StoredYield[];
   moved?: StoredMove[];
+  adopted?: boolean;
 }
 
 interface Baseline {
@@ -607,6 +610,7 @@ function parseSync(value: unknown): SyncSets | null {
     ...(held.length > 0 ? { held } : {}),
     ...(yielded.length > 0 ? { yielded } : {}),
     ...(moved.length > 0 ? { moved } : {}),
+    ...(value.adopted === true ? { adopted: true } : {}),
   };
 }
 
@@ -812,7 +816,7 @@ function adoptBaseline(settings: DelegationSettings, date: string, path: string,
     unresolved: [],
     unmatched: [],
     dismissed: [],
-    sync: { linked: outside ? [] : printsOf(memberLines(settings, date, scan, null, new Set<string>()).map((member) => member.task)), dated: [] },
+    sync: { linked: outside ? [] : printsOf(withChildren(memberLines(settings, date, scan, null, new Set<string>()), date).map((member) => member.task)), dated: [], adopted: true },
   };
   const baseline: Baseline = { content, state };
   storeBaseline(date, path, baseline);
@@ -919,9 +923,10 @@ interface InsertSpot {
   suffix: string[];
 }
 
-function insertionSpot(settings: DelegationSettings, texts: string[], board: ComposeBoard, first: string | undefined): InsertSpot {
+function insertionSpot(settings: DelegationSettings, texts: string[], board: ComposeBoard, first: string | undefined, allowHeading: boolean): InsertSpot | null {
   const range = focusRange(texts, settings);
   if (!range) {
+    if (!allowHeading) return null;
     let last = texts.length - 1;
     while (last >= 0 && isBlankText(texts[last])) last -= 1;
     return { at: last + 1, prefix: [...(last >= 0 ? [""] : []), `## ${settings.daily.headings.focus}`, ""], suffix: [] };
@@ -990,6 +995,7 @@ function insertMissing(
   focus: TodayEntry[],
   memory: InsertMemory,
   hints: ReadonlySet<string>,
+  allowHeading = false,
 ): InsertResult {
   const result: InsertResult = { inserted: [], renamed: [], ambiguous: [] };
   const parents = parentMap(data.tasks);
@@ -1119,7 +1125,8 @@ function insertMissing(
       break;
     }
     const texts = textsOf();
-    const spot = insertionSpot(settings, texts, board, rendered[0]);
+    const spot = insertionSpot(settings, texts, board, rendered[0], allowHeading);
+    if (spot === null) break;
     const block = [...spot.prefix, ...rendered, ...spot.suffix];
     const copy = [...texts];
     copy.splice(spot.at, 0, ...block);
@@ -1422,22 +1429,29 @@ interface ResolveContext {
   prints: PrintIndex;
   known: ReadonlySet<string>;
   claimed: ReadonlySet<string>;
+  date: string;
 }
 
 function resolveMemo(memo: MarkMemo, context: ResolveContext): BoardTask | null {
   const found = taskOfPrint(context.prints, memo.task);
   if (found !== null) return found;
-  if (memo.line === undefined || memo.parent === undefined || memo.index === undefined || context.known.size === 0) return null;
+  if (context.known.size === 0) return null;
   const projectId = projectOfPrint(memo.task);
-  const candidates = flattenTasks(context.data.tasks).filter(
-    (task) =>
-      task.projectId === projectId &&
-      !context.known.has(fingerprint(task)) &&
-      !context.claimed.has(task.id) &&
-      parentPrint(task, context.lineage) === memo.parent &&
-      (task.line === memo.line || context.lineage.siblings.get(task.id) === memo.index),
-  );
-  return candidates.length === 1 ? (candidates[0] as BoardTask) : null;
+  const unseen = (task: BoardTask): boolean => !context.known.has(fingerprint(task)) && !context.claimed.has(task.id);
+  if (memo.line !== undefined && memo.parent !== undefined && memo.index !== undefined) {
+    const candidates = flattenTasks(context.data.tasks).filter(
+      (task) =>
+        task.projectId === projectId &&
+        unseen(task) &&
+        parentPrint(task, context.lineage) === memo.parent &&
+        (task.line === memo.line || context.lineage.siblings.get(task.id) === memo.index),
+    );
+    if (candidates.length > 1) return null;
+    if (candidates.length === 1) return candidates[0] as BoardTask;
+  }
+  const title = memo.task.slice(projectId.length + KEY_SEPARATOR.length);
+  const moved = flattenTasks(context.data.tasks).filter((task) => task.projectId !== projectId && task.scheduled === context.date && normalizeText(task.title) === title && unseen(task));
+  return moved.length === 1 ? (moved[0] as BoardTask) : null;
 }
 
 function coversTitle(needle: string, title: string, fold: TextFold): boolean {
@@ -1457,6 +1471,7 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
     prints: printIndex(data),
     known: new Set(baseline.state.known),
     claimed: new Set(scan.links.map((link) => link.task.id)),
+    date,
   };
   const baseScan = scanDaily(settings, date, baseline.content, data.projects, data.tasks);
   const baseLinked = new Map(
@@ -1569,7 +1584,8 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
     }
     const task = before.task;
     if (task.repeat !== null || (before.memo === null && !inScope(task, date, lineage))) return;
-    const sameProject = openLine.projectId === null || openLine.projectId === task.projectId;
+    const memoProject = before.memo === null ? null : projectOfPrint(before.memo.task);
+    const sameProject = openLine.projectId === null || openLine.projectId === task.projectId || (same && memoProject !== null && (memoProject === task.projectId || memoProject === openLine.projectId));
     const loose = before.memo?.loose === true;
     const plausible =
       sameProject &&
@@ -1908,6 +1924,7 @@ export function forgetTodayState(): void {
   timers.clear();
   for (const wait of stableWaits.values()) clearTimeout(wait.timer);
   stableWaits.clear();
+  hubWrites.clear();
 }
 
 function errorText(err: unknown): string {
@@ -1918,6 +1935,7 @@ interface MemberLine {
   line: number;
   task: BoardTask;
   entry: FocusEntry;
+  child?: boolean;
 }
 
 const printsOf = (tasks: BoardTask[]): string[] => [...new Set(tasks.map(fingerprint))];
@@ -1949,13 +1967,28 @@ function memberLines(settings: DelegationSettings, date: string, scan: FocusScan
   return out;
 }
 
+function withChildren(members: MemberLine[], date: string): MemberLine[] {
+  const out = [...members];
+  const lines = new Set(members.map((member) => member.line));
+  for (const member of members) {
+    if (member.child === true || member.entry.recurring) continue;
+    for (const child of member.entry.children) {
+      const task = child.task;
+      if (task === null || lines.has(child.line) || task.scheduled !== date || isRecurringTask(task)) continue;
+      lines.add(child.line);
+      out.push({ line: child.line, task, entry: member.entry, child: true });
+    }
+  }
+  return out;
+}
+
 function datedTasks(data: BoardData, date: string): BoardTask[] {
   return flattenTasks(data.tasks).filter((task) => task.status !== "archived" && inFocus(task, date));
 }
 
 function legacySets(settings: DelegationSettings, date: string, baseline: Baseline, data: BoardData, members: MemberLine[], dated: BoardTask[]): SyncSets {
   const baseScan = scanDaily(settings, date, baseline.content, data.projects, data.tasks);
-  const linked = new Set(printsOf(memberLines(settings, date, baseScan, null, new Set<string>()).map((member) => member.task)));
+  const linked = new Set(printsOf(withChildren(memberLines(settings, date, baseScan, null, new Set<string>()), date).map((member) => member.task)));
   const present = new Set(printsOf(members.map((member) => member.task)));
   const existing = new Set(flattenTasks(data.tasks).map((task) => `${task.projectId}${KEY_SEPARATOR}${normalizeText(task.title)}`));
   for (const task of dated) {
@@ -1978,6 +2011,7 @@ interface Reconciled {
   drop: number[];
   insert: Set<string>;
   yielded: StoredYield[];
+  projects: Set<string>;
 }
 
 interface RenameCredit {
@@ -2111,20 +2145,32 @@ function heldPrints(scan: FocusScan, members: MemberLine[], data: BoardData, pla
   return out;
 }
 
-function reconcile(date: string, base: SyncSets, members: MemberLine[], dated: BoardTask[], data: BoardData, hints: ReadonlySet<string>, held: ReadonlySet<string>): Reconciled {
+function reconcile(
+  date: string,
+  base: SyncSets,
+  members: MemberLine[],
+  dated: BoardTask[],
+  data: BoardData,
+  hints: ReadonlySet<string>,
+  held: ReadonlySet<string>,
+  resolve: (print: string) => BoardTask | null,
+): Reconciled {
   const prints = printIndex(data);
   const lines = groupByPrint(members);
   const datedNow = new Map<string, BoardTask>();
   for (const task of dated) if (!datedNow.has(fingerprint(task))) datedNow.set(fingerprint(task), task);
   const linkedBase = new Set(base.linked);
   const datedBase = new Set(base.dated);
+  const adopted = base.adopted === true;
   const movedFrom = new Map((base.moved ?? []).map((item) => [item.print, item.from]));
   const lineCredit = renameCredit(linkedBase, new Set(lines.keys()), prints);
   const dateCredit = renameCredit(datedBase, new Set(datedNow.keys()), prints);
-  const out: Reconciled = { schedule: [], unschedule: [], restore: [], removed: 0, drop: [], insert: new Set<string>(), yielded: [] };
+  const out: Reconciled = { schedule: [], unschedule: [], restore: [], removed: 0, drop: [], insert: new Set<string>(), yielded: [], projects: new Set<string>() };
   const yields = new Set((base.yielded ?? []).map((item) => item.print));
+  const leaving = new Set<string>();
   for (const [print, found] of lines) {
     const task = (found[0] as MemberLine).task;
+    if (found.every((member) => member.child === true)) continue;
     if (yields.has(print)) {
       const scheduled = task.scheduled;
       if (scheduled === null || scheduled === date || isHistory(task) || isRecurringTask(task)) continue;
@@ -2134,12 +2180,16 @@ function reconcile(date: string, base: SyncSets, members: MemberLine[], dated: B
     }
     if (linkedBase.has(print)) continue;
     if (spend(lineCredit, task)) continue;
+    if (adopted && task.scheduled !== null) continue;
     if (schedulesFromLine(task, found, date)) out.schedule.push(task);
   }
   for (const print of linkedBase) {
     if (lines.has(print) || held.has(print)) continue;
-    const task = taskOfPrint(prints, print);
-    if (task === null || isRecurringTask(task) || isHistory(task) || task.scheduled !== date) continue;
+    const own = taskOfPrint(prints, print);
+    const task = own ?? resolve(print);
+    if (task === null || leaving.has(task.id) || isRecurringTask(task) || isHistory(task) || task.scheduled !== date) continue;
+    if (own === null && (lines.has(fingerprint(task)) || linkedBase.has(fingerprint(task)) || held.has(fingerprint(task)))) continue;
+    leaving.add(task.id);
     const from = movedFrom.get(print);
     if (from === undefined) out.unschedule.push(task);
     else out.restore.push({ task, to: from });
@@ -2150,14 +2200,20 @@ function reconcile(date: string, base: SyncSets, members: MemberLine[], dated: B
     const found = lines.get(print);
     if (found === undefined || found.length !== 1) continue;
     const member = found[0] as MemberLine;
-    if (isRecurringTask(member.task) || member.entry.recurring || member.task.scheduled === date || isHistory(member.task) || member.entry.checkbox === "done") continue;
+    if (member.child === true || isRecurringTask(member.task) || member.entry.recurring || member.task.scheduled === date || isHistory(member.task) || member.entry.checkbox === "done") continue;
     out.drop.push(member.line);
-    out.unschedule.push(...datedChildren(member, date));
+    out.projects.add(member.task.projectId);
+    for (const child of datedChildren(member, date)) {
+      out.unschedule.push(child);
+      leaving.add(child.id);
+    }
   }
   for (const [print, task] of datedNow) {
-    if (lines.has(print) || linkedBase.has(print)) continue;
+    if (lines.has(print) || linkedBase.has(print) || leaving.has(task.id)) continue;
     const fresh = !datedBase.has(print) && !spend(dateCredit, task);
-    if (fresh || hints.has(task.id)) out.insert.add(task.id);
+    if (!fresh && !hints.has(task.id)) continue;
+    out.insert.add(task.id);
+    if (fresh && !hints.has(task.id) && !adopted) out.projects.add(task.projectId);
   }
   return out;
 }
@@ -2175,6 +2231,7 @@ function yieldTo(settings: DelegationSettings, date: string, print: string, to: 
     ...(sync.held !== undefined ? { held: sync.held } : {}),
     ...(yielded.length > 0 ? { yielded } : {}),
     ...(sync.moved !== undefined ? { moved: sync.moved } : {}),
+    ...(sync.adopted === true ? { adopted: true } : {}),
   };
   storeBaseline(date, path, { content: baseline.content, state: { ...baseline.state, sync: next } });
 }
@@ -2286,7 +2343,7 @@ function syncSetsAfter(
   moved: StoredMove[],
 ): SyncSets {
   const scan = scanDaily(settings, date, content, data.projects, data.tasks);
-  const linked = new Set([...kept, ...printsOf(memberLines(settings, date, scan, null, kept).map((member) => member.task)), ...held.keys()]);
+  const linked = new Set([...kept, ...printsOf(withChildren(memberLines(settings, date, scan, null, kept), date).map((member) => member.task)), ...held.keys()]);
   const holds = [...held].map(([print, line]): StoredHold => ({ print, line }));
   const yields = yielded.filter((item) => linked.has(item.print));
   const moves = moved.filter((item) => linked.has(item.print));
@@ -2342,20 +2399,69 @@ function isStable(settings: DelegationSettings, date: string, content: string, o
   return (stableReread ?? rereadDaily)(settings, date) === content;
 }
 
-function isAddStable(settings: DelegationSettings, date: string, content: string, options: MirrorOptions): boolean {
+function isFirstSightStable(settings: DelegationSettings, date: string, content: string, options: MirrorOptions): boolean {
   const source = options.source ?? "api";
   if (source === "client" || options.stable === content) return true;
   if (source === "api") return (stableReread ?? rereadDaily)(settings, date) === content;
   return isStable(settings, date, content, options);
 }
 
+const HUB_WRITE_LIMIT = 64;
+const STABLE_SEPARATOR = `${KEY_SEPARATOR}${KEY_SEPARATOR}`;
+const hubWrites = new Set<string>();
+
+const contentHash = (content: string): string => createHash("sha1").update(content).digest("hex");
+
+function rememberHubWrite(content: string): void {
+  const hash = contentHash(content);
+  hubWrites.delete(hash);
+  hubWrites.add(hash);
+  while (hubWrites.size > HUB_WRITE_LIMIT) {
+    const oldest = hubWrites.values().next().value;
+    if (oldest === undefined) break;
+    hubWrites.delete(oldest);
+  }
+}
+
+function projectsKey(settings: DelegationSettings, projectIds: ReadonlySet<string>): string | null {
+  const parts: string[] = [];
+  for (const projectId of [...projectIds].sort()) {
+    let state: ProjectFileState;
+    try {
+      state = readProjectState(settings, projectId);
+    } catch {
+      return null;
+    }
+    const body = state.content.startsWith(BOM_CHAR) ? state.content.slice(BOM_CHAR.length) : state.content;
+    if (body.trim() === "") return null;
+    if (hubWrites.has(contentHash(state.content))) continue;
+    parts.push(`${state.rel}${KEY_SEPARATOR}${state.content}`);
+  }
+  return parts.join(KEY_SEPARATOR);
+}
+
+function isSettled(settings: DelegationSettings, date: string, content: string, plan: Reconciled, projectPart: string, options: MirrorOptions): boolean {
+  const removal = plan.removed > 0;
+  if (projectPart === "" && !removal && plan.schedule.length === 0) return true;
+  const key = projectPart === "" ? content : `${content}${STABLE_SEPARATOR}${projectPart}`;
+  if (options.stable === key) return true;
+  const source = options.source ?? "api";
+  if (projectPart === "" && source === "client") return true;
+  if (projectPart === "" && !removal && source === "api") return (stableReread ?? rereadDaily)(settings, date) === content;
+  if (stableDelayMs > 0) {
+    waitForStable(date, key, source);
+    return false;
+  }
+  const daily = source === "client" ? content : (stableReread ?? rereadDaily)(settings, date);
+  return daily === content && (projectPart === "" || projectsKey(settings, plan.projects) === projectPart);
+}
+
 const hasFrontmatter = (content: string): boolean => (splitLines(content.startsWith(BOM_CHAR) ? content.slice(BOM_CHAR.length) : content)[0] ?? "").trim() === "---";
 
 function isSaneDaily(settings: DelegationSettings, content: string, previous: string | null): boolean {
   if (content.trim() === "" || content.trim() === BOM_CHAR) return false;
-  if (previous === null) return true;
-  if (focusRange(splitLines(previous), settings) !== null && focusRange(splitLines(content), settings) === null) return false;
-  return !hasFrontmatter(previous) || hasFrontmatter(content);
+  if (focusRange(splitLines(content), settings) === null) return false;
+  return previous === null || !hasFrontmatter(previous) || hasFrontmatter(content);
 }
 
 interface UserTick {
@@ -2378,19 +2484,28 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
     if (data === null) return skip("no-board");
     const stored = loadBaseline(date, daily.path);
     if (!isSaneDaily(settings, daily.content, stored?.content ?? null)) return skip("unsettled");
+    if (stored === null && !isFirstSightStable(settings, date, daily.content, options)) return skip("unsettled");
     const baseline = stored ?? adoptBaseline(settings, date, daily.path, daily.content, data, true);
     const texts = splitLines(daily.content);
     let scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
     const firstPlan = planTicks(settings, date, baseline, texts, scan, data);
     const members = memberLines(settings, date, scan, firstPlan, new Set(baseline.state.sync?.linked ?? []));
+    const synced = withChildren(members, date);
     const datedNow = datedTasks(data, date);
-    const base = baseline.state.sync ?? legacySets(settings, date, baseline, data, members, datedNow);
-    const memberPrints = new Set(printsOf(members.map((member) => member.task)));
+    const base = baseline.state.sync ?? legacySets(settings, date, baseline, data, synced, datedNow);
+    const memberPrints = new Set(printsOf(synced.map((member) => member.task)));
     const vanished = new Set(base.linked.filter((print) => !memberPrints.has(print)));
-    const held = heldPrints(scan, members, data, firstPlan, texts, base.held ?? [], vanished);
-    const reconciled = reconcile(date, base, members, datedNow, data, options.hints ?? new Set<string>(), new Set(held.keys()));
-    if (reconciled.removed > 0 && !isStable(settings, date, daily.content, options)) return skip("unsettled");
-    if (reconciled.removed === 0 && reconciled.schedule.length > 0 && !isAddStable(settings, date, daily.content, options)) return skip("unsettled");
+    const held = heldPrints(scan, synced, data, firstPlan, texts, base.held ?? [], vanished);
+    const resolver: ResolveContext = { data, lineage: lineageOf(data), prints: printIndex(data), known: new Set(baseline.state.known), claimed: new Set(scan.links.map((link) => link.task.id)), date };
+    const memos = new Map<string, MarkMemo>();
+    for (const memo of Object.values(baseline.state.marks)) if (!memos.has(memo.task)) memos.set(memo.task, memo);
+    const resolve = (print: string): BoardTask | null => {
+      const memo = memos.get(print);
+      return memo === undefined ? null : resolveMemo(memo, resolver);
+    };
+    const reconciled = reconcile(date, base, synced, datedNow, data, options.hints ?? new Set<string>(), new Set(held.keys()), resolve);
+    const projectPart = reconciled.projects.size === 0 ? "" : projectsKey(settings, reconciled.projects);
+    if (projectPart === null || !isSettled(settings, date, daily.content, reconciled, projectPart, options)) return skip("unsettled");
     if (applyDates(settings, date, reconciled) > 0) {
       data = loadBoardData(settings) ?? data;
       scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
@@ -2545,7 +2660,7 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
           date,
           next,
           data,
-          new Set(printsOf(members.filter((member) => !reconciled.drop.includes(member.line)).map((member) => member.task))),
+          new Set(printsOf(synced.filter((member) => !reconciled.drop.includes(member.entry.line)).map((member) => member.task))),
           held,
           reconciled.yielded,
           movesAfter(base, reconciled, data, date),
@@ -2732,7 +2847,10 @@ export function installTodayHooks(): void {
     composed: onDailyComposed,
   });
   setBoardHooks({
-    committed: (previous: string, next: string) => queueScheduledDates(previous, next),
+    committed: (previous: string, next: string) => {
+      rememberHubWrite(next);
+      queueScheduledDates(previous, next);
+    },
     diskChanged: (content: string) => queueScheduledDates(content),
     taskWritten: (settings: DelegationSettings) => isScheduledMode(settings) && flushMirrors(settings),
   });
@@ -3089,7 +3207,7 @@ function initialContent(settings: DelegationSettings, date: string): string {
       for (const index of [...filled].reverse()) doc.lines.splice(index, 1);
     }
   }
-  insertMissing(settings, date, doc, data, focus, { seen: [], focus: [] }, new Set<string>());
+  insertMissing(settings, date, doc, data, focus, { seen: [], focus: [] }, new Set<string>(), true);
   return renderDoc(doc);
 }
 
@@ -3097,7 +3215,10 @@ function createDailyFile(settings: DelegationSettings, date: string): DailyReadR
   const daily = readDaily(settings, date);
   if (daily.exists) return daily;
   writeDaily(settings, date, initialContent(settings, date), undefined, `create-${randomUUID().slice(0, 8)}`, "server");
-  return readDaily(settings, date);
+  const created = readDaily(settings, date);
+  const data = created.exists && usesMirror(settings, date) && loadBaseline(date, created.path) === null ? loadBoardData(settings) : null;
+  if (data !== null) adoptBaseline(settings, date, created.path, created.content, data);
+  return created;
 }
 
 function migratedKey(date: string): string {
@@ -3401,7 +3522,8 @@ function undoClear(settings: DelegationSettings, date: string, token: string): U
   const undo = undos.get(token);
   if (undo === undefined || undo.date !== date) throw new NotFoundError("nothing to undo");
   const daily = readDaily(settings, date);
-  const dailyName = `the daily of ${date}`;
+  const vault = dailyRoot(settings);
+  const dailyName = vault === null ? undo.path : relative(vault, undo.path).split(sep).join("/");
   if (!daily.exists || daily.path !== undo.path || daily.content !== undo.after) throw new StaleTodayLineError(`${dailyName} changed after Clear today, nothing was restored`);
   for (const file of undo.files) {
     let current: string | null = null;

@@ -1640,7 +1640,24 @@ function scheduledInsertAt(rest: string, spans: TokenSpan[], config: TasksFeatur
   return { at: body.trimEnd().length, before: false };
 }
 
-const LOOSE_SCHEDULED_RE = new RegExp(`(\\s*)${SCHEDULED_MARK}\\uFE0F?[ \\t]*\\d\\S*(\\s*)`, "gu");
+const LOOSE_SCHEDULED_RE = new RegExp(`(\\s*)${SCHEDULED_MARK}\\uFE0F?(?:[ \\t]*(?:\\d\\S*|\\p{L}[\\p{L}\\p{N}_-]*))?(\\s*)`, "gu");
+const SCHEDULED_LEAD_RE = new RegExp(`^${SCHEDULED_MARK}\\uFE0F?[ \\t]*`, "u");
+const BLOCK_ID_RE = /\s+\^[A-Za-z0-9-]+\s*$/u;
+
+function scheduledTokenText(token: string, scheduled: string): string {
+  const lead = token.match(SCHEDULED_LEAD_RE)?.[0] ?? SCHEDULED_MARK;
+  return `${/[ \t]$/u.test(lead) ? lead : `${lead} `}${scheduled}`;
+}
+
+function withoutSpans(rest: string, spans: TokenSpan[]): string {
+  let next = rest;
+  for (const span of [...spans].reverse()) {
+    const before = next.slice(0, span.start);
+    const kept = before.trimEnd();
+    next = kept.length < before.length ? kept + next.slice(span.end) : before + next.slice(span.end).trimStart();
+  }
+  return next;
+}
 
 function scheduledSpans(rest: string, spans: TokenSpan[]): TokenSpan[] {
   const own = spans.filter((span) => span.mark === SCHEDULED_MARK);
@@ -1663,27 +1680,20 @@ export function withScheduledToken(raw: string, config: TasksFeatureSettings, sc
   const head = raw.slice(0, raw.length - rest.length);
   const spans = tokenSpans(rest, config);
   const own = scheduledSpans(rest, spans);
-  if (scheduled === null) {
-    let next = rest;
-    for (const span of [...own].reverse()) {
-      const before = next.slice(0, span.start);
-      const kept = before.trimEnd();
-      next = kept.length < before.length ? kept + next.slice(span.end) : before + next.slice(span.end).trimStart();
-    }
-    return `${head}${next}`;
-  }
-  if (own.length > 0) {
-    let next = rest;
-    for (const span of [...own].reverse()) {
-      const token = next.slice(span.start, span.end);
-      next = next.slice(0, span.start) + token.replace(/\d\S*$/u, scheduled) + next.slice(span.end);
-    }
-    return `${head}${next}`;
+  if (scheduled === null) return `${head}${withoutSpans(rest, own)}`;
+  const [first, ...others] = own;
+  if (first !== undefined) {
+    const marked = `${rest.slice(0, first.start)}${scheduledTokenText(rest.slice(first.start, first.end), scheduled)}${rest.slice(first.end)}`;
+    const grown = marked.length - rest.length;
+    return `${head}${withoutSpans(marked, others.map((span) => ({ ...span, start: span.start + grown, end: span.end + grown })))}`;
   }
   const spot = scheduledInsertAt(rest, spans, config);
+  const block = rest.match(BLOCK_ID_RE);
+  const limit = block === null ? rest.length : (block.index ?? rest.length);
+  const at = Math.min(spot.at, limit);
   const token = `${SCHEDULED_MARK} ${scheduled}`;
-  const inserted = spot.before ? `${token} ` : ` ${token}`;
-  return `${head}${rest.slice(0, spot.at)}${inserted}${rest.slice(spot.at)}`;
+  const inserted = spot.before && spot.at <= limit ? `${token} ` : ` ${token}`;
+  return `${head}${rest.slice(0, at)}${inserted}${rest.slice(at)}`;
 }
 
 export interface ScheduledTokenInput {

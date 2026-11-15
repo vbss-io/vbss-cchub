@@ -552,14 +552,12 @@ describe("mirror", () => {
     assert.equal(text.includes("- [ ] free line two\r\n"), true);
   });
 
-  it("adds the focus heading when the daily has none and leaves a daily without focus tasks alone", () => {
+  it("G00c: never adds a focus heading to a daily that has none and leaves a daily without focus tasks alone", () => {
     const bare = "# Day\n\n## Meetings\n\n- 10:00 Standup\n";
     const root = lab({ lab: labProject() }, { [TODAY]: bare });
     const settings = useVault(root);
-    today.todayApi.regenerateFocusMirror(settings, TODAY);
-    const after = read(root, `daily/${TODAY}.md`);
-    assert.ok(after.startsWith(bare));
-    assert.ok(after.includes("## Focus\n\n- [ ] [[lab|Lab Project]] - Alpha"));
+    assert.deepEqual(today.todayApi.regenerateFocusMirror(settings, TODAY), { changed: false, skipped: "unsettled", applied: 0 });
+    assert.equal(read(root, `daily/${TODAY}.md`), bare);
     const quiet = lab({ lab: "# Lab\n\n## Open loops\n\n- [ ] Unscheduled\n" }, { [TODAY]: dailyWith(TODAY, ["- [ ]"]) });
     const quietSettings = useVault(quiet);
     const file = join(quiet, "daily", `${TODAY}.md`);
