@@ -595,6 +595,15 @@ export interface TodayNoteLine {
   taskId: string | null;
 }
 
+export interface TodayNoteBlock {
+  line: string;
+  lineIndex: number;
+  taskId: string | null;
+  projectId: string | null;
+  text: string | null;
+  children: string[];
+}
+
 export interface TodayData {
   date: string;
   focusSource: "scheduled" | "list";
@@ -605,6 +614,7 @@ export interface TodayData {
   unlinked: string[];
   inNote?: string[];
   inNoteLinks?: TodayNoteLine[];
+  noteBlocks?: TodayNoteBlock[];
   ambiguous?: TodayAmbiguous[];
   outOfSync?: TodayOutOfSync[];
   unmatched?: TodayUnmatched[];

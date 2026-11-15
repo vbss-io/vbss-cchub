@@ -6,13 +6,15 @@ const SAFE_LINK = /^https?:\/\//i;
 interface Candidate {
   index: number;
   length: number;
-  kind: "code" | "strong" | "em" | "del" | "link" | "wikilink";
+  kind: "code" | "strongem" | "strong" | "em" | "del" | "link" | "wikilink";
   match: RegExpMatchArray;
 }
 
 export interface InlineOptions {
   onOpenLink?: (url: string) => void;
 }
+
+const wikilinkName = (target: string): string => (target.split("/").pop() ?? target).replace(/\.md$/i, "") || target;
 
 function parseInline(input: string, keyBase: string, options: InlineOptions = {}): ReactNode[] {
   const out: ReactNode[] = [];
@@ -21,13 +23,15 @@ function parseInline(input: string, keyBase: string, options: InlineOptions = {}
   const nextKey = () => `${keyBase}-${counter++}`;
   while (text.length > 0) {
     const code = text.match(/`([^`]+)`/);
-    const strong = text.match(/\*\*(?!\s)([^*]+?)(?<!\s)\*\*|(?<![A-Za-z0-9_])__(?![\s_])([^_]+?)(?<!\s)__(?![A-Za-z0-9_])/);
-    const em = text.match(/\*(?![\s*])([^*]+?)(?<!\s)\*|(?<![A-Za-z0-9_])_(?![\s_])([^_]+?)(?<!\s)_(?![A-Za-z0-9_])/);
+    const strongem = text.match(/\*\*\*(?![\s*])([^*]+?)(?<!\s)\*\*\*(?!\*)/);
+    const strong = text.match(/\*\*(?![\s*])((?:[^*]|\*(?!\*))+?)(?<![\s*])\*\*(?!\*(?!\*))|(?<![A-Za-z0-9_])__(?![\s_])([^_]+?)(?<!\s)__(?![A-Za-z0-9_])/);
+    const em = text.match(/\*(?![\s*])((?:[^*]|\*\*(?![\s*])[^*]+?(?<!\s)\*\*)+?)(?<![\s*])\*(?!\*)|(?<![A-Za-z0-9_])_(?![\s_])([^_]+?)(?<!\s)_(?![A-Za-z0-9_])/);
     const del = text.match(/~~(?!\s)([^~]+?)(?<!\s)~~/);
     const link = text.match(/\[([^\]]+)\]\(([^)\s]+)\)/);
     const wikilink = text.match(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/);
     const candidates: Candidate[] = [];
     if (code && code.index !== undefined) candidates.push({ index: code.index, length: code[0].length, kind: "code", match: code });
+    if (strongem && strongem.index !== undefined) candidates.push({ index: strongem.index, length: strongem[0].length, kind: "strongem", match: strongem });
     if (strong && strong.index !== undefined) candidates.push({ index: strong.index, length: strong[0].length, kind: "strong", match: strong });
     if (em && em.index !== undefined) candidates.push({ index: em.index, length: em[0].length, kind: "em", match: em });
     if (del && del.index !== undefined) candidates.push({ index: del.index, length: del[0].length, kind: "del", match: del });
@@ -43,6 +47,12 @@ function parseInline(input: string, keyBase: string, options: InlineOptions = {}
     const key = nextKey();
     if (chosen.kind === "code") {
       out.push(<code key={key} className="md__inline">{chosen.match[1]}</code>);
+    } else if (chosen.kind === "strongem") {
+      out.push(
+        <strong key={key}>
+          <em>{parseInline(chosen.match[1] ?? "", key, options)}</em>
+        </strong>,
+      );
     } else if (chosen.kind === "strong") {
       out.push(<strong key={key}>{parseInline(chosen.match[1] ?? chosen.match[2] ?? "", key, options)}</strong>);
     } else if (chosen.kind === "em") {
@@ -51,7 +61,7 @@ function parseInline(input: string, keyBase: string, options: InlineOptions = {}
       out.push(<del key={key}>{parseInline(chosen.match[1] ?? "", key, options)}</del>);
     } else if (chosen.kind === "wikilink") {
       const target = chosen.match[1] ?? "";
-      const label = chosen.match[2] ?? target;
+      const label = chosen.match[2] ?? wikilinkName(target);
       out.push(
         <span key={key} className="md__wikilink">
           {label}

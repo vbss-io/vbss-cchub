@@ -937,3 +937,51 @@ describe("today routes", () => {
     assert.equal((await http("POST", `/delegation/today/${TODAY}/schedule`, { projectId: "lab", line: -1, raw: "x", date: TODAY })).status, 400);
   });
 });
+
+describe("note blocks", () => {
+  const NOTE_FOCUS = ["- [ ] [[lab|Lab]] - Unscheduled task", "  - a note under it", "- [ ] [[lab|Lab]] - Write the **spec** for _v2_", "- [ ] free"];
+  const NOTE_PROJECT = "# Lab\n\n## Open loops\n\n- [ ] Unscheduled task\n";
+
+  it("describes each block outside the focus with its line index, linked task, labelled project and body text", () => {
+    const root = lab({ lab: NOTE_PROJECT }, { [TODAY]: dailyWith(TODAY, NOTE_FOCUS) });
+    const settings = useVault(root);
+    store.setSetting(`today.migrated.${TODAY}`, "1");
+    const lines = read(root, `daily/${TODAY}.md`).split(/\r\n|\n/);
+    const payload = today.readToday(settings, TODAY);
+    assert.deepEqual(payload.noteBlocks, [
+      { line: NOTE_FOCUS[0], lineIndex: lines.indexOf(NOTE_FOCUS[0] as string), taskId: taskIn(settings, "lab", "Unscheduled task").id, projectId: "lab", text: "Unscheduled task", children: ["  - a note under it"] },
+      { line: NOTE_FOCUS[2], lineIndex: lines.indexOf(NOTE_FOCUS[2] as string), taskId: null, projectId: "lab", text: "Write the **spec** for _v2_", children: [] },
+      { line: NOTE_FOCUS[3], lineIndex: lines.indexOf(NOTE_FOCUS[3] as string), taskId: null, projectId: null, text: "free", children: [] },
+    ]);
+    assert.deepEqual(payload.inNote, NOTE_FOCUS);
+  });
+
+  it("leaves noteBlocks out when nothing in the note is outside the focus", () => {
+    const root = lab({ lab: NOTE_PROJECT }, { [TODAY]: dailyWith(TODAY, ["- [ ]"]) });
+    const settings = useVault(root);
+    store.setSetting(`today.migrated.${TODAY}`, "1");
+    assert.equal("noteBlocks" in today.readToday(settings, TODAY), false);
+  });
+
+  it("a task created from a block with its text in its labelled project, scheduled for the day, links that same line and adds only one project line", () => {
+    const root = lab({ lab: NOTE_PROJECT }, { [TODAY]: dailyWith(TODAY, NOTE_FOCUS) });
+    const settings = useVault(root);
+    store.setSetting(`today.migrated.${TODAY}`, "1");
+    const dailyFile = join(root, "daily", `${TODAY}.md`);
+    const dailyBefore = readFileSync(dailyFile);
+    const projectBefore = read(root, "projects/lab.md").split("\n");
+    const block = today.readToday(settings, TODAY).noteBlocks?.find((item) => item.line === NOTE_FOCUS[2]);
+    assert.ok(block && block.projectId !== null && block.text !== null);
+    board.createBoardTask(settings, { projectId: block.projectId, title: block.text, scheduled: TODAY });
+    today.todayApi.regenerateFocusMirror(settings, TODAY);
+    const projectAfter = read(root, "projects/lab.md").split("\n");
+    assert.deepEqual(projectAfter.filter((line) => !projectBefore.includes(line)), [`- [ ] Write the **spec** for _v2_ ${SCHEDULED} ${TODAY}`]);
+    assert.equal(projectAfter.length, projectBefore.length + 1);
+    assert.equal(readFileSync(dailyFile).equals(dailyBefore), true);
+    const payload = today.readToday(settings, TODAY);
+    assert.deepEqual(payload.focus.map((entry) => entry.task.title), ["Write the **spec** for _v2_"]);
+    assert.equal(payload.noteBlocks?.some((item) => item.line === NOTE_FOCUS[2]), false);
+    assert.equal(payload.unlinked.includes(NOTE_FOCUS[2] as string), false);
+    assert.equal(readFileSync(dailyFile).equals(dailyBefore), true);
+  });
+});

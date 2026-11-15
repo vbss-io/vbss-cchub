@@ -324,3 +324,30 @@ test("InlineText renders the same inline markup inside a span", () => {
   const html = renderToStaticMarkup(createElement(InlineText, { text: "ship **now**" }) as never);
   assert.equal(html, '<span class="inline-md">ship <strong>now</strong></span>');
 });
+
+test("renderInline nests italic inside bold and bold inside italic with either marker", () => {
+  assert.equal(inline("**ship *now* please**"), "<span><strong>ship <em>now</em> please</strong></span>");
+  assert.equal(inline("**bold _it_**"), "<span><strong>bold <em>it</em></strong></span>");
+  assert.equal(inline("*a **b** c*"), "<span><em>a <strong>b</strong> c</em></span>");
+  assert.equal(inline("_italic **b**_"), "<span><em>italic <strong>b</strong></em></span>");
+  assert.equal(inline("***both***"), "<span><strong><em>both</em></strong></span>");
+  assert.equal(inline("**a** and *b*"), "<span><strong>a</strong> and <em>b</em></span>");
+});
+
+test("renderInline leaves snake_case and words joined by underscores alone next to real italics", () => {
+  assert.equal(inline("rename snake_case_name and _this_"), "<span>rename snake_case_name and <em>this</em></span>");
+  assert.equal(inline("a__b__c stays"), "<span>a__b__c stays</span>");
+  assert.equal(inline("**unclosed and *x*"), "<span>**unclosed and <em>x</em></span>");
+});
+
+test("renderInline shows a wikilink without an alias by its note name, not its folder path", () => {
+  assert.equal(inline("[[projects/vbss/Roadmap.md]]"), '<span><span class="md__wikilink">Roadmap</span></span>');
+  assert.equal(inline("[[projects/vbss/roadmap|Plan]]"), '<span><span class="md__wikilink">Plan</span></span>');
+});
+
+test("renderInline combines strike, code and links inside one line", () => {
+  assert.equal(
+    inline("~~**old**~~ `x_y` [**docs**](https://example.com)"),
+    '<span><del><strong>old</strong></del> <code class="md__inline">x_y</code> <a href="https://example.com" target="_blank" rel="noopener noreferrer"><strong>docs</strong></a></span>',
+  );
+});

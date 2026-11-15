@@ -11,8 +11,20 @@ import type { BoardNoteActions, BoardTodayControls } from "../components/BoardPa
 import { FocusOutliner, type OutlineFields } from "../components/FocusOutliner";
 import { ResizableSplit } from "../components/ResizableSplit";
 import { StartDayPanel } from "../components/StartDayPanel";
+import { Toggletip } from "../components/Toggletip";
+import {
+  collapseAllFocus,
+  expandAllFocus,
+  FOCUS_COLLAPSE_KEY,
+  isAllCollapsed,
+  isAllExpanded,
+  parseFocusCollapse,
+  serializeFocusCollapse,
+  type FocusCollapse,
+} from "../focus-collapse";
 import { useLayoutSize } from "../use-layout-size";
 import {
+  countedProjectOptions,
   effectiveProjectOrder,
   findBoardTask,
   findTaskAfterRefetch,
@@ -54,6 +66,7 @@ import {
   type BoardTarget,
   type BoardTask,
   type DelegationSettings,
+  type TodayAmbiguous,
   type TodayCapture,
   type TodayData,
   type TodayEntry,
@@ -62,16 +75,29 @@ import {
   type WorkspaceRecord,
 } from "../delegation";
 import { IconClose } from "../icons";
-import { Markdown } from "../markdown";
+import { InlineText, Markdown } from "../markdown";
 import { openExternal } from "../notify";
 import { addDays, doingTarget, previousSibling, nextSibling, type OutlineGroup, type OutlineNode } from "../outliner-model";
 import {
-  addableNoteTasks,
+  canCreateFromNoMatch,
+  canLinkNoMatch,
+  createTitleOf,
+  isFocusable,
+  lineCheckbox,
+  lineContent,
+  noteSections,
+  planFocusAdd,
+  splitNoteLine,
+  type LinkedNoteItem,
+  type NoMatchItem,
+} from "../today-note";
+import {
   ambiguityHint,
   canAddToFocus,
   decodeDragTarget,
   describeDay,
   entryTaskIds,
+  flattenBoardTasks,
   insertAnchorOf,
   keepDismissed,
   linkTargetOfTask,
@@ -79,12 +105,10 @@ import {
   localDay,
   moveSteps,
   nextDay,
-  noteLineItems,
   outlineGroupsOf,
   outOfSyncKey,
   parentOfTask,
   parseDismissedOutOfSync,
-  parseQuickAdd,
   pickerTasks,
   recentlyDoneTasks,
   rootNodeOf,
@@ -94,7 +118,6 @@ import {
   targetOfTask,
   taskOfOutOfSync,
   TODAY_DRAG_MIME,
-  unmatchedKey,
   visibleOutOfSync,
   type LinkTarget,
   type PickerTask,
@@ -118,7 +141,6 @@ type Tab = "today" | "backlog" | "note";
 type LoadFailure = { kind: "unavailable" | "error"; message: string };
 
 interface QuickAddState {
-  open: boolean;
   projectId: string;
   text: string;
   busy: boolean;
@@ -157,7 +179,7 @@ function readTab(): Tab {
   return stored === "note" ? "note" : "today";
 }
 
-const BACKLOG_WIDTH = { default: 360, min: 300, max: 640 } as const;
+const BACKLOG_WIDTH = { default: 360 } as const;
 
 function TodayColumns({ split, main, side }: { split: boolean; main: ReactNode; side: ReactNode }) {
   const [width, setWidth] = useLayoutSize("today", "backlog", BACKLOG_WIDTH.default);
@@ -175,8 +197,6 @@ function TodayColumns({ split, main, side }: { split: boolean; main: ReactNode; 
       className="today__split"
       side="end"
       defaultSize={BACKLOG_WIDTH.default}
-      minSize={BACKLOG_WIDTH.min}
-      maxSize={BACKLOG_WIDTH.max}
       size={width}
       onSizeChange={setWidth}
       ariaLabel="Resize backlog panel"
@@ -248,24 +268,43 @@ function PickerGroup({ heading, label, items, total, busy, showDone = false, onP
   );
 }
 
-interface UnmatchedTicksProps {
-  items: TodayUnmatched[];
-  tasks: BoardTask[];
-  projects: BoardProject[];
-  busyKeys: ReadonlySet<string>;
-  onLink: (item: TodayUnmatched, target: LinkTarget | null) => void;
+function CountedProjectSelect({ projects, tasks, value, label, onChange }: { projects: BoardProject[]; tasks: readonly BoardTask[]; value: string; label: string; onChange: (id: string) => void }) {
+  const counted = useMemo(() => countedProjectOptions(projects, tasks, false), [projects, tasks]);
+  return (
+    <select className="in today__select" value={value} aria-label={label} onChange={(event) => onChange(event.target.value)}>
+      {counted.options.map((option) => (
+        <option key={option.id} value={option.id}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
 }
 
-function UnmatchedTicks({ items, tasks, projects, busyKeys, onLink }: UnmatchedTicksProps) {
+interface NoMatchProps {
+  items: NoMatchItem[];
+  leftovers: TodayAmbiguous[];
+  tasks: BoardTask[];
+  openTasks: readonly BoardTask[];
+  projects: BoardProject[];
+  busyKeys: ReadonlySet<string>;
+  actions: boolean;
+  onLink: (item: NoMatchItem, target: LinkTarget | null) => void;
+  onCreate: (item: NoMatchItem, projectId: string) => Promise<void>;
+}
+
+function NoMatchSection({ items, leftovers, tasks, openTasks, projects, busyKeys, actions, onLink, onCreate }: NoMatchProps) {
   const [picking, setPicking] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState<{ key: string; projectId: string } | null>(null);
   const titles = useMemo(() => new Map(projects.map((project) => [project.id, project.title])), [projects]);
   const found = useMemo(() => (picking === null ? null : pickerTasks(tasks, projects, query)), [picking, tasks, projects, query]);
   const finished = useMemo(() => (picking === null ? null : recentlyDoneTasks(tasks, projects, query, localDay())), [picking, tasks, projects, query]);
 
-  const onSelect = (item: TodayUnmatched, value: string) => {
+  const onSelect = (item: NoMatchItem, value: string) => {
     if (value === OTHER_TASK) {
-      setPicking(unmatchedKey(item));
+      setPicking(item.key);
+      setCreating(null);
       setQuery("");
       return;
     }
@@ -275,46 +314,100 @@ function UnmatchedTicks({ items, tasks, projects, busyKeys, onLink }: UnmatchedT
     onLink(item, { projectId: candidate.projectId, line: candidate.line, raw: candidate.raw });
   };
 
+  const startCreate = (item: NoMatchItem) => {
+    if (item.projectId !== null) {
+      void onCreate(item, item.projectId);
+      return;
+    }
+    const stored = readStored(QUICK_PROJECT_KEY);
+    setPicking(null);
+    setCreating({ key: item.key, projectId: projects.some((project) => project.id === stored) ? stored : (projects[0]?.id ?? "") });
+  };
+
+  const confirmCreate = (item: NoMatchItem) => {
+    if (creating === null || creating.projectId === "") return;
+    const projectId = creating.projectId;
+    setCreating(null);
+    void onCreate(item, projectId);
+  };
+
   return (
     <section className="today__section" aria-label="In the note, no matching task">
       <header className="today__section-head">
-        <h3>In the note, no matching task</h3>
+        <h3>
+          In the note, no matching task <span className="today__count">{items.length + leftovers.length}</span>
+        </h3>
+        <Toggletip label="About lines with no matching task" align="end">
+          Lines of the note that no project task matches. Link one to an existing task, or create a task from it: the task is scheduled for this day and the same line then links to it. The note is never rewritten.
+        </Toggletip>
       </header>
       <ul className="today__plain">
         {items.map((item) => {
-          const key = unmatchedKey(item);
-          const busy = busyKeys.has(key);
+          const busy = busyKeys.has(item.key);
+          const linkable = item.tick !== null || (actions && canLinkNoMatch(item));
+          const creatable = actions && canCreateFromNoMatch(item);
+          const projectTitle = item.projectId === null ? null : (titles.get(item.projectId) ?? item.projectId);
           return (
-            <li key={key} className={`today__unmatched ${busy ? "today__row--busy" : ""}`} aria-busy={busy}>
+            <li key={item.key} className={`today__unmatched ${busy ? "today__row--busy" : ""}`} aria-busy={busy}>
               <div className="today__row">
                 <span className="today__text">
-                  {item.line.trim()}{" "}
-                  <span className="muted small">
-                    {item.section} - {CHECKBOX_LABEL[item.checkbox]}
-                  </span>
+                  {item.checkbox !== null && <span className={`today__box today__box--${item.checkbox}`} role="img" aria-label={CHECKBOX_LABEL[item.checkbox]} title={CHECKBOX_LABEL[item.checkbox]} />}
+                  {projectTitle !== null && <span className="today__label">{projectTitle}</span>}
+                  <InlineText text={item.text} />
+                  {item.section !== null && item.section !== "" && <span className="muted small"> - {item.section}</span>}
+                  {item.hint !== null && <span className="muted small today__hint"> {item.hint}</span>}
                 </span>
                 <span className="today__actions">
-                  <select
-                    className="in today__select"
-                    value=""
-                    disabled={busy}
-                    aria-label={`Link "${item.line.trim()}" to a task`}
-                    onChange={(event) => onSelect(item, event.target.value)}
-                  >
-                    <option value="">Link to task…</option>
-                    {item.candidates.map((candidate, index) => (
-                      <option key={`${candidate.projectId}:${candidate.line}`} value={String(index)}>
-                        {candidate.title} - {titles.get(candidate.projectId) ?? candidate.projectId}
-                      </option>
-                    ))}
-                    <option value={OTHER_TASK}>Choose another…</option>
-                  </select>
-                  <button type="button" className="act" disabled={busy} onClick={() => onLink(item, null)}>
-                    Ignore
-                  </button>
+                  {creatable && (
+                    <button
+                      type="button"
+                      className="act"
+                      disabled={busy}
+                      title={projectTitle !== null ? `Create the task in ${projectTitle}, scheduled for this day` : "Choose a project, then create the task scheduled for this day"}
+                      onClick={() => startCreate(item)}
+                    >
+                      Create task
+                    </button>
+                  )}
+                  {linkable && (
+                    <select className="in today__select" value="" disabled={busy} aria-label={`Link "${item.text}" to a task`} onChange={(event) => onSelect(item, event.target.value)}>
+                      <option value="">Link to task…</option>
+                      {item.candidates.map((candidate, index) => (
+                        <option key={`${candidate.projectId}:${candidate.line}`} value={String(index)}>
+                          {candidate.title} - {titles.get(candidate.projectId) ?? candidate.projectId}
+                        </option>
+                      ))}
+                      <option value={OTHER_TASK}>Choose another…</option>
+                    </select>
+                  )}
+                  {item.tick !== null && (
+                    <button type="button" className="act" disabled={busy} onClick={() => onLink(item, null)}>
+                      Ignore
+                    </button>
+                  )}
                 </span>
               </div>
-              {picking === key && found !== null && (
+              {item.children.length > 0 && (
+                <ul className="today__children">
+                  {item.children.map((child, index) => (
+                    <li key={`${index}:${child}`}>
+                      <InlineText text={lineContent(child)} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {creating !== null && creating.key === item.key && (
+                <div className="today__promote">
+                  <CountedProjectSelect projects={projects} tasks={openTasks} value={creating.projectId} label="Project for the new task" onChange={(projectId) => setCreating({ key: item.key, projectId })} />
+                  <button type="button" className="act act--focus" disabled={busy || creating.projectId === ""} onClick={() => confirmCreate(item)}>
+                    Create
+                  </button>
+                  <button type="button" className="act" onClick={() => setCreating(null)}>
+                    Cancel
+                  </button>
+                </div>
+              )}
+              {picking === item.key && found !== null && (
                 <div className="today__picker">
                   <input
                     className="in today__picker-search"
@@ -367,9 +460,97 @@ function UnmatchedTicks({ items, tasks, projects, busyKeys, onLink }: UnmatchedT
             </li>
           );
         })}
+        {leftovers.map((item, index) => (
+          <li key={`${index}:${item.kind}:${item.text}`} className="today__row">
+            <span className="today__text">
+              <InlineText text={lineContent(item.text)} /> <span className="muted small">{ambiguityHint(item)}</span>
+            </span>
+          </li>
+        ))}
       </ul>
     </section>
   );
+}
+
+interface AlsoInNoteProps {
+  items: LinkedNoteItem[];
+  projects: BoardProject[];
+  date: string;
+  actions: boolean;
+  busyIds: ReadonlySet<string>;
+  onAdd: (tasks: readonly BoardTask[]) => void;
+}
+
+function AlsoInNote({ items, projects, date, actions, busyIds, onAdd }: AlsoInNoteProps) {
+  const titles = new Map(projects.map((project) => [project.id, project.title]));
+  const addable = actions ? [...new Map(items.filter((item) => canAddToFocus(item.task)).map((item) => [item.task.id, item.task])).values()] : [];
+  return (
+    <details className="today__disclosure">
+      <summary className="today__disclosure-head">
+        <span>Also in the note ({items.length})</span>
+        <span className="today__tip" onClick={(event) => event.preventDefault()}>
+          <Toggletip label="About lines also in the note">
+            Lines of the note linked to a task that is not in this day's focus. The hub never removes or rewrites them; edit them in the Note tab.
+          </Toggletip>
+        </span>
+        {addable.length > 0 && (
+          <button
+            type="button"
+            className="act"
+            disabled={addable.some((task) => busyIds.has(task.id))}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onAdd(addable);
+            }}
+          >
+            Add all ({addable.length})
+          </button>
+        )}
+      </summary>
+      <ul className="today__plain">
+        {items.map(({ key, block, task }) => {
+          const split = splitNoteLine(block.line, projects);
+          const planned = actions ? scheduledElsewhere(task, date) : null;
+          const action = actions && planned === null && canAddToFocus(task);
+          const busy = busyIds.has(task.id);
+          return (
+            <li key={key} className={`today__note-line ${busy ? "today__row--busy" : ""}`} aria-busy={busy}>
+              <div className="today__row">
+                <span className="today__text today__note-text">
+                  {lineContentBox(block.line)}
+                  {split.projectId !== null && <span className="today__label">{titles.get(split.projectId) ?? split.projectId}</span>}
+                  <InlineText text={split.text} />
+                </span>
+                {planned !== null && <span className="hint">{planned}</span>}
+                {action && (
+                  <span className="today__actions">
+                    <button type="button" className="act" disabled={busy} aria-label={`Add "${task.title}" to focus`} onClick={() => onAdd([task])}>
+                      Add to focus
+                    </button>
+                  </span>
+                )}
+              </div>
+              {block.children.length > 0 && (
+                <ul className="today__children">
+                  {block.children.map((child, index) => (
+                    <li key={`${index}:${child}`}>
+                      <InlineText text={lineContent(child)} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </details>
+  );
+}
+
+function lineContentBox(line: string): ReactNode {
+  const box = lineCheckbox(line);
+  return box === null ? null : <span className={`today__box today__box--${box}`} role="img" aria-label={CHECKBOX_LABEL[box]} title={CHECKBOX_LABEL[box]} />;
 }
 
 function InlineAdd({ placeholder, label, onSubmit }: { placeholder: string; label: string; onSubmit: (text: string) => Promise<void> }) {
@@ -469,7 +650,9 @@ function CaptureItem({
   return (
     <li className="today__capture">
       <div className="today__row">
-        <span className="today__text">{capture.text}</span>
+        <span className="today__text">
+          <InlineText text={capture.text} />
+        </span>
         {capture.promotedTo !== null ? (
           <span className="chip" title="Promoted to a task">
             → {capture.promotedTo}
@@ -549,7 +732,7 @@ function CarriedStrip({
                 <span className="today__carried-line">
                   {entry.task.status === "doing" && <span className="statusmark statusmark--doing" role="img" aria-label="In progress" title="In progress" />}
                   <button type="button" className="linklike today__carried-title" onClick={() => onOpen(entry.task)}>
-                    {entry.task.title}
+                    <InlineText text={entry.task.title} />
                   </button>
                 </span>
               </div>
@@ -897,7 +1080,9 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const [dragging, setDragging] = useState(false);
   const [dropOver, setDropOver] = useState(false);
   const [entryInfo, setEntryInfo] = useState<DailyEntryInfo>({ exists: false, path: null });
-  const [quick, setQuick] = useState<QuickAddState>({ open: false, projectId: "", text: "", busy: false, error: null });
+  const [quick, setQuick] = useState<QuickAddState>(() => ({ projectId: readStored(QUICK_PROJECT_KEY), text: "", busy: false, error: null }));
+  const [quickFocus, setQuickFocus] = useState(0);
+  const [collapse, setCollapseState] = useState<FocusCollapse>(() => parseFocusCollapse(readStored(FOCUS_COLLAPSE_KEY)));
   const [creatingNote, setCreatingNote] = useState(false);
   const [forcedDate, setForcedDate] = useState<string | null>(null);
   const [modeSlot, setModeSlot] = useState<HTMLElement | null>(null);
@@ -1002,22 +1187,28 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   });
 
   useEffect(() => {
-    if (quick.open) quickInput.current?.focus();
-  }, [quick.open]);
+    if (quickFocus > 0) quickInput.current?.focus();
+  }, [quickFocus]);
+
+  const setCollapse = (next: FocusCollapse) => {
+    setCollapseState(next);
+    writeStored(FOCUS_COLLAPSE_KEY, serializeFocusCollapse(next));
+  };
 
   const projects = board?.projects ?? [];
   const focus = data?.focus ?? [];
   const carried = data?.carriedOver ?? [];
   const boardTasks = board?.tasks ?? [];
-  const noteLines = data ? noteLineItems(data, boardTasks) : [];
   const noteActions = data !== null && data.focusSource === "scheduled" && tasksEnabled && date >= today;
-  const addable = noteActions ? addableNoteTasks(noteLines) : [];
-  const ambiguous = data?.ambiguous ?? [];
+  const sections = useMemo(() => (data === null ? null : noteSections(data, boardTasks, projects)), [data, boardTasks, projects]);
   const outOfSync = visibleOutOfSync(data?.outOfSync, kept);
-  const unmatched = data?.unmatched ?? [];
   const groups: OutlineGroup[] = useMemo(() => outlineGroupsOf(focus), [focus]);
   const focusIds = useMemo(() => entryTaskIds(focus), [focus]);
-  const excluded = useMemo(() => new Set([...focusIds, ...entryTaskIds(carried)]), [focusIds, carried]);
+  const excluded = useMemo(() => entryTaskIds(carried), [carried]);
+  const openTasks = useMemo(() => flattenBoardTasks(boardTasks).filter(isFocusable), [boardTasks]);
+  const quickOrder = effectiveProjectOrder(projects, projectOrder);
+  const quickProject = projects.some((project) => project.id === quick.projectId) ? quick.projectId : (quickOrder[0] ?? projects[0]?.id ?? "");
+  const canAddFromToday = tasksEnabled && board !== null && projects.length > 0;
   const drawerTask = drawerId === null || board === null ? null : findBoardTask(board.tasks, drawerId);
 
   useEffect(() => {
@@ -1053,8 +1244,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
     }
   };
 
-  const onLinkTick = async (item: TodayUnmatched, target: LinkTarget | null) => {
-    const key = unmatchedKey(item);
+  const onLinkTick = async (key: string, item: { lineIndex: number; line: string }, target: LinkTarget | null) => {
     markBusy(key, true);
     try {
       await linkTick(date, linkTickInput(item, target));
@@ -1266,33 +1456,68 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   };
 
   const openQuickAdd = () => {
-    const stored = readStored(QUICK_PROJECT_KEY);
-    const order = effectiveProjectOrder(projects, projectOrder);
-    const fallback = order[0] ?? projects[0]?.id ?? "";
-    const projectId = projects.some((project) => project.id === stored) ? stored : fallback;
     setTab("today");
-    setQuick((current) => ({ ...current, open: true, projectId: projects.some((project) => project.id === current.projectId) ? current.projectId : projectId, error: null }));
+    setQuickFocus((current) => current + 1);
+  };
+
+  const addFromToday = async (projectId: string, text: string): Promise<void> => {
+    const plan = planFocusAdd(boardTasks, projectId, text, today, date, focusIds);
+    if (plan === null) throw new Error("Type a task title");
+    if (plan.kind === "already") {
+      onNotice(`"${plan.task.title}" is already in focus`);
+      return;
+    }
+    try {
+      if (plan.kind === "schedule") {
+        await scheduleTask(date, { ...targetOfTask(plan.task), date });
+        onNotice(`Scheduled the existing task "${plan.task.title}"`);
+      } else {
+        await createBoardItem({
+          projectId: plan.projectId,
+          title: plan.input.title,
+          scheduled: date,
+          ...(plan.input.priority !== undefined ? { priority: plan.input.priority } : {}),
+          ...(plan.input.due !== undefined ? { due: plan.input.due } : {}),
+        });
+      }
+    } catch (err) {
+      if (err instanceof BoardConflictError) throw new Error(CONFLICT_NOTICE);
+      throw err;
+    } finally {
+      await refresh();
+    }
   };
 
   const submitQuick = async () => {
-    const parsed = parseQuickAdd(quick.text, today);
-    if (parsed === null || quick.projectId === "" || quick.busy) return;
+    if (quick.text.trim() === "" || quickProject === "" || quick.busy) return;
     setQuick((current) => ({ ...current, busy: true, error: null }));
     try {
-      await createBoardItem({
-        projectId: quick.projectId,
-        title: parsed.title,
-        scheduled: date,
-        ...(parsed.priority !== undefined ? { priority: parsed.priority } : {}),
-        ...(parsed.due !== undefined ? { due: parsed.due } : {}),
-      });
-      writeStored(QUICK_PROJECT_KEY, quick.projectId);
-      setQuick((current) => ({ ...current, text: "", busy: false }));
-      await refresh();
+      await addFromToday(quickProject, quick.text);
+      writeStored(QUICK_PROJECT_KEY, quickProject);
+      setQuick((current) => ({ ...current, projectId: quickProject, text: "", busy: false }));
       quickInput.current?.focus();
     } catch (err) {
       setQuick((current) => ({ ...current, busy: false, error: messageOf(err, "could not add the task") }));
     }
+  };
+
+  const createFromNote = async (item: NoMatchItem, projectId: string): Promise<void> => {
+    markBusy(item.key, true);
+    try {
+      await createBoardItem({ projectId, title: createTitleOf(item), scheduled: date });
+      writeStored(QUICK_PROJECT_KEY, projectId);
+      onNotice(`Created "${createTitleOf(item)}" for ${isToday ? "today" : date}`);
+    } catch (err) {
+      failWith(err, "could not create the task");
+    } finally {
+      markBusy(item.key, false);
+      await refresh();
+    }
+  };
+
+  const linkNoMatch = (item: NoMatchItem, target: LinkTarget | null) => {
+    if (item.lineIndex === null) return;
+    void onLinkTick(item.key, { lineIndex: item.lineIndex, line: item.line }, target);
   };
 
   const createNote = async () => {
@@ -1526,21 +1751,37 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                   <h3>
                     Focus <span className="today__count">{focus.length}</span>
                   </h3>
+                  {groups.length > 0 && (
+                    <BoardActionsMenu
+                      label="Focus actions"
+                      items={[
+                        { id: "expand", label: "Expand all", disabled: isAllExpanded(collapse, groups), onSelect: () => setCollapse(expandAllFocus(collapse, groups)) },
+                        { id: "collapse", label: "Collapse all", disabled: isAllCollapsed(collapse, groups), onSelect: () => setCollapse(collapseAllFocus(collapse, groups)) },
+                      ]}
+                    />
+                  )}
                 </header>
-                {quick.open && (
-                  <div className="today__quick">
-                    <ProjectSelect projects={projects} value={quick.projectId} label="Project" onChange={(projectId) => setQuick((current) => ({ ...current, projectId }))} />
+                {canAddFromToday && (
+                  <div className="today__quick" role="group" aria-label="Add to focus">
+                    <CountedProjectSelect
+                      projects={projects}
+                      tasks={openTasks}
+                      value={quickProject}
+                      label="Project for the task to add"
+                      onChange={(projectId) => setQuick((current) => ({ ...current, projectId, error: null }))}
+                    />
                     <input
                       ref={quickInput}
                       className="in today__quick-input"
                       type="text"
                       value={quick.text}
-                      placeholder="New task - #p1 due:tomorrow - Enter to add, Esc to close"
-                      aria-label="New task"
+                      placeholder="Add to focus - reuses an open task with this text, else creates it"
+                      aria-label="Add to focus"
+                      title="Enter to add - #p1 due:tomorrow work too - Esc to clear"
                       autoComplete="off"
                       spellCheck={false}
                       readOnly={quick.busy}
-                      onChange={(event) => setQuick((current) => ({ ...current, text: event.target.value }))}
+                      onChange={(event) => setQuick((current) => ({ ...current, text: event.target.value, error: null }))}
                       onKeyDown={(event) => {
                         if (event.nativeEvent.isComposing) return;
                         if (event.key === "Enter") {
@@ -1548,13 +1789,15 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                           void submitQuick();
                         } else if (event.key === "Escape") {
                           event.preventDefault();
-                          setQuick((current) => ({ ...current, open: false, text: "", error: null }));
+                          setQuick((current) => ({ ...current, text: "", error: null }));
                         }
                       }}
                     />
-                    <button type="button" className="act act--icon" aria-label="Close quick add" onClick={() => setQuick((current) => ({ ...current, open: false, text: "", error: null }))}>
-                      <IconClose />
-                    </button>
+                    {quick.text !== "" && (
+                      <button type="button" className="act act--icon" aria-label="Clear" onClick={() => setQuick((current) => ({ ...current, text: "", error: null }))}>
+                        <IconClose />
+                      </button>
+                    )}
                     {quick.error !== null && (
                       <span className="error small today__quick-error" role="alert">
                         {quick.error}
@@ -1580,6 +1823,9 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                     onOpen={openNode}
                     onTomorrow={(node) => onShift(node, tomorrow)}
                     onUnschedule={(node) => onShift(node, null)}
+                    collapse={collapse}
+                    onCollapseChange={setCollapse}
+                    onAddToProject={canAddFromToday ? addFromToday : undefined}
                   />
                 )}
               </section>
@@ -1597,7 +1843,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                       return (
                         <li key={outOfSyncKey(item)} className="today__row">
                           <span className="today__text">
-                            {item.line.trim()}{" "}
+                            <InlineText text={lineContent(item.line)} />{" "}
                             <span className="muted small">
                               {recurring
                                 ? `Recurring task "${item.taskTitle}" was already completed today; reopen it from Tasks if needed.`
@@ -1626,72 +1872,22 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                 </section>
               )}
 
-              {unmatched.length > 0 && <UnmatchedTicks items={unmatched} tasks={boardTasks} projects={projects} busyKeys={busyIds} onLink={(item, target) => void onLinkTick(item, target)} />}
+              {sections !== null && (sections.noMatch.length > 0 || sections.ambiguous.length > 0) && (
+                <NoMatchSection
+                  items={sections.noMatch}
+                  leftovers={sections.ambiguous}
+                  tasks={boardTasks}
+                  openTasks={openTasks}
+                  projects={projects}
+                  busyKeys={busyIds}
+                  actions={noteActions}
+                  onLink={linkNoMatch}
+                  onCreate={createFromNote}
+                />
+              )}
 
-              {(noteLines.length > 0 || ambiguous.length > 0) && (
-                <details className="today__disclosure">
-                  <summary className="today__disclosure-head">
-                    <span>Also in the note ({noteLines.length + ambiguous.length})</span>
-                    {addable.length > 0 && (
-                      <button
-                        type="button"
-                        className="act"
-                        disabled={addable.some((task) => busyIds.has(task.id))}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          void addToFocus(addable);
-                        }}
-                      >
-                        Add all ({addable.length})
-                      </button>
-                    )}
-                  </summary>
-                  <p className="hint">These lines live in the note but are not in today's focus. The hub never removes or rewrites them; edit them in the Note tab.</p>
-                  {noteLines.length > 0 && (
-                    <ul className="today__plain">
-                      {noteLines.map(({ line, task }, index) => {
-                        const action = noteActions && task !== null && canAddToFocus(task) ? task : null;
-                        const planned = noteActions && task !== null ? scheduledElsewhere(task, date) : null;
-                        if (planned !== null) {
-                          return (
-                            <li key={`${index}:${line}`} className="today__row today__note-line">
-                              <span className="today__raw today__note-text">{line.trim()}</span>
-                              <span className="hint">{planned}</span>
-                            </li>
-                          );
-                        }
-                        if (action === null) {
-                          return (
-                            <li key={`${index}:${line}`} className="today__raw">
-                              {line.trim()}
-                            </li>
-                          );
-                        }
-                        const busy = busyIds.has(action.id);
-                        return (
-                          <li key={`${index}:${line}`} className={`today__row today__note-line ${busy ? "today__row--busy" : ""}`} aria-busy={busy}>
-                            <span className="today__raw today__note-text">{line.trim()}</span>
-                            <span className="today__actions">
-                              <button type="button" className="act" disabled={busy} aria-label={`Add "${action.title}" to focus`} onClick={() => void addToFocus([action])}>
-                                Add to focus
-                              </button>
-                            </span>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                  {ambiguous.length > 0 && (
-                    <ul className="today__plain" aria-label="Ambiguous">
-                      {ambiguous.map((item, index) => (
-                        <li key={`${index}:${item.kind}:${item.text}`} className="today__raw">
-                          {item.text.trim()} <span className="muted small">{ambiguityHint(item)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </details>
+              {sections !== null && sections.linked.length > 0 && (
+                <AlsoInNote items={sections.linked} projects={projects} date={date} actions={noteActions} busyIds={busyIds} onAdd={(tasks) => void addToFocus(tasks)} />
               )}
 
               {dailyExists ? (
@@ -1704,7 +1900,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                       <ul className="today__plain">
                         {data.meetings.map((meeting, index) => (
                           <li key={`${index}:${meeting}`} className="today__text">
-                            {meeting}
+                            <InlineText text={meeting} />
                           </li>
                         ))}
                       </ul>
@@ -1767,6 +1963,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                 projects={projects}
                 projectOrder={projectOrder}
                 excluded={excluded}
+                inToday={focusIds}
+                levels={settings?.tasks.priorityLevels}
                 date={date}
                 nextDate={tomorrow}
                 today={today}

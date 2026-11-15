@@ -19,6 +19,7 @@ import {
   isStacked,
   keyboardSize,
   resetSize,
+  sharedSplitBounds,
   sizeFromDelta,
   type PanelSide,
 } from "../resize-model";
@@ -140,8 +141,8 @@ export interface ResizableSplitProps {
   id: string;
   side: PanelSide;
   defaultSize: number;
-  minSize: number;
-  maxSize: number;
+  minSize?: number;
+  maxSize?: number;
   size?: number;
   onSizeChange?: (size: number) => void;
   collapseBelow?: number;
@@ -182,8 +183,10 @@ export function ResizableSplit({
     return () => observer.disconnect();
   }, []);
 
-  const max = effectiveMax(minSize, maxSize, containerWidth, MIN_REST);
-  const current = clampSize(size ?? inner, minSize, max);
+  const shared = minSize === undefined || maxSize === undefined ? sharedSplitBounds(containerWidth) : null;
+  const min = shared?.min ?? minSize ?? 0;
+  const max = shared?.max ?? effectiveMax(min, maxSize ?? min, containerWidth, MIN_REST);
+  const current = clampSize(size ?? inner, min, max);
 
   const change = useCallback(
     (next: number) => {
@@ -195,7 +198,7 @@ export function ResizableSplit({
 
   const { dragging, separatorProps } = useSplitterHandle({
     size: current,
-    min: minSize,
+    min,
     max,
     defaultSize,
     side,

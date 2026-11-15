@@ -150,6 +150,15 @@ export interface TodayNoteLine {
   taskId: string | null;
 }
 
+export interface TodayNoteBlock {
+  line: string;
+  lineIndex: number;
+  taskId: string | null;
+  projectId: string | null;
+  text: string | null;
+  children: string[];
+}
+
 export interface TodayPayload {
   date: string;
   focusSource: FocusSource;
@@ -160,6 +169,7 @@ export interface TodayPayload {
   unlinked: string[];
   inNote: string[];
   inNoteLinks: TodayNoteLine[];
+  noteBlocks?: TodayNoteBlock[];
   ambiguous: TodayAmbiguous[];
   outOfSync?: TodayOutOfSync[];
   unmatched?: TodayUnmatched[];
@@ -2377,6 +2387,7 @@ function listModeFocus(settings: DelegationSettings, date: string, daily: DailyR
 interface NoteView {
   inNote: string[];
   inNoteLinks: TodayNoteLine[];
+  noteBlocks: TodayNoteBlock[];
   unlinked: string[];
   ambiguous: TodayAmbiguous[];
 }
@@ -2393,12 +2404,13 @@ function noteView(settings: DelegationSettings, date: string, daily: DailyReadRe
     ambiguous.push(...insertMissing(settings, date, openDoc(content), data, focus, memory, new Set<string>()).ambiguous);
   }
   const range = focusRange(texts, settings);
-  if (!range) return { inNote: [], inNoteLinks: [], unlinked: [], ambiguous };
+  if (!range) return { inNote: [], inNoteLinks: [], noteBlocks: [], unlinked: [], ambiguous };
   const focusIds = new Set(focus.flatMap((entry) => flattenTasks([entry.task]).map((task) => task.id)));
   const occurrences = new Set(focus.filter((entry) => isOccurrence(entry.task)).map((entry) => fingerprint(entry.task)));
   const entries = new Map(scan.entries.map((entry) => [entry.line, entry]));
   const inNote: string[] = [];
   const inNoteLinks: TodayNoteLine[] = [];
+  const noteBlocks: TodayNoteBlock[] = [];
   const unlinked: string[] = [];
   let index = range.heading + 1;
   while (index < range.end) {
@@ -2418,11 +2430,23 @@ function noteView(settings: DelegationSettings, date: string, daily: DailyReadRe
       const lines = kept.map((item) => item.text);
       inNote.push(...lines);
       inNoteLinks.push(...kept.map((item): TodayNoteLine => ({ line: item.text, taskId: item.at === head ? linkedId : null })));
+      const first = kept[0];
+      if (first !== undefined) {
+        const ownHead = first.at === head;
+        noteBlocks.push({
+          line: first.text,
+          lineIndex: first.at,
+          taskId: ownHead ? linkedId : null,
+          projectId: ownHead ? (entry?.projectId ?? null) : null,
+          text: ownHead ? (entry?.text ?? null) : null,
+          children: kept.slice(1).map((item) => item.text),
+        });
+      }
       if (task === null) unlinked.push(...lines);
     }
     index = end;
   }
-  return { inNote, inNoteLinks, unlinked, ambiguous };
+  return { inNote, inNoteLinks, noteBlocks, unlinked, ambiguous };
 }
 
 interface SyncReport {
@@ -2744,7 +2768,7 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
   const lines = exists ? content.split(LINE_SPLIT_RE) : [];
   const scheduledFocus = focusSource === "scheduled";
   const focus = scheduledFocus ? computeFocus(settings, data, date) : exists && data ? listModeFocus(settings, date, daily as DailyReadResult, data) : [];
-  const view: NoteView = exists && data ? noteView(settings, date, daily as DailyReadResult, data, focus, scheduledFocus) : { inNote: [], inNoteLinks: [], unlinked: [], ambiguous: [] };
+  const view: NoteView = exists && data ? noteView(settings, date, daily as DailyReadResult, data, focus, scheduledFocus) : { inNote: [], inNoteLinks: [], noteBlocks: [], unlinked: [], ambiguous: [] };
   const report: SyncReport = exists && data ? syncReport(settings, date, daily as DailyReadResult, data) : EMPTY_REPORT;
   return {
     date,
@@ -2756,6 +2780,7 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
     unlinked: view.unlinked,
     inNote: view.inNote,
     inNoteLinks: view.inNoteLinks,
+    ...(view.noteBlocks.length > 0 ? { noteBlocks: view.noteBlocks } : {}),
     ambiguous: [...view.ambiguous, ...report.duplicates, ...report.unresolved],
     ...(report.outOfSync.length > 0 ? { outOfSync: report.outOfSync } : {}),
     ...(report.unmatched.length > 0 ? { unmatched: report.unmatched } : {}),

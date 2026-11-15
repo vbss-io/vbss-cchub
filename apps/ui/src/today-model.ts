@@ -37,9 +37,43 @@ export interface BacklogFilters {
   search: string;
   projectId: string | null;
   statuses: readonly BacklogStatus[];
+  hiddenPriorities?: readonly (number | null)[];
+  showInToday?: boolean;
 }
 
-export const DEFAULT_BACKLOG_FILTERS: BacklogFilters = { search: "", projectId: null, statuses: ["todo", "doing", "blocked"] };
+export const DEFAULT_BACKLOG_FILTERS: BacklogFilters = { search: "", projectId: null, statuses: ["todo", "doing", "blocked"], hiddenPriorities: [], showInToday: true };
+
+export const BACKLOG_FILTERS_KEY = "hub.today.backlogFilters";
+
+export function parseBacklogFilters(raw: string): BacklogFilters {
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return DEFAULT_BACKLOG_FILTERS;
+    const record = value as Record<string, unknown>;
+    const statuses = Array.isArray(record.statuses) ? BACKLOG_STATUSES.filter((status) => (record.statuses as unknown[]).includes(status)) : [...DEFAULT_BACKLOG_FILTERS.statuses];
+    const hidden = Array.isArray(record.hiddenPriorities)
+      ? record.hiddenPriorities.filter((item): item is number | null => item === null || (typeof item === "number" && Number.isInteger(item) && item >= 0 && item <= 9))
+      : [];
+    return {
+      search: "",
+      projectId: typeof record.projectId === "string" && record.projectId !== "" ? record.projectId : null,
+      statuses: statuses.length > 0 ? statuses : [...DEFAULT_BACKLOG_FILTERS.statuses],
+      hiddenPriorities: [...new Set(hidden)],
+      showInToday: record.showInToday !== false,
+    };
+  } catch {
+    return DEFAULT_BACKLOG_FILTERS;
+  }
+}
+
+export const serializeBacklogFilters = (filters: BacklogFilters): string =>
+  JSON.stringify({ projectId: filters.projectId, statuses: filters.statuses, hiddenPriorities: filters.hiddenPriorities ?? [], showInToday: filters.showInToday !== false });
+
+export function hasCustomBacklogFilters(filters: BacklogFilters): boolean {
+  const defaults = DEFAULT_BACKLOG_FILTERS.statuses;
+  const sameStatuses = filters.statuses.length === defaults.length && defaults.every((status) => filters.statuses.includes(status));
+  return filters.projectId !== null || !sameStatuses || (filters.hiddenPriorities ?? []).length > 0 || filters.showInToday === false || filters.search.trim() !== "";
+}
 
 export type BacklogIntent = "today" | "tomorrow" | "done" | "doing" | "open" | "next" | "prev";
 
@@ -210,12 +244,22 @@ function matchesSearch(task: BoardTask, project: BoardProject | undefined, searc
   return needle.split(/\s+/).every((word) => haystack.includes(word));
 }
 
-export function backlogTasks(tasks: readonly BoardTask[], projects: readonly BoardProject[], excluded: ReadonlySet<string>, filters: BacklogFilters): BoardTask[] {
+export function backlogTasks(
+  tasks: readonly BoardTask[],
+  projects: readonly BoardProject[],
+  excluded: ReadonlySet<string>,
+  filters: BacklogFilters,
+  inToday: ReadonlySet<string> = new Set<string>(),
+): BoardTask[] {
   const byId = new Map(projects.map((project) => [project.id, project]));
+  const hidden = filters.hiddenPriorities ?? [];
+  const hideToday = filters.showInToday === false;
   return tasks.filter(
     (task) =>
       task.section === "open" &&
       !excluded.has(task.id) &&
+      !(hideToday && inToday.has(task.id)) &&
+      !hidden.includes(task.priority) &&
       (BACKLOG_STATUSES as readonly string[]).includes(task.status) &&
       filters.statuses.includes(task.status as BacklogStatus) &&
       (filters.projectId === null || task.projectId === filters.projectId) &&
@@ -229,8 +273,27 @@ export function backlogGroups(
   order: readonly string[],
   excluded: ReadonlySet<string>,
   filters: BacklogFilters,
+  inToday: ReadonlySet<string> = new Set<string>(),
 ): ProjectTaskGroup[] {
-  return groupTasksByProject(backlogTasks(tasks, projects, excluded, filters), [...projects], order);
+  return groupTasksByProject(backlogTasks(tasks, projects, excluded, filters, inToday), [...projects], order);
+}
+
+export function windowBacklogGroups(groups: readonly ProjectTaskGroup[], shown: number): ProjectTaskGroup[] {
+  const out: ProjectTaskGroup[] = [];
+  let left = Math.max(0, shown);
+  for (const group of groups) {
+    if (left <= 0) break;
+    const tasks = group.tasks.slice(0, left);
+    left -= tasks.length;
+    out.push({ ...group, tasks });
+  }
+  return out;
+}
+
+export function backlogPriorityCounts(tasks: readonly BoardTask[]): Map<number | null, number> {
+  const counts = new Map<number | null, number>();
+  for (const task of tasks) counts.set(task.priority, (counts.get(task.priority) ?? 0) + 1);
+  return counts;
 }
 
 export function countBacklog(groups: readonly ProjectTaskGroup[]): number {

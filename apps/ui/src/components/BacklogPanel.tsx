@@ -1,28 +1,39 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import "../today.css";
-import { BOARD_STATUS_LABEL, countedProjectOptions, dueTone, formatDayMonth, subtaskProgress } from "../board-model";
+import { BOARD_STATUS_LABEL, countedProjectOptions, dueTone, formatDayMonth, priorityFilterLevels, priorityLabel, subtaskProgress, toggleHiddenPriority, type FilterChip, type FilterChipId } from "../board-model";
 import type { BoardProject, BoardTask } from "../delegation";
+import { InlineText } from "../markdown";
 import { doingTarget } from "../outliner-model";
 import {
+  BACKLOG_FILTERS_KEY,
   BACKLOG_STATUSES,
   BACKLOG_STATUS_LABEL,
   backlogGroups,
   backlogKeyIntent,
+  backlogPriorityCounts,
   backlogTasks,
   countBacklog,
   DEFAULT_BACKLOG_FILTERS,
   encodeDragTarget,
+  hasCustomBacklogFilters,
+  parseBacklogFilters,
+  serializeBacklogFilters,
   TODAY_DRAG_MIME,
   targetOfTask,
   toggleBacklogStatus,
+  windowBacklogGroups,
   type BacklogFilters,
 } from "../today-model";
+import { BoardFilterChips, BoardFilters, type BoardFilterGroup } from "./BoardFilters";
+import { ShowMoreButtons, useShowMore } from "./ShowMore";
 
 interface BacklogPanelProps {
   tasks: BoardTask[];
   projects: BoardProject[];
   projectOrder: readonly string[];
   excluded: ReadonlySet<string>;
+  inToday?: ReadonlySet<string>;
+  levels?: number;
   date: string;
   today: string;
   busyIds: ReadonlySet<string>;
@@ -36,20 +47,53 @@ interface BacklogPanelProps {
 
 const priorityTone = (priority: number): number => Math.min(priority, 3);
 
-export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, today, busyIds, onSchedule, onDone, onDoing, onOpen, onDragActive, nextDate }: BacklogPanelProps) {
-  const [filters, setFilters] = useState<BacklogFilters>(DEFAULT_BACKLOG_FILTERS);
+const NO_TASKS = new Set<string>();
+
+const readFilters = (): BacklogFilters => {
+  try {
+    return parseBacklogFilters(window.localStorage.getItem(BACKLOG_FILTERS_KEY) ?? "");
+  } catch {
+    return DEFAULT_BACKLOG_FILTERS;
+  }
+};
+
+const storeFilters = (filters: BacklogFilters): void => {
+  try {
+    window.localStorage.setItem(BACKLOG_FILTERS_KEY, serializeBacklogFilters(filters));
+  } catch {
+    return;
+  }
+};
+
+const priorityName = (level: number | null): string => (level === null ? "No priority" : priorityLabel(level));
+
+export function BacklogPanel({ tasks, projects, projectOrder, excluded, inToday = NO_TASKS, levels, date, today, busyIds, onSchedule, onDone, onDoing, onOpen, onDragActive, nextDate }: BacklogPanelProps) {
+  const [filters, setFiltersState] = useState<BacklogFilters>(readFilters);
   const [activeId, setActiveId] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLElement>());
   const lastIndex = useRef(0);
   const restoreFocus = useRef(false);
 
-  const groups = useMemo(() => backlogGroups(tasks, projects, projectOrder, excluded, filters), [tasks, projects, projectOrder, excluded, filters]);
-  const flat = useMemo(() => groups.flatMap((group) => group.tasks), [groups]);
+  const setFilters = (next: BacklogFilters) => {
+    setFiltersState(next);
+    storeFilters(next);
+  };
+
+  const hidden = filters.hiddenPriorities ?? [];
+  const showInToday = filters.showInToday !== false;
+  const groups = useMemo(() => backlogGroups(tasks, projects, projectOrder, excluded, filters, inToday), [tasks, projects, projectOrder, excluded, filters, inToday]);
   const total = countBacklog(groups);
+  const resetKey = `${filters.search}\u0000${filters.projectId ?? ""}\u0000${filters.statuses.join(",")}\u0000${hidden.join(",")}\u0000${String(showInToday)}`;
+  const paging = useShowMore(total, resetKey);
+  const visible = useMemo(() => windowBacklogGroups(groups, paging.view.shown), [groups, paging.view.shown]);
+  const flat = useMemo(() => visible.flatMap((group) => group.tasks), [visible]);
   const counted = useMemo(
-    () => countedProjectOptions(projects, backlogTasks(tasks, projects, excluded, { ...filters, projectId: null }), false),
-    [tasks, projects, excluded, filters],
+    () => countedProjectOptions(projects, backlogTasks(tasks, projects, excluded, { ...filters, projectId: null }, inToday), false),
+    [tasks, projects, excluded, filters, inToday],
   );
+  const unfiltered = useMemo(() => backlogTasks(tasks, projects, excluded, { ...filters, hiddenPriorities: [] }, inToday), [tasks, projects, excluded, filters, inToday]);
+  const priorityCounts = useMemo(() => backlogPriorityCounts(unfiltered), [unfiltered]);
+  const priorityLevels = useMemo<(number | null)[]>(() => [...priorityFilterLevels(levels, unfiltered), null], [levels, unfiltered]);
   const titles = useMemo(() => new Map(projects.map((project) => [project.id, project.title])), [projects]);
   const current = flat.some((task) => task.id === activeId) ? activeId : (flat[Math.min(lastIndex.current, flat.length - 1)]?.id ?? null);
   const isToday = date === today;
@@ -96,6 +140,7 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
       onOpen(task);
       return;
     }
+    if (intent === "today" && inToday.has(task.id)) return;
     restoreFocus.current = true;
     if (intent === "today") onSchedule(task, date);
     else if (intent === "tomorrow") onSchedule(task, nextDate);
@@ -113,6 +158,39 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
     onDragActive(true);
   };
 
+  const filterGroups: BoardFilterGroup[] = [
+    {
+      title: "Priority",
+      options: priorityLevels.map((level) => ({
+        id: level === null ? "none" : String(level),
+        label: priorityName(level),
+        checked: !hidden.includes(level),
+        count: priorityCounts.get(level) ?? 0,
+      })),
+      shortcuts: [
+        { label: "All", onClick: () => setFilters({ ...filters, hiddenPriorities: [] }) },
+        { label: "None", onClick: () => setFilters({ ...filters, hiddenPriorities: [...priorityLevels] }) },
+      ],
+      onToggle: (id) => setFilters({ ...filters, hiddenPriorities: toggleHiddenPriority([...hidden], id === "none" ? null : Number(id)) }),
+    },
+    {
+      title: "View",
+      options: [{ id: "in-today", label: "Show tasks already in Today", checked: showInToday, count: [...inToday].filter((id) => unfiltered.some((task) => task.id === id)).length, title: "Show the tasks of this day's focus too, marked in Today" }],
+      onToggle: () => setFilters({ ...filters, showInToday: !showInToday }),
+    },
+  ];
+
+  const shownPriorities = priorityLevels.filter((level) => !hidden.includes(level)).map(priorityName);
+  const chips: FilterChip[] = [
+    ...(hidden.length > 0 ? [{ id: "priority" as const, label: shownPriorities.length === 0 ? "Priority: None" : `Priority: ${shownPriorities.length <= 2 ? shownPriorities.join(", ") : `${shownPriorities.length} of ${priorityLevels.length}`}` }] : []),
+    ...(!showInToday ? [{ id: "today" as const, label: "Hiding tasks in Today" }] : []),
+  ];
+
+  const removeChip = (id: FilterChipId) => {
+    if (id === "priority") setFilters({ ...filters, hiddenPriorities: [] });
+    else if (id === "today") setFilters({ ...filters, showInToday: true });
+  };
+
   const renderChips = (task: BoardTask) => {
     const tone = dueTone(task.due ?? null, task.status, today);
     const progress = subtaskProgress(task);
@@ -124,7 +202,7 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
             P{task.priority}
           </span>
         )}
-        {task.scheduled != null && (
+        {task.scheduled != null && !inToday.has(task.id) && (
           <span className="chip" title={`Scheduled for ${task.scheduled}`}>
             {formatDayMonth(task.scheduled)}
           </span>
@@ -145,58 +223,63 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
 
   return (
     <section className="backlog" aria-label="Backlog">
-      <header className="backlog__head">
-        <h3>
-          Backlog <span className="backlog__count">{total}</span>
-        </h3>
-      </header>
-      <div className="backlog__filters">
-        <input
-          className="in backlog__search"
-          type="search"
-          value={filters.search}
-          placeholder="Search tasks"
-          aria-label="Search the backlog"
-          onChange={(event) => setFilters({ ...filters, search: event.target.value })}
-        />
-        <select
-          className="in backlog__select"
-          value={filters.projectId ?? ""}
-          aria-label="Filter by project"
-          onChange={(event) => setFilters({ ...filters, projectId: event.target.value === "" ? null : event.target.value })}
-        >
-          <option value="">All projects ({counted.total})</option>
-          {counted.options.map((option) => (
-            <option key={option.id} value={option.id} disabled={option.count === 0 && option.id !== filters.projectId}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="backlog__chips-row" role="group" aria-label="Status filter">
-        {BACKLOG_STATUSES.map((status) => (
-          <button
-            key={status}
-            type="button"
-            className={`pill ${filters.statuses.includes(status) ? "pill--on" : ""}`}
-            aria-pressed={filters.statuses.includes(status)}
-            onClick={() => setFilters({ ...filters, statuses: toggleBacklogStatus(filters.statuses, status) })}
+      <div className="backlog__top">
+        <header className="backlog__head">
+          <h3>
+            Backlog <span className="backlog__count">{total}</span>
+          </h3>
+          <BoardFilters count={chips.length} groups={filterGroups} canReset={hasCustomBacklogFilters(filters)} onReset={() => setFilters({ ...DEFAULT_BACKLOG_FILTERS })} />
+        </header>
+        <div className="backlog__filters">
+          <input
+            className="in backlog__search"
+            type="search"
+            value={filters.search}
+            placeholder="Search tasks"
+            aria-label="Search the backlog"
+            onChange={(event) => setFilters({ ...filters, search: event.target.value })}
+          />
+          <select
+            className="in backlog__select"
+            value={filters.projectId ?? ""}
+            aria-label="Filter by project"
+            onChange={(event) => setFilters({ ...filters, projectId: event.target.value === "" ? null : event.target.value })}
           >
-            {BACKLOG_STATUS_LABEL[status]}
-          </button>
-        ))}
+            <option value="">All projects ({counted.total})</option>
+            {counted.options.map((option) => (
+              <option key={option.id} value={option.id} disabled={option.count === 0 && option.id !== filters.projectId}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="backlog__chips-row" role="group" aria-label="Status filter">
+          {BACKLOG_STATUSES.map((status) => (
+            <button
+              key={status}
+              type="button"
+              className={`pill ${filters.statuses.includes(status) ? "pill--on" : ""}`}
+              aria-pressed={filters.statuses.includes(status)}
+              onClick={() => setFilters({ ...filters, statuses: toggleBacklogStatus(filters.statuses, status) })}
+            >
+              {BACKLOG_STATUS_LABEL[status]}
+            </button>
+          ))}
+        </div>
+        <BoardFilterChips chips={chips} onRemove={removeChip} />
       </div>
       {groups.length === 0 && <p className="backlog__empty">{tasks.length === 0 ? "No open tasks." : "Nothing matches these filters."}</p>}
       <div className="backlog__list" role="list" aria-label="Open tasks">
-        {groups.map((group) => (
+        {visible.map((group) => (
           <div key={group.project.id} className="backlog__group" role="group" aria-label={group.project.title}>
             <div className="backlog__project" aria-hidden="true">
               <span>{titles.get(group.project.id) ?? group.project.title}</span>
-              <span className="backlog__count">{group.tasks.length}</span>
+              <span className="backlog__count">{groups.find((item) => item.project.id === group.project.id)?.tasks.length ?? group.tasks.length}</span>
             </div>
             {group.tasks.map((task) => {
               const active = task.id === current;
               const busy = busyIds.has(task.id);
+              const planned = inToday.has(task.id);
               return (
                 <div
                   key={task.id}
@@ -206,9 +289,9 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
                   }}
                   role="listitem"
                   tabIndex={active ? 0 : -1}
-                  draggable={!busy}
+                  draggable={!busy && !planned}
                   aria-busy={busy}
-                  className={`backlog__row ${active ? "backlog__row--active" : ""} ${busy ? "backlog__row--busy" : ""}`}
+                  className={`backlog__row ${active ? "backlog__row--active" : ""} ${busy ? "backlog__row--busy" : ""} ${planned ? "backlog__row--today" : ""}`}
                   onKeyDown={(event) => onRowKeyDown(event, task)}
                   onFocus={(event) => {
                     if (event.target === event.currentTarget) setActiveId(task.id);
@@ -217,27 +300,35 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, date, to
                   onDragEnd={() => onDragActive(false)}
                 >
                   {task.status === "doing" && <span className="statusmark statusmark--doing" role="img" aria-label="In progress" title="In progress" />}
-                  <button type="button" className="backlog__title" tabIndex={-1} onClick={() => onOpen(task)}>
-                    {task.title}
-                  </button>
+                  <span className="backlog__title" onClick={() => onOpen(task)}>
+                    <InlineText text={task.title} />
+                  </span>
+                  {planned && (
+                    <span className="backlog__in-today" title={isToday ? "Already in today's focus" : `Already in the focus of ${date}`}>
+                      in Today
+                    </span>
+                  )}
                   {renderChips(task)}
-                  <button
-                    type="button"
-                    className="act backlog__add"
-                    tabIndex={-1}
-                    disabled={busy}
-                    aria-label={`Schedule ${task.title} for ${isToday ? "today" : date}`}
-                    title={isToday ? "Schedule for today (T)" : `Schedule for ${date} (T)`}
-                    onClick={() => onSchedule(task, date)}
-                  >
-                    + {isToday ? "Today" : "Day"}
-                  </button>
+                  {!planned && (
+                    <button
+                      type="button"
+                      className="act backlog__add"
+                      tabIndex={-1}
+                      disabled={busy}
+                      aria-label={`Schedule ${task.title} for ${isToday ? "today" : date}`}
+                      title={isToday ? "Schedule for today (T)" : `Schedule for ${date} (T)`}
+                      onClick={() => onSchedule(task, date)}
+                    >
+                      + {isToday ? "Today" : "Day"}
+                    </button>
+                  )}
                 </div>
               );
             })}
           </div>
         ))}
       </div>
+      <ShowMoreButtons paging={paging} from="start" noun="tasks" />
       {total > 0 && <p className="backlog__keys">T today - M tomorrow - S start - D done - Enter open - drag to Focus</p>}
     </section>
   );

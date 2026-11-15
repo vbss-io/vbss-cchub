@@ -1,7 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import "../outliner.css";
 import { BOARD_STATUS_LABEL, dueTone, formatDayMonth } from "../board-model";
-import { IconMore } from "../icons";
+import {
+  EXPANDED,
+  focusGroupCounts,
+  hasHiddenContent,
+  headerKeyAction,
+  hiddenSummary,
+  isProjectCollapsed,
+  isTaskCollapsed,
+  rowCollapseKey,
+  setProjectCollapsed,
+  setTaskCollapsed,
+  visibleFocusGroups,
+  type FocusCollapse,
+} from "../focus-collapse";
+import { IconChevron, IconMore } from "../icons";
+import { InlineText } from "../markdown";
 import {
   canIndent,
   canMove,
@@ -14,6 +29,7 @@ import {
   keyIntent,
   nextNode,
   parseInlineTokens,
+  previousSibling,
   prevNode,
   subtreeEnd,
   type OutlineGroup,
@@ -41,6 +57,14 @@ export interface FocusOutlinerProps {
   onOpen: (node: OutlineNode) => void;
   onTomorrow: (node: OutlineNode) => Promise<void>;
   onUnschedule: (node: OutlineNode) => Promise<void>;
+  collapse?: FocusCollapse;
+  onCollapseChange?: (next: FocusCollapse) => void;
+  onAddToProject?: (projectId: string, text: string) => Promise<void>;
+}
+
+interface AddState {
+  projectId: string;
+  text: string;
 }
 
 interface EditState {
@@ -138,8 +162,15 @@ export function FocusOutliner({
   onOpen,
   onTomorrow,
   onUnschedule,
+  collapse = EXPANDED,
+  onCollapseChange,
+  onAddToProject,
 }: FocusOutlinerProps) {
-  const flat = useMemo(() => flattenVisible(groups), [groups]);
+  const shown = useMemo(() => visibleFocusGroups(groups, collapse), [groups, collapse]);
+  const flat = useMemo(() => flattenVisible(shown), [shown]);
+  const originals = useMemo(() => new Map(flattenVisible(groups).map((node) => [node.id, node])), [groups]);
+  const [adding, setAdding] = useState<AddState | null>(null);
+  const headerRefs = useRef(new Map<string, HTMLButtonElement>());
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [editing, setEditingState] = useState<EditState | null>(null);
   const [draft, setDraft] = useState<DraftState | null>(null);
@@ -231,6 +262,68 @@ export function FocusOutliner({
     }
   };
 
+  const fullOf = (node: OutlineNode): OutlineNode => originals.get(node.id) ?? node;
+
+  const setTaskOpen = (node: OutlineNode, open: boolean) => {
+    const full = fullOf(node);
+    if (!hasHiddenContent(full) || isTaskCollapsed(collapse, full) === !open) return;
+    onCollapseChange?.(setTaskCollapsed(collapse, full, !open));
+  };
+
+  const setProjectOpen = (projectId: string, open: boolean) => {
+    if (isProjectCollapsed(collapse, projectId) === !open) return;
+    onCollapseChange?.(setProjectCollapsed(collapse, projectId, !open));
+  };
+
+  const openAdd = (projectId: string) => {
+    setProjectOpen(projectId, true);
+    setEditing(null);
+    setDraft(null);
+    setErrors((previous) => without(previous, `add:${projectId}`));
+    setAdding({ projectId, text: "" });
+  };
+
+  const closeAdd = (projectId: string) => {
+    setAdding(null);
+    setErrors((previous) => without(previous, `add:${projectId}`));
+    headerRefs.current.get(projectId)?.focus();
+  };
+
+  const submitAdd = async (current: AddState) => {
+    if (onAddToProject === undefined) return;
+    const text = current.text.trim();
+    if (text === "") {
+      closeAdd(current.projectId);
+      return;
+    }
+    const ok = await run(`add:${current.projectId}`, () => onAddToProject(current.projectId, text));
+    if (ok) setAdding((latest) => (latest !== null && latest.projectId === current.projectId ? { ...latest, text: "" } : latest));
+  };
+
+  const onAddKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>, current: AddState) => {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void submitAdd(current);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      closeAdd(current.projectId);
+    }
+  };
+
+  const onHeaderKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>, group: OutlineGroup) => {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    const action = headerKeyAction(event.key);
+    if (action === null || action === "toggle") return;
+    event.preventDefault();
+    if (action === "collapse") setProjectOpen(group.project.id, false);
+    else if (action === "expand") setProjectOpen(group.project.id, true);
+    else {
+      const first = shown.find((item) => item.project.id === group.project.id)?.items[0];
+      if (first !== undefined) focusRow(first.id);
+    }
+  };
+
   const startEdit = (node: OutlineNode) => {
     setMenuId(null);
     setConfirmId(null);
@@ -284,13 +377,14 @@ export function FocusOutliner({
   const perform = async (intent: OutlineIntent, node: OutlineNode, fromEdit: boolean): Promise<void> => {
     switch (intent) {
       case "next": {
-        const target = nextNode(groups, node.id);
+        const target = nextNode(shown, node.id);
         if (target !== null) focusRow(target.id);
         return;
       }
       case "prev": {
-        const target = prevNode(groups, node.id);
+        const target = prevNode(shown, node.id);
         if (target !== null) focusRow(target.id);
+        else headerRefs.current.get(node.projectId)?.focus();
         return;
       }
       case "edit":
@@ -314,7 +408,10 @@ export function FocusOutliner({
         if (await commitEdit(node, false)) openDraft(node);
         return;
       case "add-note":
-        if (!fromEdit || (await commitEdit(node, false))) openNote(node);
+        if (!fromEdit || (await commitEdit(node, false))) {
+          setTaskOpen(node, true);
+          openNote(node);
+        }
         return;
       case "toggle-done":
         if (fromEdit && !(await commitEdit(node, false))) return;
@@ -340,6 +437,10 @@ export function FocusOutliner({
         if (intent === "move-down" && !canMove(groups, node, "down")) return;
         setMenuId(null);
         if (fromEdit && !(await commitEdit(node, true))) return;
+        if (intent === "indent") {
+          const parent = previousSibling(groups, node);
+          if (parent !== null) setTaskOpen(parent, true);
+        }
         const action =
           intent === "indent"
             ? () => onIndent(node)
@@ -374,6 +475,15 @@ export function FocusOutliner({
     if (event.key === "Escape" && menuId === node.id) {
       setMenuId(null);
       return;
+    }
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+      const full = fullOf(node);
+      const toggle = rowCollapseKey(event.key, isTaskCollapsed(collapse, full), hasHiddenContent(full));
+      if (toggle !== null) {
+        event.preventDefault();
+        setTaskOpen(node, toggle === "expand");
+        return;
+      }
     }
     const intent = keyIntent(event, "view");
     if (intent === null) return;
@@ -517,6 +627,9 @@ export function FocusOutliner({
     const done = node.status === "done";
     const state = checkState(node.status);
     const checkLabel = done ? `Reopen ${node.title}` : state === "mixed" ? `Complete ${node.title} (in progress)` : `Complete ${node.title}`;
+    const full = fullOf(node);
+    const expandable = hasHiddenContent(full);
+    const collapsed = expandable && isTaskCollapsed(collapse, full);
     return (
       <div
         key={node.id}
@@ -528,7 +641,7 @@ export function FocusOutliner({
         tabIndex={active ? 0 : -1}
         aria-level={node.depth + 1}
         aria-selected={active}
-        aria-expanded={node.children.length > 0 ? true : undefined}
+        aria-expanded={expandable ? !collapsed : undefined}
         aria-busy={rowBusy}
         className={`outliner__row ${active ? "outliner__row--active" : ""} ${rowBusy ? "outliner__row--busy" : ""} ${done ? "outliner__row--done" : ""}`}
         style={{ ["--depth" as string]: node.depth }}
@@ -539,6 +652,23 @@ export function FocusOutliner({
         }}
       >
         <div className="outliner__main">
+          {expandable ? (
+            <button
+              type="button"
+              className={`outliner__twist ${collapsed ? "" : "outliner__twist--open"}`}
+              tabIndex={-1}
+              aria-label={collapsed ? `Expand ${node.title}` : `Collapse ${node.title}`}
+              title={collapsed ? "Expand" : "Collapse"}
+              onClick={() => {
+                setTaskOpen(node, collapsed);
+                focusRow(node.id);
+              }}
+            >
+              <IconChevron size={12} />
+            </button>
+          ) : (
+            <span className="outliner__twist outliner__twist--none" aria-hidden="true" />
+          )}
           <input
             type="checkbox"
             className="outliner__check"
@@ -565,7 +695,8 @@ export function FocusOutliner({
             />
           ) : (
             <span className="outliner__title" onClick={() => startEdit(node)}>
-              {node.title}
+              <InlineText text={node.title} />
+              {collapsed && <span className="outliner__hidden">{hiddenSummary(full)}</span>}
             </span>
           )}
           {!isEditing && renderChips(node)}
@@ -611,7 +742,7 @@ export function FocusOutliner({
           <ul className="outliner__notes">
             {node.notes.map((item) => (
               <li key={`${item.line}:${item.raw}`} className="outliner__note">
-                {item.text}
+                <InlineText text={item.text} />
               </li>
             ))}
           </ul>
@@ -655,6 +786,7 @@ export function FocusOutliner({
     return (
       <div key="draft" role="treeitem" aria-level={anchor.depth + 1} aria-selected={false} aria-busy={rowBusy} tabIndex={-1} className="outliner__row outliner__row--draft" style={{ ["--depth" as string]: anchor.depth }}>
         <div className="outliner__main">
+          <span className="outliner__twist outliner__twist--none" aria-hidden="true" />
           <span className="outliner__check outliner__check--ghost" aria-hidden="true" />
           <AutoInput
             value={current.text}
@@ -675,15 +807,46 @@ export function FocusOutliner({
     );
   };
 
-  if (flat.length === 0) {
+  const renderAdd = (current: AddState, title: string): ReactNode => {
+    const key = `add:${current.projectId}`;
+    const rowBusy = busyIds[key] === true;
+    const error = errors[key];
+    return (
+      <div key="add" role="treeitem" aria-level={1} aria-selected={false} aria-busy={rowBusy} tabIndex={-1} className="outliner__row outliner__row--draft outliner__row--add">
+        <div className="outliner__main">
+          <span className="outliner__twist outliner__twist--none" aria-hidden="true" />
+          <span className="outliner__check outliner__check--ghost" aria-hidden="true" />
+          <AutoInput
+            value={current.text}
+            placeholder={`New task in ${title} - Enter to add, Esc to cancel`}
+            label={`New task in ${title}`}
+            focusKey={key}
+            readOnly={rowBusy}
+            onChange={(text) => setAdding((latest) => (latest === null ? latest : { ...latest, text }))}
+            onKeyDown={(event) => onAddKeyDown(event, current)}
+          />
+        </div>
+        {error !== undefined && (
+          <div className="outliner__error" role="alert">
+            {error}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  if (flattenVisible(groups).length === 0) {
     return <p className="outliner__empty">Nothing in focus yet.</p>;
   }
 
   return (
     <div className={`outliner ${busy ? "outliner--busy" : ""}`} role="tree" aria-label="Focus" aria-busy={busy}>
-      {groups.map((group) => {
+      {shown.map((group) => {
+        const original = groups.find((item) => item.project.id === group.project.id) ?? group;
+        const counts = focusGroupCounts(original);
+        if (counts.tasks === 0) return null;
+        const open = !isProjectCollapsed(collapse, group.project.id);
         const nodes = flattenNodes(group.items);
-        if (nodes.length === 0) return null;
         const anchorIndex = draft === null ? -1 : nodes.findIndex((node) => node.id === draft.anchorId);
         const draftAt = anchorIndex === -1 ? -1 : subtreeEnd(nodes, anchorIndex);
         const anchor = anchorIndex === -1 ? null : (nodes[anchorIndex] ?? null);
@@ -693,11 +856,36 @@ export function FocusOutliner({
           const node = nodes[index];
           if (node !== undefined) rows.push(renderRow(node));
         }
+        if (open && adding !== null && adding.projectId === group.project.id) rows.push(renderAdd(adding, group.project.title));
+        const doneLabel = counts.done > 0 ? `, ${counts.done} done` : "";
         return (
-          <div key={group.project.id} className="outliner__group" role="group" aria-label={group.project.title}>
-            <div className="outliner__project" aria-hidden="true">
-              <span>{group.project.title}</span>
-              <span className="outliner__count">{nodes.length}</span>
+          <div key={group.project.id} className={`outliner__group ${open ? "" : "outliner__group--closed"}`} role="group" aria-label={group.project.title}>
+            <div className="outliner__project">
+              <button
+                ref={(element) => {
+                  if (element === null) headerRefs.current.delete(group.project.id);
+                  else headerRefs.current.set(group.project.id, element);
+                }}
+                type="button"
+                className="outliner__toggle"
+                aria-expanded={open}
+                aria-label={`${group.project.title}, ${counts.tasks} task${counts.tasks === 1 ? "" : "s"}${doneLabel}`}
+                title={open ? "Collapse (Left arrow)" : "Expand (Right arrow)"}
+                onClick={() => setProjectOpen(group.project.id, !open)}
+                onKeyDown={(event) => onHeaderKeyDown(event, group)}
+              >
+                <span className={`outliner__twist ${open ? "outliner__twist--open" : ""}`} aria-hidden="true">
+                  <IconChevron size={12} />
+                </span>
+                <span className="outliner__project-title">{group.project.title}</span>
+                <span className="outliner__count">{counts.tasks}</span>
+                {counts.done > 0 && <span className="outliner__done-count">{counts.done} done</span>}
+              </button>
+              {onAddToProject !== undefined && (
+                <button type="button" className="act outliner__add" aria-label={`Add a task to ${group.project.title} for this day`} onClick={() => openAdd(group.project.id)}>
+                  + Add
+                </button>
+              )}
             </div>
             {rows}
           </div>

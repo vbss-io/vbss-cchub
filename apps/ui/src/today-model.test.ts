@@ -3,6 +3,12 @@ import { describe, it } from "node:test";
 import type { BoardProject, BoardTask, DailyYesterday, DailyYesterdayTask, TodayEntry, TodayOutOfSync } from "./delegation";
 import {
   backlogGroups,
+  backlogPriorityCounts,
+  backlogTasks,
+  hasCustomBacklogFilters,
+  parseBacklogFilters,
+  serializeBacklogFilters,
+  windowBacklogGroups,
   backlogKeyIntent,
   broughtLines,
   closeYesterdayBody,
@@ -598,5 +604,44 @@ describe("insertAnchorOf", () => {
     assert.equal(insertAnchorOf(tasks, "weekly"), null);
     assert.equal(insertAnchorOf(tasks, "kid"), null);
     assert.deepEqual(insertAnchorOf(tasks, "live"), { line: 6, raw: tasks[1]?.raw });
+  });
+});
+
+describe("backlog priority and in-Today filters", () => {
+  const projects = [project("a", "Alpha"), project("b", "Bravo")];
+  const tasks = [
+    task("a1", "a", 1, { priority: 0 }),
+    task("a2", "a", 2, { priority: 2 }),
+    task("a3", "a", 3),
+    task("b1", "b", 1, { priority: 0 }),
+  ];
+
+  it("hides the priorities switched off, no priority included", () => {
+    const shown = backlogTasks(tasks, projects, new Set(), { ...DEFAULT_BACKLOG_FILTERS, hiddenPriorities: [0, null] });
+    assert.deepEqual(shown.map((item) => item.id), ["a2"]);
+  });
+
+  it("shows the tasks already in Today by default and hides them when the toggle is off, carried ones always out", () => {
+    const inToday = new Set(["a1"]);
+    assert.deepEqual(backlogTasks(tasks, projects, new Set(["b1"]), DEFAULT_BACKLOG_FILTERS, inToday).map((item) => item.id), ["a1", "a2", "a3"]);
+    assert.deepEqual(backlogTasks(tasks, projects, new Set(["b1"]), { ...DEFAULT_BACKLOG_FILTERS, showInToday: false }, inToday).map((item) => item.id), ["a2", "a3"]);
+  });
+
+  it("remembers project, statuses, priorities and the toggle but never the search", () => {
+    const stored = serializeBacklogFilters({ search: "secret", projectId: "a", statuses: ["hold"], hiddenPriorities: [null, 3], showInToday: false });
+    assert.deepEqual(parseBacklogFilters(stored), { search: "", projectId: "a", statuses: ["hold"], hiddenPriorities: [null, 3], showInToday: false });
+    assert.deepEqual(parseBacklogFilters("nope"), DEFAULT_BACKLOG_FILTERS);
+    assert.deepEqual(parseBacklogFilters('{"statuses":[],"hiddenPriorities":["x",1,1,42]}'), { ...DEFAULT_BACKLOG_FILTERS, hiddenPriorities: [1] });
+    assert.equal(hasCustomBacklogFilters(DEFAULT_BACKLOG_FILTERS), false);
+    assert.equal(hasCustomBacklogFilters({ ...DEFAULT_BACKLOG_FILTERS, hiddenPriorities: [1] }), true);
+    assert.equal(hasCustomBacklogFilters({ ...DEFAULT_BACKLOG_FILTERS, showInToday: false }), true);
+  });
+
+  it("windows the grouped backlog to the first tasks so a long backlog does not make the page endless", () => {
+    const groups = backlogGroups(tasks, projects, [], new Set(), DEFAULT_BACKLOG_FILTERS);
+    assert.deepEqual(windowBacklogGroups(groups, 2).map((group) => [group.project.id, group.tasks.map((item) => item.id)]), [["a", ["a1", "a2"]]]);
+    assert.deepEqual(windowBacklogGroups(groups, 4).map((group) => group.tasks.length), [3, 1]);
+    assert.deepEqual(windowBacklogGroups(groups, 0), []);
+    assert.deepEqual([...backlogPriorityCounts(tasks).entries()], [[0, 2], [2, 1], [null, 1]]);
   });
 });

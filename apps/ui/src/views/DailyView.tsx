@@ -504,7 +504,7 @@ function DailyWizard(props: DailyWizardProps) {
   );
 }
 
-const NOTE_ASIDE_WIDTH = { default: 340, min: 240, max: 560 } as const;
+const NOTE_ASIDE_WIDTH = { default: 340 } as const;
 
 function DailySplit({ main, aside }: { main: ReactNode; aside: ReactNode }) {
   const [width, setWidth] = useLayoutSize("note", "aside", NOTE_ASIDE_WIDTH.default);
@@ -514,8 +514,6 @@ function DailySplit({ main, aside }: { main: ReactNode; aside: ReactNode }) {
       className="daily-split"
       side="end"
       defaultSize={NOTE_ASIDE_WIDTH.default}
-      minSize={NOTE_ASIDE_WIDTH.min}
-      maxSize={NOTE_ASIDE_WIDTH.max}
       size={width}
       onSizeChange={setWidth}
       ariaLabel="Resize note sidebar"

@@ -13,7 +13,7 @@ export interface BoardFilterGroup {
 interface FiltersProps {
   count: number;
   groups: BoardFilterGroup[];
-  subprojects: { checked: boolean; disabled: boolean; onChange: (checked: boolean) => void };
+  subprojects?: { checked: boolean; disabled: boolean; onChange: (checked: boolean) => void };
   canReset: boolean;
   onReset: () => void;
 }
@@ -101,10 +101,12 @@ export function BoardFilters({ count, groups, subprojects, canReset, onReset }: 
               ))}
             </section>
           ))}
-          <label className={`msd__item ${subprojects.disabled ? "msd__item--disabled" : ""}`} title="Include the tasks of the subprojects of the selected project">
-            <input type="checkbox" checked={subprojects.checked} disabled={subprojects.disabled} onChange={(event) => subprojects.onChange(event.target.checked)} />
-            <span className="msd__label">Include subprojects</span>
-          </label>
+          {subprojects !== undefined && (
+            <label className={`msd__item ${subprojects.disabled ? "msd__item--disabled" : ""}`} title="Include the tasks of the subprojects of the selected project">
+              <input type="checkbox" checked={subprojects.checked} disabled={subprojects.disabled} onChange={(event) => subprojects.onChange(event.target.checked)} />
+              <span className="msd__label">Include subprojects</span>
+            </label>
+          )}
           <footer className="bf__foot">
             <button type="button" className="act" disabled={!canReset} title={canReset ? "Reset filters and view options to their defaults" : "Filters and view options are already at their defaults"} onClick={onReset}>
               Reset

@@ -9,6 +9,9 @@ import {
   KEY_STEP_LARGE,
   keyboardSize,
   resetSize,
+  sharedSplitBounds,
+  SPLIT_SIDE_MIN,
+  splitSideMin,
   sizeFromDelta,
 } from "./resize-model";
 
@@ -151,5 +154,31 @@ describe("isStacked", () => {
     assert.equal(isStacked(899, 900), true);
     assert.equal(isStacked(900, 900), false);
     assert.equal(isStacked(390, 900), true);
+  });
+});
+
+describe("shared split bounds", () => {
+  it("keeps each side at least 240 px on a wide container and lets the sized side take the rest", () => {
+    assert.deepEqual(sharedSplitBounds(1400), { min: 240, max: 1159 });
+    const right = clampSize(1000, sharedSplitBounds(1400).min, sharedSplitBounds(1400).max);
+    assert.equal(right > 1400 - right, true);
+  });
+
+  it("drops the minimum to 20% of the container when 240 px each side does not fit", () => {
+    assert.equal(splitSideMin(800), 160);
+    assert.deepEqual(sharedSplitBounds(800), { min: 160, max: 639 });
+    assert.equal(splitSideMin(2000), 240);
+  });
+
+  it("clamps a stored width outside the range instead of rejecting it", () => {
+    const { min, max } = sharedSplitBounds(1000);
+    assert.equal(clampSize(4000, min, max), max);
+    assert.equal(clampSize(20, min, max), min);
+    assert.equal(clampSize(Number.NaN, min, max), min);
+  });
+
+  it("uses a wide cap before the container is measured so a stored width is not cut on first paint", () => {
+    assert.deepEqual(sharedSplitBounds(0), { min: SPLIT_SIDE_MIN, max: 4000 });
+    assert.equal(clampSize(900, sharedSplitBounds(0).min, sharedSplitBounds(0).max), 900);
   });
 });

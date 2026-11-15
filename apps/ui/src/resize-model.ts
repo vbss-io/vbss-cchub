@@ -53,3 +53,18 @@ export function resetSize(defaultSize: number, min: number, max: number): number
 export function isStacked(viewportWidth: number, collapseBelow: number): boolean {
   return viewportWidth < collapseBelow;
 }
+
+export const SPLIT_SIDE_MIN = 240;
+export const SPLIT_NARROW_RATIO = 0.2;
+export const SPLIT_UNMEASURED_MAX = 4000;
+
+export function splitSideMin(containerSize: number): number {
+  if (!Number.isFinite(containerSize) || containerSize <= 0) return SPLIT_SIDE_MIN;
+  return Math.max(1, Math.min(SPLIT_SIDE_MIN, Math.round(containerSize * SPLIT_NARROW_RATIO)));
+}
+
+export function sharedSplitBounds(containerSize: number, dividerSize = 1): { min: number; max: number } {
+  const min = splitSideMin(containerSize);
+  if (!Number.isFinite(containerSize) || containerSize <= 0) return { min, max: SPLIT_UNMEASURED_MAX };
+  return { min, max: Math.max(min, Math.floor(containerSize - min - Math.max(0, dividerSize))) };
+}
