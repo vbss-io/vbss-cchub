@@ -76,6 +76,8 @@ export const allViews = (): ViewItem[] => viewsOf(PLUGINS);
 
 export const enabledViews = (features: FeatureFlags): ViewItem[] => viewsOf(enabledPlugins(features));
 
+export const navViews = (features: FeatureFlags): ViewItem[] => enabledViews(features).filter((view) => view.inSidebar !== false);
+
 export const viewItem = (key: string): ViewItem | undefined => allViews().find((view) => view.key === key);
 
 export const parseView = (key: string | undefined): View | null => {
@@ -89,10 +91,10 @@ export const isViewEnabled = (view: string, features: FeatureFlags): boolean => 
   return item !== undefined && isPluginEnabled(item.pluginId, features);
 };
 
-export const defaultSidebarPrefs = (): SidebarPrefs => ({ order: allViews().map((view) => view.key), pinned: [...DEFAULT_PINNED] });
+export const defaultSidebarPrefs = (): SidebarPrefs => ({ order: allViews().filter((view) => view.inSidebar !== false).map((view) => view.key), pinned: [...DEFAULT_PINNED] });
 
 export const sidebarModel = (features: FeatureFlags, prefs: SidebarPrefs | null | undefined): SidebarModel => {
-  const views = enabledViews(features);
+  const views = navViews(features);
   const source = prefs ?? defaultSidebarPrefs();
   const byKey = new Map(views.map((view) => [view.key as string, view]));
   const ordered: ViewItem[] = [];

@@ -157,6 +157,13 @@ export const buildTaskItems = (tasks: BoardTask[], projects: BoardProject[], ope
   return items;
 };
 
+export interface SidebarCommand {
+  toggle: () => void;
+  collapsed: boolean;
+}
+
+export const SIDEBAR_SHORTCUT_LABEL = "Ctrl+B";
+
 export interface CommandActions {
   newTask?: () => void;
   startDay?: () => void;
@@ -168,6 +175,8 @@ export interface CommandActions {
   themeHint: string;
   installHooks: () => void;
   toggleWidget?: () => void;
+  openDelegated?: () => void;
+  sidebar?: SidebarCommand;
 }
 
 export const buildCommandItems = (actions: CommandActions): PaletteItem[] => {
@@ -177,8 +186,13 @@ export const buildCommandItems = (actions: CommandActions): PaletteItem[] => {
   if (actions.planToday) items.push({ id: "command:plan-today", kind: "command", title: "Plan today (classic)", subtitle: "Today", keywords: ["daily", "today", "focus", "organize", "wizard", "planner"], run: actions.planToday });
   if (actions.refreshDaily) items.push({ id: "command:refresh-daily", kind: "command", title: "Refresh Today", subtitle: "Today", keywords: ["reload", "daily", "today", "sync"], run: actions.refreshDaily });
   if (actions.startCapture) items.push({ id: "command:capture", kind: "command", title: "Capture…", subtitle: "Today", keywords: ["capture", "note", "inbox", "quick", "idea"], run: actions.startCapture });
+  if (actions.openDelegated) items.push({ id: "command:delegated-work", kind: "command", title: "Delegated work", subtitle: "Sessions › Delegated", keywords: ["delegated", "tasks", "agents", "hub", "runs"], run: actions.openDelegated });
   items.push({ id: "command:backup-now", kind: "command", title: "Back up now", subtitle: "Hub data", keywords: ["backup", "snapshot", "save"], run: actions.backupNow });
   items.push({ id: "command:toggle-theme", kind: "command", title: "Toggle theme", subtitle: actions.themeHint, keywords: ["dark", "midnight", "dracula", "appearance", "color"], run: actions.toggleTheme });
+  if (actions.sidebar) {
+    const { toggle, collapsed } = actions.sidebar;
+    items.push({ id: "command:toggle-sidebar", kind: "command", title: "Toggle sidebar", subtitle: `${collapsed ? "Expand" : "Collapse"} · ${SIDEBAR_SHORTCUT_LABEL}`, keywords: ["collapse", "expand", "rail", "navigation", "menu", "ctrl+b"], run: toggle });
+  }
   if (actions.toggleWidget) items.push({ id: "command:toggle-widget", kind: "command", title: "Show/hide widget", subtitle: "Desktop", keywords: ["tray", "overlay"], run: actions.toggleWidget });
   items.push({ id: "command:install-hooks", kind: "command", title: "Install hooks…", subtitle: "Opens Settings › Connections", keywords: ["hooks", "claude", "setup", "settings"], run: actions.installHooks });
   return items;

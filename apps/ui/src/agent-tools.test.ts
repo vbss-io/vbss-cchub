@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { agentToolsFor, type HubPluginInfo } from "./agent-tools";
+import { agentToolsCountText, agentToolsFor, type HubPluginInfo } from "./agent-tools";
 
 const hubPlugins: HubPluginInfo[] = [
   { id: "core", name: "Core", enabled: true, tools: ["hub_overview", "hub_workspaces"] },
@@ -28,5 +28,19 @@ describe("agentToolsFor", () => {
     assert.equal(agentToolsFor(["share"], null), null);
     assert.equal(agentToolsFor(["sessions", "widget"], hubPlugins), null);
     assert.equal(agentToolsFor([], hubPlugins), null);
+  });
+});
+
+describe("agentToolsCountText", () => {
+  it("counts the tools of a plugin row", () => {
+    assert.equal(agentToolsCountText(agentToolsFor(["share"], hubPlugins)), "3 agent tools");
+    assert.equal(agentToolsCountText(agentToolsFor(["today"], hubPlugins)), "1 agent tool");
+  });
+
+  it("shows nothing when the plugin has no tools or the hub does not list it", () => {
+    assert.equal(agentToolsCountText(agentToolsFor(["usage"], hubPlugins)), null);
+    assert.equal(agentToolsCountText(agentToolsFor(["sessions"], hubPlugins)), null);
+    assert.equal(agentToolsCountText(null), null);
+    assert.equal(agentToolsCountText([]), null);
   });
 });

@@ -1,4 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { agentToolsCountText, agentToolsFor, type HubPluginInfo } from "../../agent-tools";
+import { Toggletip } from "../../components/Toggletip";
+import { fetchPlugins } from "../../delegation";
 import { IconSettings } from "../../icons";
 import { featureOn, isPluginEnabled, PLUGINS } from "../../plugins/registry";
 import type { FeatureKey, PluginId } from "../../plugins/types";
@@ -19,7 +22,20 @@ export function PluginsTab({ enabled, settings, onSaveSettings, restoreFocus, on
   const loaded = settings !== null;
   const hasVault = Boolean(settings?.secondBrainRoot?.trim());
   const listRef = useRef<HTMLUListElement>(null);
+  const [hubPlugins, setHubPlugins] = useState<HubPluginInfo[] | null>(null);
   const toggle = (key: FeatureKey, value: boolean) => void onSaveSettings({ features: { [key]: value } });
+
+  useEffect(() => {
+    let alive = true;
+    void fetchPlugins()
+      .then((list) => {
+        if (alive) setHubPlugins(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (restoreFocus === null) return;
@@ -39,12 +55,26 @@ export function PluginsTab({ enabled, settings, onSaveSettings, restoreFocus, on
           const hintText = loaded ? hints.join(" · ") : "";
           const configurable = hasPluginSettings(plugin);
           const on = loaded && isPluginEnabled(plugin.id, features);
+          const tools = agentToolsFor([plugin.id], hubPlugins);
+          const toolsText = agentToolsCountText(tools);
           return (
             <li key={plugin.id} className="plugin-row" data-plugin={plugin.id}>
               <div className="plugin-row__info">
                 <span className="plugin-row__name">{plugin.name}</span>
                 <span className="plugin-row__desc">{plugin.description}</span>
                 {hintText && <span className="plugin-row__hint">{hintText}</span>}
+                {toolsText && tools && (
+                  <span className="plugin-row__tools">
+                    <span>{toolsText}</span>
+                    <Toggletip label={`${plugin.name} agent tools`}>
+                      <span className="plugin-row__tools-list">
+                        {tools.map((tool) => (
+                          <code key={tool}>{tool}</code>
+                        ))}
+                      </span>
+                    </Toggletip>
+                  </span>
+                )}
               </div>
               <div className="plugin-row__controls">
                 {configurable && (

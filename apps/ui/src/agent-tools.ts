@@ -11,3 +11,8 @@ export const agentToolsFor = (pluginIds: readonly string[], plugins: readonly Hu
   if (known.length === 0) return null;
   return [...new Set(known.flatMap((plugin) => plugin.tools))];
 };
+
+export const agentToolsCountText = (tools: readonly string[] | null): string | null => {
+  if (tools === null || tools.length === 0) return null;
+  return tools.length === 1 ? "1 agent tool" : `${tools.length} agent tools`;
+};

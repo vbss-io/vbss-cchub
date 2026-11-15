@@ -60,11 +60,23 @@ export const matchCombo = (event: KeyEventLike, combo: string): boolean => {
   return event.key.toLowerCase() === parsed.key;
 };
 
-export const isEditableTarget = (target: EventTarget | null): boolean => {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+export interface EditableTargetLike {
+  tagName?: unknown;
+  isContentEditable?: unknown;
+  closest?: unknown;
+}
+
+const EDITOR_SELECTOR = ".mde, .cm-editor, [contenteditable=\"true\"], [contenteditable=\"\"]";
+
+const EDITABLE_TAGS: ReadonlySet<string> = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+
+export const isEditableTarget = (target: EventTarget | EditableTargetLike | null): boolean => {
+  if (typeof target !== "object" || target === null) return false;
+  const node = target as EditableTargetLike;
+  if (node.isContentEditable === true) return true;
+  if (typeof node.tagName === "string" && EDITABLE_TAGS.has(node.tagName.toUpperCase())) return true;
+  if (typeof node.closest !== "function") return false;
+  return (node.closest as (selector: string) => unknown).call(target, EDITOR_SELECTOR) != null;
 };
 
 export const useHotkeys = (bindings: HotkeyBinding[]): void => {

@@ -224,6 +224,32 @@ describe("buildCommandItems", () => {
       "command:install-hooks",
     ]);
   });
+
+  it("offers Delegated work only when the Delegated plugin hands it an action", () => {
+    assert.equal(ids(buildCommandItems(base)).includes("command:delegated-work"), false);
+    const calls: string[] = [];
+    const items = buildCommandItems({ ...base, openDelegated: () => calls.push("delegated") });
+    const command = items.find((entry) => entry.id === "command:delegated-work");
+    assert.equal(command?.title, "Delegated work");
+    assert.equal(command?.subtitle, "Sessions › Delegated");
+    command?.run();
+    assert.deepEqual(calls, ["delegated"]);
+  });
+
+  it("offers Toggle sidebar with the Ctrl+B hint and the next state", () => {
+    assert.equal(ids(buildCommandItems(base)).includes("command:toggle-sidebar"), false);
+    let toggled = 0;
+    const toggle = () => {
+      toggled += 1;
+    };
+    const expanded = buildCommandItems({ ...base, sidebar: { toggle, collapsed: false } }).find((entry) => entry.id === "command:toggle-sidebar");
+    const collapsed = buildCommandItems({ ...base, sidebar: { toggle, collapsed: true } }).find((entry) => entry.id === "command:toggle-sidebar");
+    assert.equal(expanded?.title, "Toggle sidebar");
+    assert.equal(expanded?.subtitle, "Collapse · Ctrl+B");
+    assert.equal(collapsed?.subtitle, "Expand · Ctrl+B");
+    expanded?.run();
+    assert.equal(toggled, 1);
+  });
 });
 
 describe("capture", () => {

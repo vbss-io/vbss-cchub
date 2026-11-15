@@ -6,6 +6,7 @@ import { Widget } from "./components/Widget";
 import { reportUiDiag } from "./api";
 import "./styles.css";
 import "./responsive.css";
+import "./nav-rail.css";
 import "./toaster.css";
 
 document.documentElement.dataset.theme = localStorage.getItem("hub.theme") === "midnight" ? "midnight" : "dracula";

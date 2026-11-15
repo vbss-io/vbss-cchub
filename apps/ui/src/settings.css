@@ -123,6 +123,24 @@
   color: var(--amber);
 }
 
+.plugin-row__tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.plugin-row__tools-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.plugin-row__tools-list code {
+  overflow-wrap: anywhere;
+}
+
 .plugin-row__controls {
   display: flex;
   align-items: center;

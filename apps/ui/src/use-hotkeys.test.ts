@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { matchCombo, parseCombo, type KeyEventLike } from "./use-hotkeys";
+import { isEditableTarget, matchCombo, parseCombo, type EditableTargetLike, type KeyEventLike } from "./use-hotkeys";
 
 const event = (key: string, mods: Partial<Omit<KeyEventLike, "key">> = {}): KeyEventLike => ({
   key,
@@ -9,6 +9,42 @@ const event = (key: string, mods: Partial<Omit<KeyEventLike, "key">> = {}): KeyE
   altKey: false,
   shiftKey: false,
   ...mods,
+});
+
+const element = (tagName: string, insideEditor = false, isContentEditable = false): EditableTargetLike => ({
+  tagName,
+  isContentEditable,
+  closest: (selector: string) => (insideEditor && selector.includes(".cm-editor") && selector.includes(".mde") ? {} : null),
+});
+
+describe("isEditableTarget", () => {
+  it("guards inputs, textareas, selects and contenteditable so Ctrl+B stays with the field", () => {
+    assert.equal(isEditableTarget(element("INPUT")), true);
+    assert.equal(isEditableTarget(element("textarea")), true);
+    assert.equal(isEditableTarget(element("SELECT")), true);
+    assert.equal(isEditableTarget(element("DIV", false, true)), true);
+  });
+
+  it("guards anything inside the Markdown or CodeMirror editor", () => {
+    assert.equal(isEditableTarget(element("SPAN", true)), true);
+    assert.equal(isEditableTarget(element("PRE", true)), true);
+  });
+
+  it("lets the shortcut through on plain page targets", () => {
+    assert.equal(isEditableTarget(element("BODY")), false);
+    assert.equal(isEditableTarget(element("BUTTON")), false);
+    assert.equal(isEditableTarget(null), false);
+    assert.equal(isEditableTarget({}), false);
+  });
+});
+
+describe("Ctrl+B", () => {
+  it("matches ctrl+b and cmd+b only", () => {
+    assert.equal(matchCombo(event("b", { ctrlKey: true }), "ctrl+b"), true);
+    assert.equal(matchCombo(event("B", { metaKey: true }), "ctrl+b"), true);
+    assert.equal(matchCombo(event("b", { ctrlKey: true, shiftKey: true }), "ctrl+b"), false);
+    assert.equal(matchCombo(event("b"), "ctrl+b"), false);
+  });
 });
 
 describe("matchCombo", () => {

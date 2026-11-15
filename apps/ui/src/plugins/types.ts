@@ -17,6 +17,7 @@ export interface PluginViewDef {
   label: string;
   subtitle: string;
   icon: ReactElement;
+  inSidebar?: boolean;
 }
 
 export interface ViewItem extends PluginViewDef {
@@ -32,9 +33,10 @@ export interface PaletteContext {
   dispatch: (view: PluginViewKey, event: string) => void;
   startCapture: () => void;
   toggleWidget: (() => void) | null;
+  openDelegated: () => void;
 }
 
-export type PluginCommandActions = Pick<CommandActions, "newTask" | "startDay" | "planToday" | "refreshDaily" | "startCapture" | "toggleWidget">;
+export type PluginCommandActions = Pick<CommandActions, "newTask" | "startDay" | "planToday" | "refreshDaily" | "startCapture" | "toggleWidget" | "openDelegated">;
 
 export interface HubPlugin {
   id: PluginId;

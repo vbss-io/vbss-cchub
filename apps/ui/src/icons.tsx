@@ -296,3 +296,12 @@ export function IconMore({ size = 14 }: IconProps) {
     </svg>
   );
 }
+
+export function IconSidebar({ size = 18 }: IconProps) {
+  return (
+    <svg {...svgProps(size)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9 4v16" />
+    </svg>
+  );
+}

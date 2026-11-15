@@ -174,7 +174,14 @@ describe("sidebar rows", () => {
     assert.equal(pinned, defaultSidebarPrefs().pinned.length);
     assert.equal(rows.slice(0, pinned).every((row) => row.pinned), true);
     assert.equal(rows.slice(pinned).every((row) => !row.pinned), true);
-    assert.equal(rows.length, 9);
+    assert.equal(rows.length, 8);
+    assert.equal(rows.some((row) => row.key === "tasks"), false);
+  });
+
+  it("never lists Delegated, even when a saved layout still pins it", () => {
+    const rows = sidebarRows(sidebarModel(allOn, { order: ["tasks", "sessions", "daily"], pinned: ["tasks", "daily"] }));
+    assert.deepEqual(keys(rows.filter((row) => row.pinned)), ["daily"]);
+    assert.equal(rows.some((row) => row.key === "tasks"), false);
   });
 
   it("only lists the views of enabled plugins", () => {

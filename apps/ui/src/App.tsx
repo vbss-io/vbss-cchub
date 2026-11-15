@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from "react";
 import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusCodexApp, focusSession, getHooks, hubBase, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type DailyStreamEvent, type HooksStatus, type ShareStreamEvent, type TasksBoardStreamEvent } from "./api";
 import { attentionCount } from "./attention";
 import { isHubRun } from "./clients";
@@ -13,15 +13,16 @@ import { mapScope, navClickMode, navCurrentKey, parseSessionsMode, resolveSessio
 import { StatusBar } from "./components/StatusBar";
 import { WhatsNew } from "./components/WhatsNew";
 import { addCapture, configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getUiPrefs, putUiPrefs, UiPrefsUnavailableError, type UiPrefs, type UiPrefsPatch, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
-import { IconChevron, IconClose, IconMore, IconSearch, IconSettings } from "./icons";
+import { IconChevron, IconClose, IconMore, IconSearch, IconSettings, IconSidebar } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { unlockAudio } from "./notify";
 import { buildCaptureItems, buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, CAPTURE_PREFILL } from "./palette-items";
 import { disabledTarget } from "./plugins/nav-guard";
-import { enabledViews, isPluginEnabled, isViewEnabled, parseView, pluginCommandActions, sidebarModel, viewItem } from "./plugins/registry";
+import { isPluginEnabled, isViewEnabled, navViews, parseView, pluginCommandActions, sidebarModel, viewItem } from "./plugins/registry";
 import type { View } from "./plugins/types";
 import { applyUiPrefsPatch, emptyUiPrefs } from "./plugins/ui-prefs";
 import { UiPrefsProvider, type UiPrefsContextValue } from "./ui-prefs-context";
+import { parseSidebarHint, railItemTitle, resolveSidebarCollapsed, SIDEBAR_HINT_KEY, SIDEBAR_RAIL_QUERY, SIDEBAR_TOGGLE_COMBO, sidebarHintValue, sidebarToggleLabel, withSidebarCollapsed } from "./shell-sidebar";
 import { localDayKey } from "./timeline-model";
 import { useHotkeys } from "./use-hotkeys";
 import { HubOfflineBanner } from "./components/HubOfflineBanner";
@@ -103,6 +104,31 @@ function saveSessionsOrigin(origin: Origin): void {
   }
 }
 
+function loadSidebarHint(): boolean {
+  try {
+    return parseSidebarHint(localStorage.getItem(SIDEBAR_HINT_KEY));
+  } catch {
+    return false;
+  }
+}
+
+function saveSidebarHint(collapsed: boolean): void {
+  try {
+    localStorage.setItem(SIDEBAR_HINT_KEY, sidebarHintValue(collapsed));
+  } catch {
+    void 0;
+  }
+}
+
+const railAvailable = (): boolean => typeof window.matchMedia === "function" && window.matchMedia(SIDEBAR_RAIL_QUERY).matches;
+
+const subscribeRailQuery = (onChange: () => void): (() => void) => {
+  if (typeof window.matchMedia !== "function") return () => undefined;
+  const query = window.matchMedia(SIDEBAR_RAIL_QUERY);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+};
+
 function loadSessionsMode(): SessionsMode {
   try {
     return parseSessionsMode(localStorage.getItem(SESSIONS_MODE_KEY));
@@ -138,7 +164,7 @@ interface NavMoreItem {
   badge: number;
 }
 
-function NavMore({ items, activeKey, onPick }: { items: NavMoreItem[]; activeKey: string; onPick: (key: View) => void }) {
+function NavMore({ items, activeKey, onPick, rail }: { items: NavMoreItem[]; activeKey: string; onPick: (key: View) => void; rail: boolean }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLLIElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -146,6 +172,7 @@ function NavMore({ items, activeKey, onPick }: { items: NavMoreItem[]; activeKey
   const menuId = useId();
   const activeItem = items.find((item) => item.key === activeKey) ?? null;
   const collapsedBadge = items.reduce((total, item) => total + item.badge, 0);
+  const moreTitle = activeItem ? `More: ${activeItem.label}` : "More";
 
   const menuItems = () => Array.from(rootRef.current?.querySelectorAll<HTMLAnchorElement>('[role="menuitem"]') ?? []);
 
@@ -215,7 +242,9 @@ function NavMore({ items, activeKey, onPick }: { items: NavMoreItem[]; activeKey
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        title={activeItem ? `More: ${activeItem.label}` : "More"}
+        title={rail ? undefined : moreTitle}
+        aria-label={rail ? railItemTitle(moreTitle, open ? 0 : collapsedBadge) : undefined}
+        data-tip={rail && !open ? railItemTitle(moreTitle, collapsedBadge) : undefined}
         onClick={(event) => {
           pendingFocus.current = !open && event.detail === 0 ? "first" : null;
           setOpen((value) => !value);
@@ -295,6 +324,7 @@ export function App() {
   const [paletteBoard, setPaletteBoard] = useState<BoardPayload | null>(null);
   const [uiPrefs, setUiPrefs] = useState<UiPrefs>(emptyUiPrefs);
   const [uiPrefsLoaded, setUiPrefsLoaded] = useState(isMock);
+  const [sidebarHint, setSidebarHint] = useState(loadSidebarHint);
   const uiPrefsSeq = useRef(0);
   const uiPrefsPending = useRef(0);
 
@@ -861,8 +891,25 @@ export function App() {
 
   const sharePanel = route.view === "share" && route.param != null;
   const sidebar = useMemo(() => sidebarModel(features, uiPrefs.sidebar), [features, uiPrefs.sidebar]);
-  const badgeOf = (key: View): number => (key === "sessions" ? attention : key === "tasks" ? hubRunning + hubAttention : 0);
+  const sidebarCollapsed = resolveSidebarCollapsed(uiPrefs.layout, sidebarHint);
+  const layoutRef = useRef(uiPrefs.layout);
+  layoutRef.current = uiPrefs.layout;
+  const railWide = useSyncExternalStore(subscribeRailQuery, railAvailable);
+  const rail = sidebarCollapsed && railWide;
+  const collapsedRef = useRef(sidebarCollapsed);
+  collapsedRef.current = sidebarCollapsed;
+  const toggleSidebar = useCallback(() => {
+    const next = !collapsedRef.current;
+    collapsedRef.current = next;
+    setSidebarHint(next);
+    void updateUiPrefs(withSidebarCollapsed(layoutRef.current, next));
+  }, [updateUiPrefs]);
+  useEffect(() => {
+    saveSidebarHint(sidebarCollapsed);
+  }, [sidebarCollapsed]);
+  const badgeOf = (key: View): number => (key === "sessions" ? attention : 0);
   const navCurrent = navCurrentKey(effectiveView, runsMode, flowEnabled);
+  const railTip = (tip: string, title: string = tip): { title?: string; "data-tip"?: string } => (rail ? { "data-tip": tip } : { title });
   const pickNav = (key: View): void => {
     const mode = navClickMode(key, flowEnabled);
     if (mode) setSessionsMode(mode);
@@ -941,6 +988,7 @@ export function App() {
     { combo: "ctrl+3", handler: () => isViewEnabled("board", features) && navigate("board") },
     { combo: "ctrl+4", handler: () => isViewEnabled("flow", features) && navigate("flow") },
     { combo: "ctrl+,", handler: () => navigate("settings") },
+    { combo: SIDEBAR_TOGGLE_COMBO, handler: () => railAvailable() && toggleSidebar() },
   ]);
 
   useEffect(() => {
@@ -1015,7 +1063,7 @@ export function App() {
   const paletteItems = useMemo(() => {
     if (!paletteOpen) return [];
     const views = [
-      ...enabledViews(features).map((item) => ({ key: item.key, label: item.label, subtitle: item.key === "sessions" ? sessionsSubtitle(delegatedEnabled) : item.subtitle, enabled: true })),
+      ...navViews(features).map((item) => ({ key: item.key, label: item.label, subtitle: item.key === "sessions" ? sessionsSubtitle(delegatedEnabled) : item.subtitle, enabled: true })),
       { key: "settings", label: SETTINGS_HEAD.label, subtitle: SETTINGS_HEAD.subtitle, enabled: true },
     ];
     const toggleWidget = canToggleWidget()
@@ -1023,7 +1071,8 @@ export function App() {
       : null;
     const items = [
       ...buildCommandItems({
-        ...pluginCommandActions(features, { dispatch: goThenDispatch, startCapture, toggleWidget }),
+        ...pluginCommandActions(features, { dispatch: goThenDispatch, startCapture, toggleWidget, openDelegated: () => navigate("tasks") }),
+        ...(railWide ? { sidebar: { toggle: toggleSidebar, collapsed: sidebarCollapsed } } : {}),
         backupNow: () => void backupNow(),
         toggleTheme: () => setTheme((previous) => (previous === "midnight" ? "dracula" : "midnight")),
         themeHint: theme === "midnight" ? "Switch to Dracula" : "Switch to Midnight",
@@ -1047,11 +1096,11 @@ export function App() {
       ...(boardEnabled && paletteBoard ? buildTaskItems(paletteBoard.tasks, paletteBoard.projects, (id) => navigate("board", encodeURIComponent(id))) : []),
     ];
     return items;
-  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, features, delegatedEnabled, theme, tick, navigate, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, startCapture, openSession, openCodex, fail]);
+  }, [paletteOpen, sessions, codexSessions, workspaces, paletteBoard, boardEnabled, features, delegatedEnabled, theme, tick, navigate, toggleSidebar, sidebarCollapsed, railWide, goThenDispatch, backupNow, openWorkspaceInEditor, focusFromPalette, startCapture, openSession, openCodex, fail]);
 
   return (
     <UiPrefsProvider value={uiPrefsValue}>
-      <div className={`shell ${drawerSession || codexDrawerThread || taskDrawer || sharePanel ? "shell--panel" : ""}`}>
+      <div className={`shell ${drawerSession || codexDrawerThread || taskDrawer || sharePanel ? "shell--panel" : ""} ${rail ? "shell--rail" : ""}`}>
         {connection.offline && !isMock && <HubOfflineBanner />}
         <nav className="nav" aria-label="Main">
           <div className="nav__brand">
@@ -1062,7 +1111,7 @@ export function App() {
             </span>
           </div>
           <div className="nav__search-slot">
-            <button type="button" className="nav__search" onClick={() => setPaletteOpen(true)} aria-label="Search" aria-keyshortcuts="Control+K" title="Search (Ctrl K)">
+            <button type="button" className="nav__search" onClick={() => setPaletteOpen(true)} aria-label="Search" aria-keyshortcuts="Control+K" {...railTip("Search (Ctrl K)")}>
               <IconSearch size={16} />
               <span className="nav__search-label">Search</span>
               <kbd className="nav__search-key">Ctrl K</kbd>
@@ -1076,7 +1125,8 @@ export function App() {
                   <a
                     className={`nav__item ${navCurrent === item.key ? "nav__item--on" : ""}`}
                     href={`#/${item.key}`}
-                    title={item.label}
+                    {...railTip(railItemTitle(item.label, badge), item.label)}
+                    aria-label={rail ? railItemTitle(item.label, badge) : undefined}
                     aria-current={navCurrent === item.key ? "page" : undefined}
                     onClick={() => pickNav(item.key)}
                   >
@@ -1087,13 +1137,14 @@ export function App() {
                 </li>
               );
             })}
-            {moreItems.length > 0 && <NavMore items={moreItems} activeKey={navCurrent} onPick={pickNav} />}
+            {moreItems.length > 0 && <NavMore items={moreItems} activeKey={navCurrent} onPick={pickNav} rail={rail} />}
           </ul>
           <div className="nav__foot">
             <a
               className={`nav__item nav__item--foot ${effectiveView === "settings" ? "nav__item--on" : ""}`}
               href="#/settings"
-              title="Settings"
+              {...railTip("Settings")}
+              aria-label={rail ? "Settings" : undefined}
               aria-current={effectiveView === "settings" ? "page" : undefined}
             >
               <span className="nav__icon">
@@ -1102,13 +1153,24 @@ export function App() {
               <span className="nav__label">Settings</span>
             </a>
             <button
+              type="button"
+              className="nav__toggle"
+              onClick={toggleSidebar}
+              aria-label={sidebarToggleLabel(sidebarCollapsed)}
+              aria-expanded={!sidebarCollapsed}
+              aria-keyshortcuts="Control+B"
+              {...railTip(`${sidebarToggleLabel(sidebarCollapsed)} (Ctrl B)`)}
+            >
+              <IconSidebar />
+            </button>
+            <button
               className={`version ${seenVersion !== __APP_VERSION__ ? "version--new" : ""}`}
               onClick={() => {
                 localStorage.setItem("hub.seenVersion", __APP_VERSION__);
                 setSeenVersion(__APP_VERSION__);
                 setShowWhatsNew(true);
               }}
-              title="What's new"
+              {...railTip(`What's new · v${__APP_VERSION__}`, "What's new")}
             >
               v{__APP_VERSION__}
             </button>
