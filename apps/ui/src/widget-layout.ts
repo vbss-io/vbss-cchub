@@ -18,6 +18,7 @@ export const TAB_PIP_SLOT = 20;
 export const TAB_RING = 36;
 export const PANEL_LONG = 620;
 export const PANEL_SHORT = 440;
+export const COMPACT_LONG = 176;
 
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), Math.max(min, max));
 
@@ -62,6 +63,18 @@ export function dockRect(edge: WidgetEdge, collapsed: boolean, area: Rect, offse
     y: Math.round(area.y + (area.height - size.height) / 2 + shift),
     width: size.width,
     height: size.height,
+  };
+}
+
+export function compactRect(edge: WidgetEdge, area: Rect): Rect {
+  const width = Math.min(PANEL_SHORT, area.width);
+  const height = Math.min(COMPACT_LONG, area.height);
+  if (edge === "top") return { x: Math.round(area.x + (area.width - width) / 2), y: Math.round(area.y), width, height };
+  return {
+    x: Math.round(edge === "left" ? area.x : area.x + area.width - width),
+    y: Math.round(area.y + (area.height - height) / 2),
+    width,
+    height,
   };
 }
 

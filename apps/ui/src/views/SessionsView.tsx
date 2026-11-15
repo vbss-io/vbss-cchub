@@ -501,7 +501,7 @@ export function SessionsView({
       <strong>Origin</strong> picks what runs here: Claude Code sessions, Codex threads{delegatedEnabled ? " or work delegated to the hub" : ""}.{" "}
       {delegatedEnabled && "A delegated task folds the hub session that runs it. "}
       {delegatedEnabled ? "Hub runs are headless sessions launched by delegated tasks" : "Hub runs are headless sessions the hub launches"}; they never notify and stay out of All. Share forks answer people through your share links. Codex threads are read from
-      ~/.codex/sessions and are read-only here. Client and sort live under Filters.
+      ~/.codex/sessions and are read-only here. Client and sort live under Filters.{modeSwitch ? " List and Flow show the same runs as cards or as a live graph." : ""}
     </>
   );
 

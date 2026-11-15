@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mapScope, mapSummaryLine, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, sessionsModeRouteOf, sessionsSubtitle } from "./sessions-mode";
+import { SESSIONS_MODES, mapScope, mapSummaryLine, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, sessionsModeRouteOf, sessionsSubtitle } from "./sessions-mode";
 
 describe("parseSessionsMode", () => {
   it("reads map and falls back to list for anything else", () => {
@@ -25,7 +25,7 @@ describe("resolveSessionsMode", () => {
 });
 
 describe("sessionsModeRouteOf", () => {
-  it("sends #/flow to the Map mode of Sessions when Flow is on", () => {
+  it("sends #/flow to the Flow mode of Sessions when Flow is on", () => {
     assert.equal(sessionsModeRouteOf("flow", true), "map");
   });
 
@@ -41,7 +41,7 @@ describe("sessionsModeRouteOf", () => {
 });
 
 describe("navCurrentKey", () => {
-  it("makes Flow the current item while Sessions is in Map mode and Flow is on", () => {
+  it("makes Flow the current item while Sessions is in Flow mode and Flow is on", () => {
     assert.equal(navCurrentKey("sessions", "map", true), "flow");
   });
 
@@ -60,7 +60,7 @@ describe("navCurrentKey", () => {
 });
 
 describe("navClickMode", () => {
-  it("opens List from Sessions and Map from Flow", () => {
+  it("opens List from Sessions and Flow mode from the Flow item", () => {
     assert.equal(navClickMode("sessions", true), "list");
     assert.equal(navClickMode("sessions", false), "list");
     assert.equal(navClickMode("flow", true), "map");
@@ -109,8 +109,21 @@ describe("sessionsSubtitle", () => {
 });
 
 describe("navClickMode for Delegated", () => {
-  it("opens List from the Delegated sidebar item, even from Map", () => {
+  it("opens List from the Delegated sidebar item, even from Flow mode", () => {
     assert.equal(navClickMode("tasks", true), "list");
     assert.equal(navClickMode("tasks", false), "list");
+  });
+});
+
+describe("SESSIONS_MODES", () => {
+  it("labels the switch List | Flow, never Map", () => {
+    assert.deepEqual(
+      SESSIONS_MODES.map((mode) => mode.label),
+      ["List", "Flow"],
+    );
+    assert.deepEqual(
+      SESSIONS_MODES.map((mode) => mode.key),
+      ["list", "map"],
+    );
   });
 });

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    Manager, RunEvent,
+    Emitter, Manager, RunEvent,
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -353,6 +353,7 @@ pub fn run() {
                             } else {
                                 let _ = window.show();
                                 let _ = window.set_focus();
+                                let _ = app.emit("widget:shown", ());
                             }
                         }
                     }

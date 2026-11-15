@@ -1,14 +1,9 @@
-import type { SessionsMode } from "../sessions-mode";
-
-const MODES: readonly { key: SessionsMode; label: string }[] = [
-  { key: "list", label: "List" },
-  { key: "map", label: "Map" },
-];
+import { SESSIONS_MODES, type SessionsMode } from "../sessions-mode";
 
 export function SessionsModeSwitch({ mode, onMode }: { mode: SessionsMode; onMode: (mode: SessionsMode) => void }) {
   return (
     <div className="runs-origin runs-mode" role="group" aria-label="View">
-      {MODES.map((item) => (
+      {SESSIONS_MODES.map((item) => (
         <button
           key={item.key}
           type="button"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { fetchSessions, focusSession, reportUiError, subscribe } from "../api";
 import { sessionClient, isHubRun } from "../clients";
 import {
@@ -7,6 +7,7 @@ import {
   isScanning,
   getSettings,
   listTasks,
+  updateSettings,
   type DelegationSettings,
   type LimitsSnapshot,
   type ProviderUsage,
@@ -19,18 +20,28 @@ import { taskBranch, taskIsolation } from "../delegation-actions";
 import { IconChevron, IconClaude, IconCode, IconCodex, IconOpenAI, IconStar } from "../icons";
 import { isMock, MOCK_SESSIONS } from "../mock";
 import { folderPeers } from "../peers";
+import { isPluginEnabled } from "../plugins/registry";
 import { isEmpty, isStale } from "../stale";
 import type { SessionRecord } from "../types";
+import { clampPercent, compactRect, dockRect, offsetFromPosition, ringTone, type Rect } from "../widget-layout";
 import {
-  clampPercent,
-  dockRect,
-  formatTokens,
-  offsetFromPosition,
-  resetCountdown,
-  ringTone,
-  type Rect,
-} from "../widget-layout";
-import { pipTone, sessionTone, splitSessions, taskTone } from "../widget-model";
+  gaugeResetText,
+  headline,
+  moreLabel,
+  periodLabel,
+  pipTone,
+  planSections,
+  sessionRowMeta,
+  sessionTone,
+  splitSessions,
+  taskRowMeta,
+  taskTone,
+  tokenLine,
+  widgetSurface,
+  type RowMeta,
+  type SectionPlan,
+  type WidgetTone,
+} from "../widget-model";
 import { BrandMark } from "./BrandMark";
 import { inFlight, needsYou } from "./TaskCard";
 import "../widget.css";
@@ -46,6 +57,7 @@ interface WidgetConfig {
   refreshMinutes: number;
   usageFeature: boolean;
   limitsFeature: boolean;
+  delegated: boolean;
 }
 
 const DEFAULT_CONFIG: WidgetConfig = {
@@ -57,6 +69,7 @@ const DEFAULT_CONFIG: WidgetConfig = {
   refreshMinutes: 5,
   usageFeature: false,
   limitsFeature: false,
+  delegated: false,
 };
 
 interface SettingsLike {
@@ -80,6 +93,7 @@ function configOf(settings: SettingsLike): WidgetConfig {
     refreshMinutes: typeof refresh === "number" && refresh >= 1 && refresh <= 60 ? refresh : DEFAULT_CONFIG.refreshMinutes,
     usageFeature: settings.features?.usage === true,
     limitsFeature: settings.features?.limits === true,
+    delegated: isPluginEnabled("delegated", settings.features),
   };
 }
 
@@ -88,22 +102,6 @@ const nameOf = (session: SessionRecord): string =>
 
 const liveSession = (session: SessionRecord): boolean =>
   session.archivedAt == null && session.status !== "ended" && !isStale(session) && !isEmpty(session) && !isHubRun(session.client);
-
-const elapsedLabel = (ms: number): string => {
-  const minutes = Math.floor(ms / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  if (hours < 24) return rest > 0 ? `${hours}h${rest}m` : `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-};
-
-const TASK_ATTENTION_SUB: Record<string, string> = {
-  attention: "needs you",
-  failed: "failed",
-  interrupted: "interrupted",
-};
 
 async function openMain(hash: string | null): Promise<void> {
   if (!inTauri()) {
@@ -206,12 +204,13 @@ async function currentMonitorLike(): Promise<MonitorLike | null> {
   return (await currentMonitor()) as unknown as MonitorLike | null;
 }
 
-async function applyDock(edge: WidgetEdge, collapsed: boolean, showNow: boolean, rings: number): Promise<string> {
+async function applyDock(edge: WidgetEdge, collapsed: boolean, showNow: boolean, rings: number, compact = false): Promise<string> {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   const { LogicalPosition, LogicalSize } = await import("@tauri-apps/api/dpi");
   const win = getCurrentWindow();
   const monitor = await currentMonitorLike();
-  const rect = dockRect(edge, collapsed, workAreaOf(monitor), readOffset(edge), rings);
+  const area = workAreaOf(monitor);
+  const rect = compact ? compactRect(edge, area) : dockRect(edge, collapsed, area, readOffset(edge), rings);
   const attempt = async (step: () => Promise<unknown>): Promise<void> => {
     try {
       await step();
@@ -243,8 +242,6 @@ function Arrow({ edge, closing }: { edge: WidgetEdge; closing: boolean }) {
   );
 }
 
-const IDLE_ROW_LIMIT = 8;
-
 const PROVIDER_NAME = { claude: "Claude", codex: "Codex" } as const;
 
 interface RingProps {
@@ -258,8 +255,8 @@ function Ring({ provider, percent, resetsAt, now }: RingProps) {
   const radius = 15;
   const circumference = 2 * Math.PI * radius;
   const shown = clampPercent(percent);
-  const reset = resetCountdown(resetsAt, now);
-  const title = `${PROVIDER_NAME[provider]} 7d: ${Math.round(shown)}%${reset ? ` · resets in ${reset}` : ""}`;
+  const reset = gaugeResetText(resetsAt, now, "sevenDay", provider === "codex");
+  const title = `${PROVIDER_NAME[provider]} 7 d: ${Math.round(shown)}%${reset ? ` · ${reset}` : ""}`;
   return (
     <span className={`wgd-ring wgd-ring--${ringTone(percent)}`} title={title}>
       <svg width={36} height={36} viewBox="0 0 36 36" aria-hidden="true">
@@ -282,11 +279,13 @@ interface GaugeProps {
   label: string;
   percent: number;
   resetsAt: number | null;
+  window: "fiveHour" | "sevenDay";
+  requireReset?: boolean;
   reset?: boolean;
   now: number;
 }
 
-function Gauge({ label, percent, resetsAt, reset, now }: GaugeProps) {
+function Gauge({ label, percent, resetsAt, window, requireReset = false, reset, now }: GaugeProps) {
   if (reset) {
     return (
       <div className="wgd-gauge">
@@ -298,7 +297,7 @@ function Gauge({ label, percent, resetsAt, reset, now }: GaugeProps) {
     );
   }
   const shown = clampPercent(percent);
-  const countdown = resetCountdown(resetsAt, now);
+  const resetText = gaugeResetText(resetsAt, now, window, requireReset);
   return (
     <div className="wgd-gauge">
       <span className="wgd-gauge-l">{label}</span>
@@ -306,7 +305,9 @@ function Gauge({ label, percent, resetsAt, reset, now }: GaugeProps) {
         <span className={`wgd-bar-fill wgd-bar-fill--${ringTone(percent)}`} style={{ width: `${shown}%` }} />
       </span>
       <span className="wgd-gauge-v">{Math.round(shown)}%</span>
-      <span className="wgd-gauge-r">{countdown ? `resets ${countdown}` : ""}</span>
+      <span className="wgd-gauge-r" title={resetText}>
+        {resetText}
+      </span>
     </div>
   );
 }
@@ -321,22 +322,18 @@ interface ProviderCardProps {
   now: number;
 }
 
-function tokenLine(read: number, output: number): string {
-  return `read ${formatTokens(read)} · out ${formatTokens(output)}`;
-}
-
 function UsageLines({ data, days }: { data: ProviderUsage | null; days: number }) {
   if (!data) return <div className="wgd-note">No usage recorded.</div>;
   return (
     <>
       <div className="wgd-kv">
         <span>Today</span>
-        <b>{tokenLine(data.today.read, data.today.output)}</b>
-        <em>{data.today.messages} msgs</em>
+        <b title={tokenLine(data.today.read, data.today.output)}>{tokenLine(data.today.read, data.today.output)}</b>
+        <em>{data.today.messages.toLocaleString()} messages</em>
       </div>
       <div className="wgd-kv">
-        <span>{days}d</span>
-        <b>{tokenLine(data.week.read, data.week.output)}</b>
+        <span>{periodLabel(days)}</span>
+        <b title={tokenLine(data.week.read, data.week.output)}>{tokenLine(data.week.read, data.week.output)}</b>
         <em />
       </div>
     </>
@@ -350,23 +347,23 @@ function ProviderCard({ provider, usageEnabled, usage, usageScanning, limitsEnab
   return (
     <section className="wgd-card">
       <div className="wgd-card-h">
-        <span className="wgd-card-ico">{provider === "claude" ? <IconClaude size={20} /> : <IconOpenAI size={20} />}</span>
+        <span className="wgd-card-ico">{provider === "claude" ? <IconClaude size={18} /> : <IconOpenAI size={18} />}</span>
         {PROVIDER_NAME[provider]}
       </div>
       {!usageEnabled ? (
-        <div className="wgd-note">Turn on Usage in Settings to see tokens.</div>
+        <div className="wgd-note">Turn on Usage in Settings › Plugins to see tokens.</div>
       ) : usage === undefined ? (
-        <div className="wgd-note">{usageScanning ? "scanning…" : "Loading usage..."}</div>
+        <div className="wgd-note">{usageScanning ? "Scanning transcripts..." : "Loading usage..."}</div>
       ) : usage === null ? (
         <div className="wgd-note">Usage needs a newer hub.</div>
       ) : (
         <>
           <UsageLines data={providerUsage} days={usage.days} />
-          {usageScanning && <div className="wgd-note">scanning…</div>}
+          {usageScanning && <div className="wgd-note">Scanning transcripts...</div>}
         </>
       )}
       {!limitsEnabled ? (
-        <div className="wgd-note">Turn on Limits in Settings to see the quota.</div>
+        <div className="wgd-note">Turn on Limits in Settings › Plugins to see how much of your plan is left.</div>
       ) : limits === undefined ? (
         <div className="wgd-note">Loading limits...</div>
       ) : limits === null ? (
@@ -377,13 +374,14 @@ function ProviderCard({ provider, usageEnabled, usage, usageScanning, limitsEnab
         <div className="wgd-note wgd-note--warn">{codex.error || "no Codex session data found"}</div>
       ) : claude ? (
         <>
-          <Gauge label="5 h" percent={claude.fiveHour.utilization} resetsAt={claude.fiveHour.resetsAt} reset={claude.fiveHour.reset} now={now} />
-          <Gauge label="7 d" percent={claude.sevenDay.utilization} resetsAt={claude.sevenDay.resetsAt} reset={claude.sevenDay.reset} now={now} />
+          <Gauge label="5 h" percent={claude.fiveHour.utilization} resetsAt={claude.fiveHour.resetsAt} window="fiveHour" reset={claude.fiveHour.reset} now={now} />
+          <Gauge label="7 d" percent={claude.sevenDay.utilization} resetsAt={claude.sevenDay.resetsAt} window="sevenDay" reset={claude.sevenDay.reset} now={now} />
           {claude.models.length > 0 && (
             <div className="wgd-models">
-              {claude.models.map((model) => (
-                <span key={model.name} className={`wgd-chip wgd-chip--${ringTone(model.utilization)}`}>
-                  {model.name} {Math.round(clampPercent(model.utilization))}%
+              {claude.models.map((model, index) => (
+                <span key={model.name} className="wgd-model" title={`${model.name} ${gaugeResetText(model.resetsAt, now, "sevenDay")}`.trim()}>
+                  {index > 0 && <span className="wgd-sep">·</span>}
+                  {model.name} <span className={`wgd-model-v wgd-model-v--${ringTone(model.utilization)}`}>{Math.round(clampPercent(model.utilization))}%</span>
                 </span>
               ))}
             </div>
@@ -391,13 +389,27 @@ function ProviderCard({ provider, usageEnabled, usage, usageScanning, limitsEnab
         </>
       ) : codex ? (
         <>
-          <Gauge label="5 h" percent={codex.primary.usedPercent} resetsAt={codex.primary.resetsAt} reset={codex.primary.reset} now={now} />
-          <Gauge label="7 d" percent={codex.secondary.usedPercent} resetsAt={codex.secondary.resetsAt} reset={codex.secondary.reset} now={now} />
+          <Gauge label="5 h" percent={codex.primary.usedPercent} resetsAt={codex.primary.resetsAt} window="fiveHour" requireReset reset={codex.primary.reset} now={now} />
+          <Gauge label="7 d" percent={codex.secondary.usedPercent} resetsAt={codex.secondary.resetsAt} window="sevenDay" requireReset reset={codex.secondary.reset} now={now} />
         </>
       ) : (
         <div className="wgd-note">Limits are not tracked for {PROVIDER_NAME[provider]}.</div>
       )}
     </section>
+  );
+}
+
+function RowTail({ meta }: { meta: RowMeta }) {
+  const more = moreLabel(meta.extras);
+  return (
+    <>
+      <span className="wg-meta">{meta.text}</span>
+      {more && (
+        <span className="wg-extra" title={meta.extras.join("\n")} aria-label={`${meta.extras.length} more: ${meta.extras.join(", ")}`} role="note">
+          {more}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -414,6 +426,8 @@ export function Widget() {
   const [usage, setUsage] = useState<UsageSummary | null | undefined>(undefined);
   const [usageScanning, setUsageScanning] = useState(false);
   const [usageTick, setUsageTick] = useState(0);
+  const [turningOn, setTurningOn] = useState(false);
+  const [turnOnError, setTurnOnError] = useState<string | null>(null);
   const openRef = useRef(false);
   const shown = useRef(false);
   const applying = useRef(false);
@@ -424,6 +438,8 @@ export function Widget() {
   const dragApi = useRef<(() => void) | null>(null);
   const configRef = useRef(config);
   configRef.current = config;
+  const loadedRef = useRef(loaded);
+  loadedRef.current = loaded;
   const ringCount = (config.rings.claude && limits?.claude?.sevenDay ? 1 : 0) + (config.rings.codex && limits?.codex?.secondary ? 1 : 0);
   const ringsRef = useRef(ringCount);
   ringsRef.current = ringCount;
@@ -451,10 +467,12 @@ export function Widget() {
     applying.current = true;
     try {
       if (!configRef.current.enabled) {
+        const wasShown = shown.current;
         shown.current = false;
         openRef.current = false;
         setOpen(false);
-        await hideWindow();
+        if (wasShown) await hideWindow();
+        lastMonitor.current = await applyDock(configRef.current.edge, false, false, 0, true);
         return;
       }
       const first = !shown.current;
@@ -476,6 +494,29 @@ export function Widget() {
     setOpen(true);
   }, [dock]);
 
+  const revealCompact = useCallback(async (): Promise<void> => {
+    window.clearTimeout(applyTimer.current);
+    applying.current = true;
+    try {
+      lastMonitor.current = await applyDock(configRef.current.edge, false, false, 0, true);
+    } catch (err) {
+      logWidget("reveal", err);
+    } finally {
+      applyTimer.current = window.setTimeout(() => {
+        applying.current = false;
+      }, 600);
+    }
+  }, []);
+
+  const dismiss = useCallback(async (): Promise<void> => {
+    if (!inTauri()) return;
+    try {
+      await hideWindow();
+    } catch (err) {
+      logWidget("dismiss", err);
+    }
+  }, []);
+
   const collapse = useCallback(async (): Promise<void> => {
     window.clearTimeout(leaveTimer.current);
     openRef.current = false;
@@ -486,7 +527,7 @@ export function Widget() {
   useEffect(() => {
     if (isMock) {
       setSessions(Object.fromEntries(MOCK_SESSIONS.map((s) => [s.sessionId, s])));
-      setConfig({ ...DEFAULT_CONFIG, enabled: true });
+      setConfig({ ...DEFAULT_CONFIG, enabled: true, delegated: true });
       setLoaded(true);
       return;
     }
@@ -562,6 +603,23 @@ export function Widget() {
 
   useEffect(() => {
     if (!inTauri()) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
+      const off = await listen("widget:shown", () => {
+        if (!configRef.current.enabled || !loadedRef.current) void revealCompact();
+      });
+      if (cancelled) off();
+      else unlisten = off;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [revealCompact]);
+
+  useEffect(() => {
+    if (!inTauri()) return;
     void import("@tauri-apps/api/window").then((api) => {
       dragApi.current = () => void api.getCurrentWindow().startDragging();
     });
@@ -575,7 +633,7 @@ export function Widget() {
     const edge = config.edge;
     void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
       const off = await getCurrentWindow().onMoved(({ payload }) => {
-        if (applying.current || openRef.current) return;
+        if (applying.current || openRef.current || !configRef.current.enabled) return;
         window.clearTimeout(timer);
         timer = window.setTimeout(() => {
           void currentMonitorLike()
@@ -644,6 +702,17 @@ export function Widget() {
     };
   }, [wantUsage, usageScanning, usageTick]);
 
+  const surface = widgetSurface({ loaded, enabled: config.enabled });
+
+  useEffect(() => {
+    if (surface === "on") return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") void dismiss();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [surface, dismiss]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -693,10 +762,11 @@ export function Widget() {
     const all = Object.values(sessions);
     const live = all.filter(liveSession);
     const { needsYou: waiting, running, idle } = splitSessions(live);
-    const attentionTasks = tasks.filter((t) => t.archivedAt == null && needsYou(t.status)).sort((a, b) => b.updatedAt - a.updatedAt);
-    const delegated = tasks.filter((t) => t.archivedAt == null && inFlight(t.status)).sort((a, b) => a.createdAt - b.createdAt);
-    const doneRecent = tasks
-      .filter((t) => t.archivedAt == null && t.status === "completed" && Date.now() - t.updatedAt < 3_600_000)
+    const visibleTasks = config.delegated ? tasks.filter((t) => t.archivedAt == null) : [];
+    const attentionTasks = visibleTasks.filter((t) => needsYou(t.status)).sort((a, b) => b.updatedAt - a.updatedAt);
+    const delegated = visibleTasks.filter((t) => inFlight(t.status)).sort((a, b) => a.createdAt - b.createdAt);
+    const doneRecent = visibleTasks
+      .filter((t) => t.status === "completed" && Date.now() - t.updatedAt < 3_600_000)
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .slice(0, 3);
     return {
@@ -712,7 +782,7 @@ export function Widget() {
       failed: attentionTasks.filter((t) => t.status === "failed" || t.status === "interrupted").length,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, tasks, tick]);
+  }, [sessions, tasks, tick, config.delegated]);
 
   const goSession = (sessionId: string) => {
     void focusSession(sessionId);
@@ -724,116 +794,103 @@ export function Widget() {
     void collapse();
   };
 
-  const sessionRow = (session: SessionRecord, tone: string, sub: string, muted = false) => {
+  const turnOn = async () => {
+    setTurningOn(true);
+    setTurnOnError(null);
+    try {
+      const next = await updateSettings({ features: { widget: true } });
+      openRef.current = true;
+      setOpen(true);
+      setConfig(configOf(next));
+    } catch (err) {
+      setTurnOnError(err instanceof Error ? err.message : "could not turn the widget on");
+    } finally {
+      setTurningOn(false);
+    }
+  };
+
+  const openSettings = () => {
+    void openMain("#/settings/plugins");
+    void dismiss();
+  };
+
+  const rowClass = (tone: WidgetTone, muted: boolean): string => `wg-row wg-row--${tone}${muted ? " wg-row--muted" : ""}`;
+
+  const sessionRow = (session: SessionRecord, muted = false) => {
     const peers = folderPeers(session.cwd, model.all, tasks, { sessionId: session.sessionId });
+    const tone = sessionTone(session);
+    const client = sessionClient(session);
+    const name = nameOf(session);
     return (
-      <button
-        key={session.sessionId}
-        className={muted ? "wg-row wg-row--muted" : "wg-row"}
-        title={session.cwd ?? nameOf(session)}
-        onClick={() => goSession(session.sessionId)}
-      >
-        <span className="wg-ico">{sessionClient(session).icon}</span>
-        <span className={`wg-dot wg-dot--${tone}`} />
-        {session.favoriteAt != null && <IconStar size={14} filled />}
-        <span className="wg-title">{nameOf(session)}</span>
-        {(session.agentsRunning ?? 0) > 0 && (
-          <span className="wg-pill wg-pill--agents" title="Subagents running">
-            {session.agentsRunning} sub
+      <button key={session.sessionId} className={rowClass(tone, muted)} title={session.cwd ? `${name}\n${session.cwd}` : name} onClick={() => goSession(session.sessionId)}>
+        <span className={`wg-dot wg-dot--${tone}`} aria-hidden="true" />
+        <span className="wg-ico" role="img" aria-label={client.label}>
+          {client.icon}
+        </span>
+        {session.favoriteAt != null && (
+          <span className="wg-star" role="img" aria-label="Favorite">
+            <IconStar size={12} filled />
           </span>
         )}
-        {peers > 0 && (
-          <span className="wg-pill wg-pill--peers" title="Other agents in the same folder">
-            +{peers} here
-          </span>
-        )}
-        <span className="wg-sub">{sub}</span>
+        <span className="wg-title">{name}</span>
+        <RowTail meta={sessionRowMeta(session, peers, now)} />
       </button>
     );
   };
 
-  const taskRow = (task: TaskRecord, tone: string, sub: string, pill?: ReactNode, muted = false) => (
-    <button key={task.id} className={muted ? "wg-row wg-row--muted" : "wg-row"} title={task.title} onClick={() => goMain(`#/tasks/${task.id}`)}>
-      <span className="wg-ico">{task.runner === "codex" ? <IconCodex /> : <IconCode />}</span>
-      <span className={`wg-dot wg-dot--${tone}`} />
-      <span className="wg-title">{task.title}</span>
-      {pill}
-      <span className="wg-sub">{sub}</span>
-    </button>
+  const taskRow = (task: TaskRecord, muted = false) => {
+    const tone = taskTone(task.status);
+    const branch = taskIsolation(task) === "worktree" ? taskBranch(task) : null;
+    return (
+      <button key={task.id} className={rowClass(tone, muted)} title={branch ? `${task.title}\nworktree · ${branch}` : task.title} onClick={() => goMain(`#/tasks/${task.id}`)}>
+        <span className={`wg-dot wg-dot--${tone}`} aria-hidden="true" />
+        <span className="wg-ico" role="img" aria-label={task.runner === "codex" ? "Codex task" : "Claude task"}>
+          {task.runner === "codex" ? <IconCodex /> : <IconCode />}
+        </span>
+        <span className="wg-title">{task.title}</span>
+        <RowTail meta={taskRowMeta(task, inFlight(task.status) ? branch : null, now)} />
+      </button>
+    );
+  };
+
+  const sections = planSections(
+    {
+      needs: model.needYou,
+      running: model.running.length,
+      idle: model.idle.length,
+      delegated: model.delegated.length,
+      done: model.doneRecent.length,
+    },
+    config.delegated,
   );
 
-  const hasRows =
-    model.waiting.length + model.attentionTasks.length + model.running.length + model.idle.length + model.delegated.length + model.doneRecent.length > 0;
+  const rowsOf = (section: SectionPlan) => {
+    if (section.key === "needs") return [...model.waiting.map((session) => sessionRow(session)), ...model.attentionTasks.map((task) => taskRow(task))];
+    if (section.key === "running") return model.running.map((session) => sessionRow(session));
+    if (section.key === "idle") return model.idle.slice(0, section.shown).map((session) => sessionRow(session, true));
+    if (section.key === "delegated") return model.delegated.map((task) => taskRow(task));
+    return model.doneRecent.map((task) => taskRow(task, true));
+  };
 
   const tone = pipTone({ failed: model.failed, needYou: model.needYou, running: model.running.length + model.delegated.length });
   const claudeWeek = config.rings.claude ? limits?.claude?.sevenDay ?? null : null;
   const codexWeek = config.rings.codex ? limits?.codex?.secondary ?? null : null;
+  const liveCount = model.live.length - model.idle.length;
 
-  const sessionsBody = (
-    <>
-      {model.waiting.length + model.attentionTasks.length > 0 && (
-        <section className="wg-sec wg-sec--needs">
+  const sessionsBody =
+    sections.length > 0 ? (
+      sections.map((section) => (
+        <section key={section.key} className={`wg-sec wg-sec--${section.key}`}>
           <div className="wg-sec-h">
-            Needs you <span className="wg-sec-n">{model.needYou}</span>
+            {section.label} <span className="wg-sec-n">{section.count}</span>
           </div>
-          {model.waiting.map((session) => sessionRow(session, sessionTone(session), session.status === "waiting" ? "input" : "done"))}
-          {model.attentionTasks.map((task) => taskRow(task, taskTone(task.status), TASK_ATTENTION_SUB[task.status] ?? "needs you"))}
+          {rowsOf(section)}
+          {section.more > 0 && <div className="wg-more">+{section.more} more</div>}
         </section>
-      )}
-
-      {model.running.length > 0 && (
-        <section className="wg-sec">
-          <div className="wg-sec-h">
-            Running <span className="wg-sec-n">{model.running.length}</span>
-          </div>
-          {model.running.map((session) => sessionRow(session, sessionTone(session), "active"))}
-        </section>
-      )}
-
-      {model.idle.length > 0 && (
-        <section className="wg-sec wg-sec--idle">
-          <div className="wg-sec-h">
-            Idle <span className="wg-sec-n">{model.idle.length}</span>
-          </div>
-          {model.idle.slice(0, IDLE_ROW_LIMIT).map((session) => sessionRow(session, sessionTone(session), elapsedLabel(now - session.updatedAt), true))}
-          {model.idle.length > IDLE_ROW_LIMIT && <div className="wg-more">+{model.idle.length - IDLE_ROW_LIMIT} more</div>}
-        </section>
-      )}
-
-      {model.delegated.length > 0 && (
-        <section className="wg-sec">
-          <div className="wg-sec-h">
-            Delegated <span className="wg-sec-n">{model.delegated.length}</span>
-          </div>
-          {model.delegated.map((task) => {
-            const branch = taskIsolation(task) === "worktree" ? taskBranch(task) : null;
-            const pill = branch ? (
-              <span className="wg-pill wg-pill--branch" title={`worktree · ${branch}`}>
-                {branch}
-              </span>
-            ) : undefined;
-            return taskRow(task, taskTone(task.status), elapsedLabel(Date.now() - task.createdAt), pill);
-          })}
-        </section>
-      )}
-
-      {model.doneRecent.length > 0 && (
-        <section className="wg-sec">
-          <div className="wg-sec-h">
-            Recently done <span className="wg-sec-n">{model.doneRecent.length}</span>
-          </div>
-          {model.doneRecent.map((task) => taskRow(task, taskTone(task.status), elapsedLabel(Date.now() - task.updatedAt), undefined, true))}
-        </section>
-      )}
-
-      {!hasRows && (
-        <div className="wg-empty">
-          <b>All quiet</b>
-          Nothing running right now.
-        </div>
-      )}
-    </>
-  );
+      ))
+    ) : (
+      <div className="wg-empty">All quiet, nothing running right now.</div>
+    );
 
   const usageBody = (
     <>
@@ -858,7 +915,43 @@ export function Widget() {
     </>
   );
 
-  if (!config.enabled) return <div data-widget-enabled="0" hidden />;
+  if (surface !== "on") {
+    return (
+      <div className="wgd" data-edge={config.edge} data-open="1" data-widget-enabled={surface === "off" ? "0" : "pending"}>
+        <section className="wgd-panel wgd-panel--compact" aria-label="CC Hub widget">
+          <header className="wgd-head">
+            <span className="wgd-brand">
+              <BrandMark size={22} />
+            </span>
+            <span className="wgd-state">CC Hub widget</span>
+            {inTauri() && (
+              <button className="wgd-collapse" onClick={() => void dismiss()} title="Hide" aria-label="Hide widget">
+                <Arrow edge={config.edge} closing />
+              </button>
+            )}
+          </header>
+          {surface === "off" ? (
+            <div className="wgd-off">
+              <b className="wgd-off-t">Widget is off</b>
+              {turnOnError && <span className="wgd-note wgd-note--hold">Could not turn it on: {turnOnError}</span>}
+              <div className="wgd-off-acts">
+                <button className="wg-open wgd-primary" onClick={() => void turnOn()} disabled={turningOn}>
+                  {turningOn ? "Turning on..." : "Turn on"}
+                </button>
+                <button className="wgd-link" onClick={openSettings}>
+                  Open settings
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="wgd-off">
+              <span className="wgd-note">Connecting to the hub...</span>
+            </div>
+          )}
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="wgd" data-edge={config.edge} data-open={open ? "1" : "0"} data-widget-enabled="1">
@@ -868,8 +961,8 @@ export function Widget() {
             <span className="wgd-brand">
               <BrandMark size={22} />
             </span>
-            <span className="wgd-state">
-              <b>{model.live.length - model.idle.length}</b> live
+            <span className="wgd-state" title={headline({ live: liveCount, idle: model.idle.length, needYou: model.needYou })}>
+              <b>{liveCount}</b> live
               {" · "}
               <b>{model.idle.length}</b> idle
               {" · "}

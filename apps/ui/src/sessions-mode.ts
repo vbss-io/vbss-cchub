@@ -4,6 +4,11 @@ export type SessionsMode = "list" | "map";
 
 export const SESSIONS_MODE_KEY = "hub.sessions.mode";
 
+export const SESSIONS_MODES: readonly { key: SessionsMode; label: string }[] = [
+  { key: "list", label: "List" },
+  { key: "map", label: "Flow" },
+];
+
 export const parseSessionsMode = (value: string | null | undefined): SessionsMode => (value === "map" ? "map" : "list");
 
 export const resolveSessionsMode = (requested: SessionsMode, flowOn: boolean): SessionsMode => (flowOn ? requested : "list");
