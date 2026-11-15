@@ -45,10 +45,14 @@ export function subagentTranscriptPath(
 
 const projectDirName = (cwd: string): string => cwd.replace(/[^A-Za-z0-9]/g, "-");
 
-export function guessTranscriptPath(home: string, cwd: string | null, sessionId: string): string | null {
+export function guessTranscriptIn(projectsDir: string, cwd: string | null, sessionId: string): string | null {
   if (!cwd) return null;
-  const candidate = join(home, ".claude", "projects", projectDirName(cwd), `${sessionId}.jsonl`);
+  const candidate = join(projectsDir, projectDirName(cwd), `${sessionId}.jsonl`);
   return existsSync(candidate) ? candidate : null;
+}
+
+export function guessTranscriptPath(home: string, cwd: string | null, sessionId: string): string | null {
+  return guessTranscriptIn(join(home, ".claude", "projects"), cwd, sessionId);
 }
 
 async function stampOf(path: string): Promise<FileStamp | null> {
@@ -69,7 +73,7 @@ const agentTurns = createTurnCounter({
 export async function sessionLive(sessionId: string, limit = 40): Promise<SessionLive | null> {
   const session = getSession(sessionId);
   if (!session) return null;
-  const transcriptPath = session.transcriptPath ?? guessTranscriptPath(config.homeDir, session.cwd, sessionId);
+  const transcriptPath = session.transcriptPath ?? guessTranscriptIn(config.claudeProjectsDir, session.cwd, sessionId);
   const [transcript, agents] = await Promise.all([
     readTranscriptTailAsync(transcriptPath, limit),
     Promise.all(
@@ -85,7 +89,7 @@ export async function sessionLive(sessionId: string, limit = 40): Promise<Sessio
 export async function sessionLiveSummary(sessionId: string, limit = 40): Promise<SessionLiveSummary | null> {
   const session = getSession(sessionId);
   if (!session) return null;
-  const transcriptPath = session.transcriptPath ?? guessTranscriptPath(config.homeDir, session.cwd, sessionId);
+  const transcriptPath = session.transcriptPath ?? guessTranscriptIn(config.claudeProjectsDir, session.cwd, sessionId);
   const [transcript, agents] = await Promise.all([
     readTranscriptTailAsync(transcriptPath, limit),
     Promise.all(
@@ -108,7 +112,7 @@ export async function subagentLive(sessionId: string, agentId: string): Promise<
   if (!session) return "no-session";
   const agent = listAgents(sessionId).find((item) => item.agentId === agentId);
   if (!agent) return "no-agent";
-  const sessionTranscript = session.transcriptPath ?? guessTranscriptPath(config.homeDir, session.cwd, sessionId);
+  const sessionTranscript = session.transcriptPath ?? guessTranscriptIn(config.claudeProjectsDir, session.cwd, sessionId);
   const path = agent.transcriptPath ?? subagentTranscriptPath(sessionTranscript, sessionId, agent.agentId);
   return { agent: { ...agent, transcriptPath: path, transcript: await readTranscriptTailAsync(path, AGENT_TAIL_LIMIT) } };
 }

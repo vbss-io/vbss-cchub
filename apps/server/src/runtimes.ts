@@ -31,11 +31,36 @@ const group = (pids: number[]): RuntimeGroup => ({ running: pids.length > 0, cou
 
 const isElectronChild = (commandLine: string): boolean => /--type=/.test(commandLine);
 
-export function classify(rows: ProcessRow[], scannedAt: number): RuntimeSnapshot {
+const CODEX_APP_DIRS: readonly RegExp[] = [/[\\/]windowsapps[\\/]openai\.codex_[^\\/]*[\\/]/, /[\\/]codex\.app[\\/]contents[\\/]/];
+const CODEX_APP_MAIN: readonly RegExp[] = [/[\\/]windowsapps[\\/]openai\.codex_[^\\/]*[\\/]app[\\/]codex\.exe$/, /[\\/]codex\.app[\\/]contents[\\/]macos[\\/]codex$/];
+
+const inCodexAppDir = (exe: string): boolean => CODEX_APP_DIRS.some((pattern) => pattern.test(exe));
+
+const isCodexAppMain = (exe: string): boolean => CODEX_APP_MAIN.some((pattern) => pattern.test(exe));
+
+function descendantsOf(rows: ProcessRow[], rootPid: number | undefined): Set<number> {
+  const found = new Set<number>();
+  if (rootPid === undefined) return found;
+  const owners = new Set<number>([rootPid]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const row of rows) {
+      if (found.has(row.pid) || !owners.has(row.parentPid)) continue;
+      found.add(row.pid);
+      owners.add(row.pid);
+      grew = true;
+    }
+  }
+  return found;
+}
+
+export function classify(rows: ProcessRow[], scannedAt: number, hubPid?: number): RuntimeSnapshot {
   const claudeCode: number[] = [];
   const claudeDesktop: number[] = [];
   const codexApp: number[] = [];
   const codexCli: number[] = [];
+  const hubOwned = descendantsOf(rows, hubPid);
   let headless = 0;
   for (const row of rows) {
     const name = row.name.toLowerCase();
@@ -51,10 +76,13 @@ export function classify(rows: ProcessRow[], scannedAt: number): RuntimeSnapshot
       if (/\s(-p|--print)(\s|$)/.test(cmd)) headless += 1;
       continue;
     }
-    if (name === "codex.exe" || name === "codex") {
-      if (/\sapp-server(\s|$)/.test(cmd)) codexApp.push(row.pid);
-      else if (!/\smcp-server(\s|$)/.test(cmd)) codexCli.push(row.pid);
+    if (name !== "codex.exe" && name !== "codex") continue;
+    if (hubOwned.has(row.pid)) continue;
+    if (inCodexAppDir(exe)) {
+      if (isCodexAppMain(exe) && !isElectronChild(cmd)) codexApp.push(row.pid);
+      continue;
     }
+    if (!/\s(app-server|mcp-server)(\s|$)/.test(cmd)) codexCli.push(row.pid);
   }
   return {
     claudeCode: { ...group(claudeCode), headless },
@@ -123,7 +151,7 @@ export async function runtimeSnapshot(): Promise<RuntimeSnapshot> {
   if (cached && now - cached.scannedAt < CACHE_MS) return cached;
   if (inFlight) return inFlight;
   inFlight = (process.platform === "win32" ? scanWindows() : scanPosix())
-    .then((rows) => classify(rows, Date.now()))
+    .then((rows) => classify(rows, Date.now(), process.pid))
     .catch((err: unknown) => ({
       ...classify([], Date.now()),
       error: err instanceof Error ? err.message : "process scan failed",

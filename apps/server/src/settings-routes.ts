@@ -36,7 +36,7 @@ export function settingsRouter(): Router {
     if ("autonomy" in body) {
       const level = asString(body.autonomy);
       if (!level || !(AUTONOMY_LEVELS as readonly string[]).includes(level)) {
-        res.status(400).json({ error: "autonomy must be full or safe" });
+        res.status(400).json({ error: `autonomy must be one of ${AUTONOMY_LEVELS.join(", ")}` });
         return;
       }
       patch.autonomy = level as Autonomy;

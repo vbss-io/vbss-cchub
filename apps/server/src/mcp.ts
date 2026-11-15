@@ -1,16 +1,27 @@
 import { config } from "./config.js";
 
-const PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18"];
-const DEFAULT_PROTOCOL = "2025-06-18";
+const PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+const DEFAULT_PROTOCOL = "2025-11-25";
+const ANNOTATIONS_SINCE = "2025-03-26";
+const TITLE_SINCE = "2025-06-18";
 const MAX_TEXT_CHARS = 80_000;
 const PLUGINS_TIMEOUT_MS = 1500;
 
 type Json = Record<string, unknown>;
 
+interface ToolAnnotations {
+  readOnlyHint: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint: boolean;
+}
+
 interface ToolDefinition {
   name: string;
+  title: string;
   description: string;
   inputSchema: Json;
+  annotations: ToolAnnotations;
   call: (args: Json) => Promise<unknown>;
 }
 
@@ -36,13 +47,23 @@ const originClientHint = (): "claude-code" | "codex" | undefined => {
   return undefined;
 };
 
-const originFields = (): { originPid: number; originClient?: string } => ({
-  originPid: process.ppid,
-  originClient: originClientHint(),
-});
-
 const asString = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim().length > 0 ? value : undefined;
+
+const originFields = (): { originPid: number; originClient?: string; originEnvSessionId?: string } => ({
+  originPid: process.ppid,
+  originClient: originClientHint(),
+  originEnvSessionId: asString(process.env.CLAUDE_CODE_SESSION_ID),
+});
+
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false };
+
+const writes = (destructive: boolean, idempotent: boolean, openWorld = false): ToolAnnotations => ({
+  readOnlyHint: false,
+  destructiveHint: destructive,
+  idempotentHint: idempotent,
+  openWorldHint: openWorld,
+});
 
 async function http(method: string, path: string, body?: unknown): Promise<unknown> {
   let res: Response;
@@ -88,6 +109,8 @@ const objectSchema = (properties: Json, required: string[] = []): Json => ({
 const TOOLS: ToolDefinition[] = [
   {
     name: "hub_overview",
+    title: "Hub overview",
+    annotations: READ_ONLY,
     description:
       "One-call picture of everything running on this machine: Claude Code sessions (with subagents), Claude Desktop, Codex app and CLI sessions, delegated tasks in flight or needing attention, latest reports and the known workspaces. Start here.",
     inputSchema: objectSchema({}),
@@ -95,6 +118,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_workspaces",
+    title: "List workspaces",
+    annotations: READ_ONLY,
     description:
       "List the workspaces the hub knows (from the .code-workspace folder) with the local path of every repository. Use it to resolve where a project lives instead of asking.",
     inputSchema: objectSchema({}),
@@ -102,8 +127,10 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_delegate",
+    title: "Delegate a task",
+    annotations: writes(false, false, true),
     description:
-      "Delegate work to a headless Claude Code (default) or Codex run inside a workspace. The run starts in the workspace context folder with every repo of that workspace attached, so the agent sees the workspace CLAUDE.md, skills and all repos. Runs are autonomous by default (the hub's Autonomy setting is full: no permission prompts, full shell), so do NOT pass permissionMode or sandbox unless you want plan mode; a restrictive mode is upgraded to autonomous anyway. Each task gets a reserved port range (env HUB_PORT_BASE..HUB_PORT_END) for any dev server it starts. Returns the task id to follow with hub_task.",
+      "Delegate work to a headless Claude Code (default) or Codex run inside a workspace. The run starts in the workspace context folder with every repo of that workspace attached, so the agent sees the workspace CLAUDE.md, skills and all repos. Runs follow the hub's Autonomy setting (full by default: no permission prompts, full shell; auto: Claude auto mode with permission prompts off), so do NOT pass permissionMode or sandbox unless you want plan mode; any other mode follows that setting. Each task gets a reserved port range (env HUB_PORT_BASE..HUB_PORT_END) for any dev server it starts. Returns the task id to follow with hub_task.",
     inputSchema: objectSchema(
       {
         workspace: { type: "string", description: "Workspace name as listed by hub_workspaces" },
@@ -114,7 +141,7 @@ const TOOLS: ToolDefinition[] = [
         permissionMode: {
           type: "string",
           enum: ["acceptEdits", "plan", "dontAsk", "manual"],
-          description: "Only plan is honoured; with the hub autonomy at full every other value runs as bypassPermissions. Omit it.",
+          description: "Only plan is honoured; with the hub autonomy at full every other value runs as bypassPermissions, at auto as auto mode. Omit it.",
         },
         sandbox: {
           type: "string",
@@ -135,6 +162,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_task",
+    title: "Get a delegated task",
+    annotations: READ_ONLY,
     description:
       "Get a delegated task with all its runs (results, errors, session id) and reports. Worktree tasks include worktree.hint telling you whether to merge or discard.",
     inputSchema: objectSchema({ taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" } }, ["taskId"]),
@@ -142,12 +171,16 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_tasks",
+    title: "List delegated tasks",
+    annotations: READ_ONLY,
     description: "List delegated tasks, most recent first. Filter by status: pending, running, completed, attention, failed, interrupted, cancelled.",
     inputSchema: objectSchema({ status: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 200 } }),
     call: (args) => http("GET", `/delegation/tasks${query({ status: args.status, limit: args.limit })}`),
   },
   {
     name: "hub_continue",
+    title: "Continue a delegated task",
+    annotations: writes(false, false, true),
     description: "Send a follow-up prompt to a delegated task; it resumes the same Claude/Codex session.",
     inputSchema: objectSchema(
       { taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" }, prompt: { type: "string" }, model: { type: "string" } },
@@ -157,18 +190,24 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_cancel",
+    title: "Cancel a delegated run",
+    annotations: writes(true, true),
     description: "Cancel the in-flight run of a delegated task.",
     inputSchema: objectSchema({ taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" } }, ["taskId"]),
     call: (args) => http("POST", taskPath(args, "/cancel")),
   },
   {
     name: "hub_task_archive",
+    title: "Archive a delegated task",
+    annotations: writes(false, true),
     description: "Archive a settled delegated task so it drops out of the default task lists and overview; pass unarchive to bring it back. Running or pending tasks cannot be archived.",
     inputSchema: objectSchema({ taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" }, unarchive: { type: "boolean" } }, ["taskId"]),
     call: (args) => http("POST", taskPath(args, args.unarchive === true ? "/unarchive" : "/archive")),
   },
   {
     name: "hub_task_merge",
+    title: "Merge or discard a task worktree",
+    annotations: writes(true, false),
     description:
       "Merge a worktree task's branch into its base branch inside the original checkout (git merge --no-ff). Answers a conflict without touching the checkout. Pass discard: true to remove the worktree and its branch instead (do this after a successful merge, or to throw the work away).",
     inputSchema: objectSchema(
@@ -182,6 +221,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_report",
+    title: "Report to the hub",
+    annotations: writes(false, false),
     description:
       "Report progress, a result, a blocker or a note to the hub so any other conversation (or the human) can see it. Attach it to a task or a session when you have the id. When you omit taskId, it defaults to the HUB_TASK_ID of the delegated run you are in, so your report lands on the right task.",
     inputSchema: objectSchema(
@@ -202,12 +243,16 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_reports",
+    title: "Read reports",
+    annotations: READ_ONLY,
     description: "Read the latest reports (all, or the ones attached to a task).",
     inputSchema: objectSchema({ taskId: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 200 } }),
     call: (args) => http("GET", `/delegation/reports${query({ taskId: args.taskId, limit: args.limit })}`),
   },
   {
     name: "hub_sessions",
+    title: "List sessions",
+    annotations: READ_ONLY,
     description:
       "List Claude Code sessions tracked by the hub (status, cwd, model, running subagents) and Codex sessions found on this machine.",
     inputSchema: objectSchema({}),
@@ -218,6 +263,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_focus",
+    title: "Focus a session window",
+    annotations: writes(false, true),
     description: "Bring the window of a Claude Code session to the front on the desktop.",
     inputSchema: objectSchema({ sessionId: { type: "string" } }, ["sessionId"]),
     call: (args) => {
@@ -228,6 +275,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_open_workspace",
+    title: "Open a workspace in the editor",
+    annotations: writes(false, true),
     description: "Open a workspace in the configured editor on the desktop.",
     inputSchema: objectSchema({ workspace: { type: "string" } }, ["workspace"]),
     call: (args) => {
@@ -238,6 +287,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_create_workspace",
+    title: "Create a workspace",
+    annotations: writes(false, false),
     description: "Create a workspace: writes <name>.code-workspace in the workspaces root with the given repo folders and seeds a context folder with a CLAUDE.md.",
     inputSchema: objectSchema(
       { name: { type: "string" }, repos: { type: "array", items: { type: "string" }, description: "Absolute repo paths" } },
@@ -247,6 +298,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_session_live",
+    title: "Look inside a session",
+    annotations: READ_ONLY,
     description:
       "Look inside a Claude Code session tracked by the hub: the tail of its transcript (user prompts, assistant text, tool calls) and every subagent with what it is doing right now.",
     inputSchema: objectSchema({ sessionId: { type: "string" }, limit: { type: "integer", minimum: 5, maximum: 200 } }, ["sessionId"]),
@@ -258,12 +311,16 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_task_events",
+    title: "Delegated task log",
+    annotations: READ_ONLY,
     description: "Streamed log of a delegated task: assistant text, tool calls and status changes for every run, in order.",
     inputSchema: objectSchema({ taskId: { type: "string", description: "Full task id or a unique prefix (8 chars is enough)" } }, ["taskId"]),
     call: (args) => http("GET", taskPath(args, "/events")),
   },
   {
     name: "hub_delete_workspace",
+    title: "Delete a workspace",
+    annotations: writes(true, true),
     description: "Delete a workspace: removes <name>.code-workspace from the workspaces root; deleteContext also removes the <name>/ context folder.",
     inputSchema: objectSchema({ workspace: { type: "string" }, deleteContext: { type: "boolean" } }, ["workspace"]),
     call: (args) => {
@@ -274,6 +331,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_brain_today",
+    title: "Today's second brain",
+    annotations: READ_ONLY,
     description:
       "Read today's second-brain context when the hub is linked to a vault: today's diary, the hub source (delegations and reports of the day) and the Claude session trail.",
     inputSchema: objectSchema({}),
@@ -281,6 +340,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_shares",
+    title: "List share links",
+    annotations: READ_ONLY,
     description:
       "List the share links of this hub (external collaborators asking the owner Claude): label, scope, workspace, state, usage and links (local, LAN, public through the tunnel).",
     inputSchema: objectSchema({}),
@@ -288,6 +349,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_share_create",
+    title: "Create a share link",
+    annotations: writes(false, false, true),
     description:
       "Create a share link so another person and their assistant can ask the owner Claude and delegate work inside a workspace of this hub, at a chosen trust level. Returns the links; send the LAN or public link (it carries the key) to the collaborator. Optionally pin a session so answers continue it (forked).",
     inputSchema: objectSchema(
@@ -307,6 +370,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_share_update",
+    title: "Pause, resume or revoke a share",
+    annotations: writes(true, true),
     description: "Pause, resume, revoke or relabel a share.",
     inputSchema: objectSchema(
       { shareId: { type: "string" }, paused: { type: "boolean" }, revoke: { type: "boolean" }, label: { type: "string" }, note: { type: "string" } },
@@ -319,12 +384,16 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_share_activity",
+    title: "Share activity",
+    annotations: READ_ONLY,
     description: "Recent questions and implementation requests that arrived through shares, with answers and status.",
     inputSchema: objectSchema({ limit: { type: "number" } }),
     call: (args) => http("GET", `/delegation/shares/activity${query({ limit: args.limit })}`),
   },
   {
     name: "hub_claim",
+    title: "Claim files you are editing",
+    annotations: writes(false, false),
     description:
       "Tell the hub which files you are editing in a repo so delegated tasks and other agents keep off them. Advisory only; expires after ttlMinutes (default 240). Pass release: true with claimId to drop a claim early.",
     inputSchema: objectSchema({
@@ -347,6 +416,8 @@ const TOOLS: ToolDefinition[] = [
   },
   {
     name: "hub_tunnel",
+    title: "Share endpoint and tunnel",
+    annotations: writes(false, true, true),
     description:
       "The share endpoint (LAN url) and the ngrok tunnel: action status, start (installs ngrok on first use and returns the public url) or stop.",
     inputSchema: objectSchema({ action: { type: "string", enum: ["status", "start", "stop"] } }),
@@ -407,6 +478,15 @@ const instructionsFor = (tools: readonly ToolDefinition[]): string => {
   return parts.join(" ");
 };
 
+let negotiatedProtocol = DEFAULT_PROTOCOL;
+
+const toolListing = (tool: ToolDefinition, protocol: string): Json => {
+  const listed: Json = { name: tool.name, description: tool.description, inputSchema: tool.inputSchema };
+  if (protocol >= TITLE_SINCE) listed.title = tool.title;
+  if (protocol >= ANNOTATIONS_SINCE) listed.annotations = { title: tool.title, ...tool.annotations };
+  return listed;
+};
+
 const respond = (id: RpcRequest["id"], result: unknown): void => {
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
 };
@@ -427,8 +507,9 @@ async function handle(message: RpcRequest): Promise<void> {
   switch (method) {
     case "initialize": {
       const requested = asString(params?.protocolVersion);
+      negotiatedProtocol = requested && PROTOCOL_VERSIONS.includes(requested) ? requested : DEFAULT_PROTOCOL;
       respond(id, {
-        protocolVersion: requested && PROTOCOL_VERSIONS.includes(requested) ? requested : DEFAULT_PROTOCOL,
+        protocolVersion: negotiatedProtocol,
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: "vbss-cchub", version: "1" },
         instructions: instructionsFor(availableTools(await pluginStates())),
@@ -440,7 +521,7 @@ async function handle(message: RpcRequest): Promise<void> {
       return;
     case "tools/list":
       respond(id, {
-        tools: availableTools(await pluginStates()).map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+        tools: availableTools(await pluginStates()).map((tool) => toolListing(tool, negotiatedProtocol)),
       });
       return;
     case "tools/call": {

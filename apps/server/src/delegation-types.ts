@@ -18,13 +18,16 @@ export const RUNNERS = ["claude", "codex"] as const;
 
 export type Runner = (typeof RUNNERS)[number];
 
-export const PERMISSION_MODES = ["acceptEdits", "plan", "dontAsk", "manual", "bypassPermissions"] as const;
+export const PERMISSION_MODES = ["acceptEdits", "plan", "dontAsk", "manual", "auto", "bypassPermissions"] as const;
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
-export const AUTONOMY_LEVELS = ["full", "safe"] as const;
+export const AUTONOMY_LEVELS = ["full", "auto", "safe"] as const;
 
 export type Autonomy = (typeof AUTONOMY_LEVELS)[number];
+
+export const parseAutonomy = (value: string | null | undefined): Autonomy =>
+  value === "safe" || value === "auto" ? value : "full";
 
 export const CODEX_SANDBOXES = ["read-only", "workspace-write", "danger-full-access"] as const;
 

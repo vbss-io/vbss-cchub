@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "./config.js";
 import type { CodexSandbox, PermissionMode, Runner } from "./delegation-types.js";
@@ -55,6 +56,27 @@ export interface ExecutorResult {
   error: string | null;
 }
 
+type Json = Record<string, unknown>;
+
+export const BARE_MODE_ERROR = "Claude Code started in bare mode (no login/CLAUDE.md/hooks). Update CC Hub or pass the needed flags.";
+
+const HUB_MCP_NAME = "cchub";
+const STARTUP_HOOK_SUBTYPES = new Set(["hook_started", "hook_progress", "hook_response"]);
+const TURN_EVENT_TYPES = new Set(["assistant", "user", "stream_event"]);
+
+export interface StartupExpectations {
+  hubMcp: boolean;
+  sessionStartHook: boolean;
+}
+
+export interface StartupGuard {
+  expected: StartupExpectations;
+  init: Json | null;
+  sessionStartHook: boolean;
+  checked: boolean;
+  error: string | null;
+}
+
 interface StreamState {
   effectiveModel: string | null;
   sessionId: string | null;
@@ -64,6 +86,7 @@ interface StreamState {
   subtype: string | null;
   errors: string[];
   deniedTools: string[];
+  guard: StartupGuard | null;
   emit: (event: RunEvent) => void;
 }
 
@@ -73,16 +96,98 @@ interface ProcessSpec {
   cwd: string;
   env: NodeJS.ProcessEnv;
   stdin: string;
+  guard: StartupGuard | null;
   ingest: (event: Record<string, unknown>, state: StreamState) => void;
 }
-
-type Json = Record<string, unknown>;
 
 const isString = (value: unknown): value is string => typeof value === "string";
 const asObject = (value: unknown): Json | null =>
   value && typeof value === "object" && !Array.isArray(value) ? (value as Json) : null;
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+function readJsonFile(path: string): Json | null {
+  if (!existsSync(path)) return null;
+  try {
+    return asObject(JSON.parse(readFileSync(path, "utf8")));
+  } catch {
+    return null;
+  }
+}
+
+function projectEntry(projects: Json | null, cwd: string): Json | null {
+  if (!projects) return null;
+  return asObject(projects[cwd]) ?? asObject(projects[cwd.replace(/\\/g, "/")]);
+}
+
+function hubMcpRegistered(cwd: string): boolean {
+  const state = readJsonFile(config.claudeConfigPath);
+  const servers = asObject(state?.mcpServers);
+  if (!servers || !(HUB_MCP_NAME in servers)) return false;
+  const disabled = projectEntry(asObject(state?.projects), cwd)?.disabledMcpServers;
+  return !(Array.isArray(disabled) && disabled.includes(HUB_MCP_NAME));
+}
+
+function sessionStartHookConfigured(): boolean {
+  const settings = readJsonFile(join(config.claudeHome, "settings.json"));
+  if (!settings || settings.disableAllHooks === true) return false;
+  const entries = asObject(settings.hooks)?.SessionStart;
+  if (!Array.isArray(entries)) return false;
+  return entries.some((entry) => {
+    const item = asObject(entry);
+    const matcher = item?.matcher;
+    if (isString(matcher) && matcher !== "" && matcher !== "*") return false;
+    const hooks = item?.hooks;
+    return Array.isArray(hooks) && hooks.some((hook) => asObject(hook)?.type === "command");
+  });
+}
+
+export interface StartupOptions {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  hooksViaSettings: boolean;
+  strictMcpConfig?: boolean;
+  restricted?: boolean;
+}
+
+export function startupExpectations(options: StartupOptions): StartupExpectations {
+  const userConfig = !options.restricted;
+  return {
+    hubMcp: userConfig && !options.strictMcpConfig && hubMcpRegistered(options.cwd),
+    sessionStartHook: options.env.HUB_TRACK_SDK === "1" && (options.hooksViaSettings || (userConfig && sessionStartHookConfigured())),
+  };
+}
+
+export function createStartupGuard(expected: StartupExpectations): StartupGuard {
+  return { expected, init: null, sessionStartHook: false, checked: false, error: null };
+}
+
+const mcpServerNames = (value: unknown): string[] =>
+  Array.isArray(value) ? value.map((item) => asObject(item)?.name).filter(isString) : [];
+
+export function startupProblem(guard: StartupGuard): string | null {
+  const init = guard.init;
+  if (!init) return `${BARE_MODE_ERROR} No system/init event arrived before the first turn.`;
+  const missing: string[] = [];
+  if (!isString(init.apiKeySource)) missing.push("auth source");
+  if (guard.expected.hubMcp && !mcpServerNames(init.mcp_servers).includes(HUB_MCP_NAME)) missing.push(`${HUB_MCP_NAME} MCP server`);
+  if (guard.expected.sessionStartHook && !guard.sessionStartHook) missing.push("SessionStart hooks");
+  return missing.length > 0 ? `${BARE_MODE_ERROR} Missing: ${missing.join(", ")}.` : null;
+}
+
+export function observeStartup(guard: StartupGuard, event: Json): string | null {
+  if (guard.checked) return guard.error;
+  if (event.type === "system" && isString(event.subtype) && STARTUP_HOOK_SUBTYPES.has(event.subtype) && event.hook_event === "SessionStart") {
+    guard.sessionStartHook = true;
+    return null;
+  }
+  const isInit = event.type === "system" && event.subtype === "init";
+  if (!isInit && !(isString(event.type) && TURN_EVENT_TYPES.has(event.type))) return null;
+  if (isInit) guard.init = event;
+  guard.checked = true;
+  guard.error = startupProblem(guard);
+  return guard.error;
+}
 
 const SHARE_ENV_KEYS = /^(PATH|PATHEXT|SYSTEMROOT|SYSTEMDRIVE|WINDIR|COMSPEC|TEMP|TMP|HOME|HOMEDRIVE|HOMEPATH|USERPROFILE|USERNAME|APPDATA|LOCALAPPDATA|PROGRAMDATA|PROGRAMFILES|PROGRAMFILES\(X86\)|PROGRAMW6432|PUBLIC|ALLUSERSPROFILE|COMPUTERNAME|PROCESSOR_ARCHITECTURE|NUMBER_OF_PROCESSORS|OS|LANG|LC_ALL|TZ|SHELL|TERM|CLAUDE_CONFIG_DIR|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|ANTHROPIC_BASE_URL|CLAUDE_CODE_USE_BEDROCK|CLAUDE_CODE_USE_VERTEX|NVM_[A-Z_]+|NODE_PATH|HTTP_PROXY|HTTPS_PROXY|NO_PROXY)$/i;
 
@@ -118,6 +223,7 @@ function hubEnv(): NodeJS.ProcessEnv {
     HUB_HOST_TARGET: "127.0.0.1",
   };
   delete env.HUB_SKIP;
+  delete env.CLAUDE_CODE_SIMPLE;
   return env;
 }
 
@@ -149,6 +255,7 @@ function toolSummary(input: unknown): string {
 }
 
 function ingestClaude(event: Json, state: StreamState): void {
+  if (state.guard && observeStartup(state.guard, event) !== null) return;
   if (isString(event.session_id)) state.sessionId = event.session_id;
   if (isString(event.model)) state.effectiveModel = event.model;
   const message = asObject(event.message);
@@ -255,12 +362,15 @@ function claudeSpec(req: RunRequest): ProcessSpec {
   if (req.allowedTools && req.allowedTools.length > 0) args.push("--allowedTools", ...req.allowedTools);
   if (req.disallowedTools && req.disallowedTools.length > 0) args.push("--disallowedTools", ...req.disallowedTools);
   for (const dir of req.addDirs) args.push("--add-dir", dir);
+  const env = withRunIds(req.guard ? shareEnv(req.guard === "shell", req.shareLabel ?? "share") : hubEnv(), req);
+  const expected = startupExpectations({ cwd: req.cwd, env, hooksViaSettings: Boolean(req.guard), strictMcpConfig: req.strictMcpConfig, restricted: req.restricted });
   return {
     bin: config.claudeBin,
     args: [...config.claudeArgsPrefix, ...args],
     cwd: req.cwd,
-    env: withRunIds(req.guard ? shareEnv(req.guard === "shell", req.shareLabel ?? "share") : hubEnv(), req),
+    env,
     stdin: req.prompt,
+    guard: createStartupGuard(expected),
     ingest: ingestClaude,
   };
 }
@@ -285,6 +395,7 @@ function codexSpec(req: RunRequest): ProcessSpec {
     cwd: req.cwd,
     env: withRunIds({ ...process.env }, req),
     stdin,
+    guard: null,
     ingest: ingestCodex,
   };
 }
@@ -315,6 +426,7 @@ function execute(spec: ProcessSpec, req: RunRequest): Promise<ExecutorResult> {
       subtype: null,
       errors: [],
       deniedTools: [],
+      guard: spec.guard,
       emit: (event) => {
         try {
           req.onEvent?.(event);
@@ -328,10 +440,19 @@ function execute(spec: ProcessSpec, req: RunRequest): Promise<ExecutorResult> {
     let stderr = "";
     let spawnError: string | null = null;
     let settled = false;
+    let guardKilled = false;
+
+    const stopOnGuard = (): void => {
+      const error = state.guard?.error;
+      if (!error || guardKilled) return;
+      guardKilled = true;
+      state.emit({ kind: "status", text: `error: ${clip(error, MAX_TOOL_TEXT)}` });
+      if (child.exitCode === null) child.kill();
+    };
 
     const consumeLine = (line: string): void => {
       const trimmed = line.trim();
-      if (trimmed.length === 0) return;
+      if (trimmed.length === 0 || state.guard?.error) return;
       try {
         const parsed: unknown = JSON.parse(trimmed);
         const event = asObject(parsed);
@@ -339,6 +460,7 @@ function execute(spec: ProcessSpec, req: RunRequest): Promise<ExecutorResult> {
       } catch {
         droppedOutput = true;
       }
+      stopOnGuard();
     };
 
     child.stdout.setEncoding("utf8");
@@ -390,6 +512,9 @@ function execute(spec: ProcessSpec, req: RunRequest): Promise<ExecutorResult> {
       if (req.signal?.aborted) {
         status = "cancelled";
         error = abortReason(req.signal);
+      } else if (state.guard?.error) {
+        status = "failed";
+        error = state.guard.error;
       } else if (spawnError !== null || !state.sawResult || state.failed || exitCode !== 0) {
         status = "failed";
         error = failure(exitCode);

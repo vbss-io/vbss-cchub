@@ -82,16 +82,25 @@ export function ConnectionsTab({ enabled, hubUrl, connect, hooks, hooksBusy, onT
                       <span className="connectrow__name">
                         {MCP_LABEL[client]}{" "}
                         <span className={`tag tag--${item.installed ? "go" : "muted"}`}>{item.installed ? (item.inFile ? "connected" : "connected · imported by the app") : "not connected"}</span>
+                        {item.updateAvailable && <span className="tag tag--pend">update available</span>}
                       </span>
                       <span className="path muted">{item.error ?? item.path}</span>
+                      {item.updateAvailable && <span className="muted small">The registered cchub entry differs from this hub. Update re-registers it{item.cli ? ` with ${item.cli}` : ""}; restart the client after.</span>}
                       {client === "claude-desktop" && item.installed && !item.inFile && (
                         <span className="muted small">Claude Desktop moved the entry into its own settings after reading it; that is normal.</span>
                       )}
                     </div>
                     {item.installed ? (
-                      <button className="act" disabled={busy} onClick={() => void run(() => onMcp(client, "uninstall"))}>
-                        Disconnect
-                      </button>
+                      <>
+                        {item.updateAvailable && (
+                          <button className="act act--focus" disabled={busy || !connect.mcpEntryExists} onClick={() => void run(() => onMcp(client, "install"))}>
+                            Update
+                          </button>
+                        )}
+                        <button className="act" disabled={busy} onClick={() => void run(() => onMcp(client, "uninstall"))}>
+                          Disconnect
+                        </button>
+                      </>
                     ) : (
                       <button className="act act--focus" disabled={busy || !!item.error || !connect.mcpEntryExists} onClick={() => void run(() => onMcp(client, "install"))}>
                         Connect

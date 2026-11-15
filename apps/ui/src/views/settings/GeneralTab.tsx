@@ -65,6 +65,7 @@ export function GeneralTab({ enabled, settings, onSaveSettings, autostart, onAut
             <span>Delegated runs</span>
             <select className="in" value={settings?.autonomy ?? "full"} disabled={!enabled} onChange={(event) => void onSaveSettings({ autonomy: event.target.value as Autonomy })}>
               <option value="full">Autonomous: no permission prompts (Claude), no sandbox (Codex)</option>
+              <option value="auto">Auto (guarded): Claude auto mode reviews each action, nothing waits on a prompt; Codex stays sandboxed</option>
               <option value="safe">Safe: edits only; a denied command ends the run in Needs you</option>
             </select>
             <small>Applies to what you and your own agents delegate. Shares follow their own trust level.</small>

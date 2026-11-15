@@ -36,6 +36,7 @@ import type {
 import {
   PLUGIN_FEATURE_KEYS,
   FOCUS_SOURCES,
+  parseAutonomy,
   LIMITS_REFRESH_DEFAULT,
   LIMITS_REFRESH_MAX,
   LIMITS_REFRESH_MIN,
@@ -375,7 +376,7 @@ export function getSettings(): DelegationSettings {
     workspacesRoot: stored.get("workspacesRoot") ?? config.workspacesRoot,
     editorCommand: stored.get("editorCommand") ?? config.editorCommand,
     secondBrainRoot: stored.get("secondBrainRoot") ?? config.secondBrainRoot,
-    autonomy: stored.get("autonomy") === "safe" ? "safe" : "full",
+    autonomy: parseAutonomy(stored.get("autonomy")),
     ownerName: stored.get("ownerName") ?? defaultOwnerName(),
     runTimeoutMinutes: storedTimeout != null ? clampRunTimeout(Number(storedTimeout)) : RUN_TIMEOUT_DEFAULT,
     features: {

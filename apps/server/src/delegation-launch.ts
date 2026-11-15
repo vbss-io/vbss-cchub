@@ -5,7 +5,7 @@ import { broadcast } from "./sse.js";
 import { appendHubSource } from "./second-brain.js";
 import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail, listTasks } from "./delegation-store.js";
 import { allocatePortBase, portRangeOf } from "./task-ports.js";
-import type { CodexSandbox, Isolation, IsolationReason, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
+import type { Autonomy, CodexSandbox, Isolation, IsolationReason, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
 import { createTaskWorktree, PreviewWriteError, worktreeMainRepo, WorktreeError } from "./worktrees.js";
 import { finishShareRequestByTask, getShare } from "./share-store.js";
 import { endSession, getSession, listClaims, releaseClaimsOfSession } from "./db.js";
@@ -160,10 +160,20 @@ export function resolveIsolation(
   return { isolation: "shared", reason: "default" };
 }
 
+export interface RunPermissions {
+  permissionMode: PermissionMode;
+  permissionPrompts: "none" | null;
+}
+
+export function resolveRunPermissions(requested: PermissionMode | null, autonomy: Autonomy): RunPermissions {
+  if (requested === "plan") return { permissionMode: "plan", permissionPrompts: null };
+  if (autonomy === "full") return { permissionMode: "bypassPermissions", permissionPrompts: null };
+  if (autonomy === "auto") return { permissionMode: "auto", permissionPrompts: "none" };
+  return { permissionMode: requested ?? "acceptEdits", permissionPrompts: null };
+}
+
 export function resolvePermissionMode(requested: PermissionMode | null, autonomous: boolean): PermissionMode {
-  if (requested === "plan") return "plan";
-  if (autonomous) return "bypassPermissions";
-  return requested ?? "acceptEdits";
+  return resolveRunPermissions(requested, autonomous ? "full" : "safe").permissionMode;
 }
 
 export function resolveRunTimeoutMs(): number {
@@ -193,8 +203,10 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
   const trust = shareTrustFromCreatedBy(task.createdBy);
   const fromShare = trust !== null;
   const profile: RunProfile | null = trust ? implementProfile(trust) : null;
-  const autonomous = getSettings().autonomy === "full";
-  const effectiveMode: PermissionMode = profile ? profile.permissionMode : resolvePermissionMode(permissionMode, autonomous);
+  const autonomy = getSettings().autonomy;
+  const autonomous = autonomy === "full";
+  const permissions = profile ? null : resolveRunPermissions(permissionMode, autonomy);
+  const effectiveMode: PermissionMode = profile ? profile.permissionMode : (permissions?.permissionMode ?? "acceptEdits");
   const effectiveSandbox: CodexSandbox | null =
     task.runner === "codex" ? (profile ? profile.codexSandbox : (task.sandbox ?? (autonomous ? "danger-full-access" : "workspace-write"))) : null;
   const run = beginRun({
@@ -238,7 +250,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
     portBase: task.portBase,
     restricted: profile?.restricted,
     strictMcpConfig: profile?.strictMcpConfig,
-    permissionPrompts: profile?.permissionPrompts,
+    permissionPrompts: profile ? profile.permissionPrompts : (permissions?.permissionPrompts ?? undefined),
     tools: profile?.tools,
     allowedTools: profile?.allowedTools,
     disallowedTools: profile?.disallowedTools,

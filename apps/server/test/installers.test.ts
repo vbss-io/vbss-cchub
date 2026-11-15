@@ -10,7 +10,10 @@ process.env.HUB_DATA_DIR = join(home, ".vbss-cchub");
 process.env.APPDATA = join(home, "AppData", "Roaming");
 process.env.CODEX_HOME = join(home, ".codex");
 process.env.HUB_PORT = "4317";
+process.env.HUB_CLAUDE_BIN = join(home, "no-cli", "claude.exe");
+process.env.HUB_CODEX_BIN = join(home, "no-cli", "codex.exe");
 delete process.env.HUB_RESOURCE_DIR;
+delete process.env.CLAUDE_CONFIG_DIR;
 
 type Installers = typeof import("../src/installers.js");
 type Config = typeof import("../src/config.js");
@@ -73,6 +76,17 @@ describe("mcp registration", () => {
     assert.deepEqual(json.mcpServers.cchub?.args, [config.mcpEntry]);
     assert.equal(installers.configureMcp("claude-code", "uninstall").installed, false);
     assert.equal(installers.mcpStatus("claude-code").installed, false);
+  });
+
+  it("falls back to a direct write with a .bak copy when the CLI is not on PATH", () => {
+    const original = JSON.stringify({ numStartups: 7 });
+    writeFileSync(config.claudeConfigPath, original);
+    const status = installers.configureMcp("claude-code", "install");
+    assert.equal(status.cli, null);
+    assert.equal(status.installed, true);
+    assert.equal(status.updateAvailable, false);
+    assert.equal(readFileSync(`${config.claudeConfigPath}.bak`, "utf8"), original);
+    installers.configureMcp("claude-code", "uninstall");
   });
 
   it("creates the Claude Desktop config when missing", () => {

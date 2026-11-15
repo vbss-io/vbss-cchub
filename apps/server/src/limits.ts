@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { config } from "./config.js";
@@ -16,7 +16,7 @@ export interface ClaudeModelLimit extends LimitWindow {
 }
 
 export interface ClaudeLimits {
-  source: "api" | "cache" | "none";
+  source: "api" | "cache" | "statusline" | "none";
   fetchedAt: number | null;
   stale: boolean;
   fiveHour: LimitWindow;
@@ -40,6 +40,7 @@ export interface CodexLimits {
   secondary: CodexWindow;
   planType: string | null;
   error: string | null;
+  buckets?: CodexBucket[];
 }
 
 export interface LimitsPayload {
@@ -62,7 +63,24 @@ export interface LimitsSources {
   codexSessionsDir?: string;
   codexLive?: () => Promise<CodexLimits | null>;
   sleep?: (ms: number) => Promise<void>;
+  claudeSource?: ClaudeSourcePrefs;
 }
+
+export interface ClaudeSourcePrefs {
+  freshMinutes: number;
+  privateFallback: boolean;
+}
+
+export interface ClaudeStatuslineReport {
+  at: number;
+  sessionId: string | null;
+  fiveHour: LimitWindow | null;
+  sevenDay: LimitWindow | null;
+}
+
+export const CLAUDE_STATUSLINE_FRESH_DEFAULT = 15;
+export const CLAUDE_STATUSLINE_FRESH_MIN = 1;
+export const CLAUDE_STATUSLINE_FRESH_MAX = 240;
 
 const REQUEST_TIMEOUT_MS = 5_000;
 const TOKEN_EXPIRY_MARGIN_MS = 5 * 60_000;
@@ -197,6 +215,7 @@ export function readClaudeCachedLimits(path: string = config.claudeStatePath): C
 
 interface ClaudeState {
   value: ClaudeLimits | null;
+  statusline: ClaudeStatuslineReport | null;
   attemptedAt: number | null;
   lastCallAt: number | null;
   backoffUntil: number;
@@ -217,7 +236,7 @@ interface LimitsState {
 
 function freshState(): LimitsState {
   return {
-    claude: { value: null, attemptedAt: null, lastCallAt: null, backoffUntil: 0, backoffStep: 0, lastError: null },
+    claude: { value: null, statusline: null, attemptedAt: null, lastCallAt: null, backoffUntil: 0, backoffStep: 0, lastError: null },
     codex: { value: null, attemptedAt: null, lastError: null },
   };
 }
@@ -284,6 +303,71 @@ async function callClaudeUsage(token: string, sources: LimitsSources): Promise<R
   }
 }
 
+let claudeSourcePrefs: ClaudeSourcePrefs = { freshMinutes: CLAUDE_STATUSLINE_FRESH_DEFAULT, privateFallback: true };
+
+export function setClaudeSourcePrefs(prefs: ClaudeSourcePrefs): void {
+  claudeSourcePrefs = { ...prefs };
+}
+
+export function currentClaudeSourcePrefs(): ClaudeSourcePrefs {
+  return { ...claudeSourcePrefs };
+}
+
+const EPOCH_SECONDS_LIMIT = 1e11;
+
+function parseStatuslineWindow(value: unknown): LimitWindow | null {
+  const obj = asObject(value);
+  if (!obj) return null;
+  const used = asNumber(obj.used_percentage);
+  if (used === null) return null;
+  const resets = asNumber(obj.resets_at);
+  const resetsAt = resets === null ? null : resets >= EPOCH_SECONDS_LIMIT ? resets : resets * 1000;
+  return { utilization: clampPercent(used), resetsAt, reset: false };
+}
+
+export function parseStatuslineRateLimits(raw: unknown, sessionId: string | null, at: number): ClaudeStatuslineReport | null {
+  const obj = asObject(raw);
+  if (!obj) return null;
+  const fiveHour = parseStatuslineWindow(obj.five_hour);
+  const sevenDay = parseStatuslineWindow(obj.seven_day);
+  if (!fiveHour && !sevenDay) return null;
+  return { at, sessionId, fiveHour, sevenDay };
+}
+
+function statuslineLimits(report: ClaudeStatuslineReport, base: ClaudeLimits | null): ClaudeLimits {
+  return {
+    source: "statusline",
+    fetchedAt: report.at,
+    stale: false,
+    fiveHour: report.fiveHour ?? emptyWindow(),
+    sevenDay: report.sevenDay ?? emptyWindow(),
+    models: base?.models ?? [],
+    extra: base?.extra ?? null,
+    error: null,
+  };
+}
+
+export function latestClaudeStatusline(): ClaudeStatuslineReport | null {
+  return state.claude.statusline;
+}
+
+export function acceptClaudeStatusline(report: ClaudeStatuslineReport): boolean {
+  const known = state.claude.statusline;
+  if (known !== null && known.at > report.at) return false;
+  state.claude.statusline = report;
+  state.claude.value = statuslineLimits(report, state.claude.value);
+  state.claude.lastError = null;
+  const settings = pollSettings;
+  if (settings !== null && settings.features.limits && settings.limits.claude) broadcast("limits", { updatedAt: latestUpdate(settings) });
+  return true;
+}
+
+function statuslineMessage(report: ClaudeStatuslineReport | null, prefs: ClaudeSourcePrefs): string {
+  return report === null
+    ? "no status line data yet and the private usage endpoint is off"
+    : `status line data is older than ${prefs.freshMinutes} minutes and the private usage endpoint is off`;
+}
+
 export async function fetchClaudeLimits(sources: LimitsSources = {}): Promise<ClaudeLimits | null> {
   const now = sources.now ?? Date.now();
   const claude = state.claude;
@@ -294,6 +378,15 @@ export async function fetchClaudeLimits(sources: LimitsSources = {}): Promise<Cl
     if (value) claude.value = value;
     return claude.value;
   };
+
+  const prefs = sources.claudeSource ?? claudeSourcePrefs;
+  const line = claude.statusline;
+  if (line !== null && now - line.at <= prefs.freshMinutes * 60_000) return settle(statuslineLimits(line, claude.value), null);
+  if (!prefs.privateFallback) {
+    const message = statuslineMessage(line, prefs);
+    const fallback = line !== null ? { ...statuslineLimits(line, claude.value), error: message } : claudeFallback(message, sources);
+    return settle(fallback, message);
+  }
 
   if (now < claude.backoffUntil) {
     return settle(claudeFallback(claude.lastError ?? "usage API backing off", sources), claude.lastError);
@@ -500,82 +593,300 @@ export function readCodexRolloutLimits(options: { root?: string; now?: number; d
   return null;
 }
 
-export function readCodexLimitsLive(timeoutMs: number = LIVE_TIMEOUT_MS): Promise<CodexLimits | null> {
-  return new Promise((resolve) => {
-    let settled = false;
+export interface CodexBucket {
+  limitId: string;
+  limitName: string | null;
+  primary: CodexWindow | null;
+  secondary: CodexWindow | null;
+}
+
+type LiveBucket = CodexBucket & { planType: string | null };
+
+const MAIN_CODEX_BUCKET = "codex";
+
+function parseLiveBucket(value: unknown, fallbackId: string, received: number): LiveBucket | null {
+  const obj = asObject(value);
+  if (!obj) return null;
+  const primary = parseCodexWindow(obj.primary, LIVE_KEYS, "primary", received, received);
+  const secondary = parseCodexWindow(obj.secondary, LIVE_KEYS, "secondary", received, received);
+  if (!primary && !secondary) return null;
+  return {
+    limitId: asString(obj.limitId) ?? fallbackId,
+    limitName: asString(obj.limitName),
+    primary,
+    secondary,
+    planType: asString(obj.planType),
+  };
+}
+
+function liveFromBuckets(buckets: LiveBucket[], planType: string | null, received: number): CodexLimits | null {
+  const main = buckets.find((bucket) => bucket.limitId === MAIN_CODEX_BUCKET) ?? buckets[0];
+  if (!main) return null;
+  const built = buildCodexLimits(main.primary, main.secondary, main.planType ?? planType, "live", received);
+  if (!built) return null;
+  return {
+    ...built,
+    buckets: buckets.map((bucket) => ({ limitId: bucket.limitId, limitName: bucket.limitName, primary: bucket.primary, secondary: bucket.secondary })),
+  };
+}
+
+export function parseCodexLiveRateLimits(raw: unknown, received: number): CodexLimits | null {
+  const obj = asObject(raw);
+  if (!obj) return null;
+  const buckets: LiveBucket[] = [];
+  const byId = asObject(obj.rateLimitsByLimitId);
+  if (byId) {
+    for (const [key, value] of Object.entries(byId)) {
+      const bucket = parseLiveBucket(value, key, received);
+      if (bucket && !buckets.some((known) => known.limitId === bucket.limitId)) buckets.push(bucket);
+    }
+  }
+  const single = parseLiveBucket(obj.rateLimits, MAIN_CODEX_BUCKET, received);
+  if (single && !buckets.some((bucket) => bucket.limitId === single.limitId)) buckets.unshift(single);
+  return liveFromBuckets(buckets, single?.planType ?? null, received);
+}
+
+export function mergeCodexLiveUpdate(current: CodexLimits | null, raw: unknown, received: number): CodexLimits | null {
+  const obj = asObject(raw);
+  if (!obj) return null;
+  if (asObject(obj.rateLimitsByLimitId)) return parseCodexLiveRateLimits(obj, received);
+  const update = parseLiveBucket(obj.rateLimits, MAIN_CODEX_BUCKET, received);
+  if (!update) return null;
+  const known: LiveBucket[] = (current?.buckets ?? []).map((bucket) => ({ ...bucket, planType: null }));
+  const index = known.findIndex((bucket) => bucket.limitId === update.limitId);
+  const previous = index >= 0 ? known[index] : undefined;
+  const merged: LiveBucket = {
+    ...update,
+    limitName: update.limitName ?? previous?.limitName ?? null,
+    primary: update.primary ?? previous?.primary ?? null,
+    secondary: update.secondary ?? previous?.secondary ?? null,
+  };
+  if (index >= 0) known[index] = merged;
+  else known.push(merged);
+  return liveFromBuckets(known, update.planType ?? current?.planType ?? null, received);
+}
+
+export interface CodexAppServerOptions {
+  command: () => { bin: string; args: readonly string[] };
+  env?: () => NodeJS.ProcessEnv;
+  requestTimeoutMs?: number;
+  backoffBaseMs?: number;
+  backoffMaxMs?: number;
+  onUpdate?: (value: CodexLimits) => void;
+}
+
+type RpcReply = Json | null;
+
+const APP_SERVER_BACKOFF_BASE_MS = 5_000;
+const APP_SERVER_BACKOFF_MAX_MS = 30 * 60_000;
+
+export class CodexAppServer {
+  private child: ChildProcessWithoutNullStreams | null = null;
+  private ready: Promise<boolean> | null = null;
+  private readonly pending = new Map<number, (reply: RpcReply) => void>();
+  private nextId = 1;
+  private restartTimer: NodeJS.Timeout | null = null;
+  private failures = 0;
+  private stopped = true;
+  private starts = 0;
+  private latest: CodexLimits | null = null;
+
+  constructor(private readonly options: CodexAppServerOptions) {}
+
+  get pid(): number | null {
+    return this.child?.pid ?? null;
+  }
+
+  get startCount(): number {
+    return this.starts;
+  }
+
+  get backingOff(): boolean {
+    return this.restartTimer !== null;
+  }
+
+  get value(): CodexLimits | null {
+    return this.latest;
+  }
+
+  async read(timeoutMs: number = this.options.requestTimeoutMs ?? LIVE_TIMEOUT_MS): Promise<CodexLimits | null> {
+    this.stopped = false;
+    if (this.restartTimer) return null;
+    const deadline = Date.now() + timeoutMs;
+    const ready = await (this.child && this.ready ? this.ready : this.start(timeoutMs));
+    if (!ready) return null;
+    const reply = await this.request("account/rateLimits/read", undefined, Math.max(1, deadline - Date.now()));
+    if (!reply || reply.error !== undefined) return null;
+    const value = parseCodexLiveRateLimits(reply.result, Date.now());
+    if (value) {
+      this.latest = value;
+      this.failures = 0;
+    }
+    return value;
+  }
+
+  stop(): void {
+    this.stopped = true;
+    if (this.restartTimer) clearTimeout(this.restartTimer);
+    this.restartTimer = null;
+    this.failures = 0;
+    const child = this.child;
+    this.detach();
+    if (child) this.kill(child);
+  }
+
+  private start(timeoutMs: number): Promise<boolean> {
+    const { bin, args } = this.options.command();
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = spawn(bin, [...args, "app-server", "--listen", "stdio://"], {
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        env: this.options.env?.() ?? process.env,
+      });
+    } catch {
+      this.scheduleRestart();
+      return Promise.resolve(false);
+    }
+    this.child = child;
+    this.starts += 1;
     let buffer = "";
-    const child = spawn(config.codexBin, [...config.codexArgsPrefix, "app-server", "--listen", "stdio://"], {
-      shell: false,
-      stdio: ["pipe", "pipe", "ignore"],
-      windowsHide: true,
-    });
-    const finish = (value: CodexLimits | null): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try {
-        child.stdin.end();
-      } catch {
-        void 0;
-      }
-      child.kill();
-      resolve(value);
-    };
-    const timer = setTimeout(() => finish(null), timeoutMs);
-    child.stdin.on("error", () => finish(null));
-    const send = (message: Json): void => {
-      try {
-        child.stdin.write(`${JSON.stringify(message)}\n`);
-      } catch {
-        finish(null);
-      }
-    };
-    const handle = (line: string): void => {
-      let message: Json | null;
-      try {
-        message = asObject(JSON.parse(line));
-      } catch {
-        return;
-      }
-      if (!message) return;
-      if (message.id === 1) {
-        if (message.error !== undefined) return finish(null);
-        send({ method: "initialized" });
-        send({ id: 2, method: "account/rateLimits/read" });
-        return;
-      }
-      if (message.id !== 2) return;
-      const snapshot = asObject(asObject(message.result)?.rateLimits);
-      if (!snapshot) return finish(null);
-      const received = Date.now();
-      finish(
-        buildCodexLimits(
-          parseCodexWindow(snapshot.primary, LIVE_KEYS, "primary", received, received),
-          parseCodexWindow(snapshot.secondary, LIVE_KEYS, "secondary", received, received),
-          snapshot.planType,
-          "live",
-          received,
-        ),
-      );
-    };
     child.stdout.on("data", (chunk: Buffer) => {
       buffer += chunk.toString("utf8");
       let newline = buffer.indexOf("\n");
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim();
         buffer = buffer.slice(newline + 1);
-        if (line) handle(line);
+        if (line) this.handle(line);
         newline = buffer.indexOf("\n");
       }
     });
-    child.on("error", () => finish(null));
-    child.on("close", () => finish(null));
-    send({
-      id: 1,
-      method: "initialize",
-      params: { clientInfo: { name: "vbss-cchub", title: "CC Hub", version: userAgent().split("/")[1] ?? "dev" } },
+    child.stderr.resume();
+    child.stdin.on("error", () => undefined);
+    child.on("error", () => this.exited(child));
+    child.on("close", () => this.exited(child));
+    const ready = this.request(
+      "initialize",
+      { clientInfo: { name: "vbss-cchub", title: "CC Hub", version: userAgent().split("/")[1] ?? "dev" } },
+      timeoutMs,
+    ).then((reply) => {
+      if (this.child !== child) return false;
+      if (!reply || reply.error !== undefined) {
+        this.kill(child);
+        return false;
+      }
+      this.write(child, { method: "initialized" });
+      return true;
     });
-  });
+    this.ready = ready;
+    return ready;
+  }
+
+  private request(method: string, params: Json | undefined, timeoutMs: number): Promise<RpcReply> {
+    const child = this.child;
+    if (!child) return Promise.resolve(null);
+    const id = this.nextId;
+    this.nextId += 1;
+    return new Promise<RpcReply>((resolve) => {
+      const timer = setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        resolve(null);
+        if (this.child === child) this.kill(child);
+      }, timeoutMs);
+      timer.unref();
+      this.pending.set(id, (reply) => {
+        clearTimeout(timer);
+        resolve(reply);
+      });
+      this.write(child, params === undefined ? { id, method } : { id, method, params });
+    });
+  }
+
+  private write(child: ChildProcessWithoutNullStreams, message: Json): void {
+    try {
+      child.stdin.write(`${JSON.stringify(message)}\n`);
+    } catch {
+      this.kill(child);
+    }
+  }
+
+  private handle(line: string): void {
+    let message: Json | null;
+    try {
+      message = asObject(JSON.parse(line));
+    } catch {
+      return;
+    }
+    if (!message) return;
+    if (typeof message.method === "string") {
+      if (message.method !== "account/rateLimits/updated") return;
+      const merged = mergeCodexLiveUpdate(this.latest, message.params, Date.now());
+      if (!merged) return;
+      this.latest = merged;
+      this.options.onUpdate?.(merged);
+      return;
+    }
+    if (typeof message.id !== "number") return;
+    const settle = this.pending.get(message.id);
+    if (!settle) return;
+    this.pending.delete(message.id);
+    settle(message);
+  }
+
+  private kill(child: ChildProcessWithoutNullStreams): void {
+    try {
+      child.stdin.end();
+    } catch {
+      void 0;
+    }
+    child.kill();
+  }
+
+  private detach(): void {
+    this.child = null;
+    this.ready = null;
+    const waiting = [...this.pending.values()];
+    this.pending.clear();
+    for (const settle of waiting) settle(null);
+  }
+
+  private exited(child: ChildProcessWithoutNullStreams): void {
+    if (this.child !== child) return;
+    this.detach();
+    this.scheduleRestart();
+  }
+
+  private scheduleRestart(): void {
+    if (this.stopped || this.restartTimer) return;
+    const base = this.options.backoffBaseMs ?? APP_SERVER_BACKOFF_BASE_MS;
+    const max = this.options.backoffMaxMs ?? APP_SERVER_BACKOFF_MAX_MS;
+    const delay = Math.min(base * 2 ** this.failures, max);
+    this.failures += 1;
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
+      if (this.stopped || this.child) return;
+      void this.start(this.options.requestTimeoutMs ?? LIVE_TIMEOUT_MS);
+    }, delay);
+    this.restartTimer.unref();
+  }
+}
+
+const codexAppServer = new CodexAppServer({
+  command: () => ({ bin: config.codexBin, args: config.codexArgsPrefix }),
+  onUpdate: (value) => applyCodexPush(value),
+});
+
+export function codexAppServerPid(): number | null {
+  return codexAppServer.pid;
+}
+
+export function stopCodexAppServer(): void {
+  codexAppServer.stop();
+}
+
+export function readCodexLimitsLive(timeoutMs: number = LIVE_TIMEOUT_MS): Promise<CodexLimits | null> {
+  return codexAppServer.read(timeoutMs);
 }
 
 async function refreshCodex(settings: DelegationSettings, sources: LimitsSources): Promise<void> {
@@ -725,11 +1036,24 @@ export function limitsPollingActive(): boolean {
   return pollTimer !== null;
 }
 
+function codexPushWanted(settings: DelegationSettings | null): settings is DelegationSettings {
+  return settings !== null && settings.features.limits && settings.limits.codex && settings.limits.codexLive;
+}
+
+function applyCodexPush(value: CodexLimits): void {
+  const settings = pollSettings;
+  if (!codexPushWanted(settings)) return;
+  state.codex.value = value;
+  state.codex.lastError = null;
+  broadcast("limits", { updatedAt: latestUpdate(settings) });
+}
+
 export function stopLimitsPolling(): void {
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = null;
   pollSignature = null;
   pollSettings = null;
+  stopCodexAppServer();
 }
 
 export function startLimitsPolling(settings: DelegationSettings, sources: LimitsSources = {}): void {
@@ -738,6 +1062,7 @@ export function startLimitsPolling(settings: DelegationSettings, sources: Limits
     stopLimitsPolling();
     return;
   }
+  if (!codexPushWanted(settings)) stopCodexAppServer();
   const signature = `${settings.limits.claude}:${settings.limits.codex}:${settings.limits.codexLive}:${settings.limits.refreshMinutes}`;
   pollSettings = settings;
   pollSources = sources;

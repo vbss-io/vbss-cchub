@@ -35,6 +35,14 @@ describe("permission mode resolution", () => {
     assert.equal(launch.resolvePermissionMode(null, false), "acceptEdits");
     assert.equal(launch.resolvePermissionMode("acceptEdits", false), "acceptEdits");
   });
+
+  it("maps the auto (guarded) level to auto mode with permission prompts off, honouring plan", () => {
+    assert.deepEqual(launch.resolveRunPermissions(null, "auto"), { permissionMode: "auto", permissionPrompts: "none" });
+    assert.deepEqual(launch.resolveRunPermissions("acceptEdits", "auto"), { permissionMode: "auto", permissionPrompts: "none" });
+    assert.deepEqual(launch.resolveRunPermissions("plan", "auto"), { permissionMode: "plan", permissionPrompts: null });
+    assert.deepEqual(launch.resolveRunPermissions(null, "full"), { permissionMode: "bypassPermissions", permissionPrompts: null });
+    assert.deepEqual(launch.resolveRunPermissions("dontAsk", "safe"), { permissionMode: "dontAsk", permissionPrompts: null });
+  });
 });
 
 describe("isolation resolution", () => {

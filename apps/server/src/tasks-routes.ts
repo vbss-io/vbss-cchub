@@ -9,10 +9,17 @@ import { CODEX_SANDBOXES, ISOLATION_MODES, ORIGIN_CLIENTS, PERMISSION_MODES, RUN
 import { isDirectory } from "./workspaces.js";
 import { asString, oneOf, sendError, taskJson } from "./route-helpers.js";
 
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
 async function resolveOrigin(
   originPid: number | null,
   hint: OriginClient | null,
+  envSessionId: string | null = null,
 ): Promise<{ originSessionId: string | null; originClient: OriginClient | null }> {
+  if (envSessionId && SESSION_ID_RE.test(envSessionId)) {
+    const known = getSession(envSessionId);
+    return { originSessionId: envSessionId, originClient: known?.client === "share" ? "share" : "claude-code" };
+  }
   if (originPid && Number.isInteger(originPid) && originPid > 0) {
     const session = sessionByPid(originPid);
     if (session) return { originSessionId: session.sessionId, originClient: "claude-code" };
@@ -142,7 +149,7 @@ export function tasksRouter(): Router {
         const explicitOrigin = typeof body.originSessionId === "string" ? getSession(body.originSessionId) : null;
         const origin = explicitOrigin
           ? { originSessionId: explicitOrigin.sessionId, originClient: (explicitOrigin.client === "share" ? "share" : "claude-code") as OriginClient }
-          : await resolveOrigin(originPid, originHint);
+          : await resolveOrigin(originPid, originHint, typeof body.originEnvSessionId === "string" ? body.originEnvSessionId : null);
         const detail = delegateTask({
           prompt: asString(body.prompt),
           workspace: asString(body.workspace),

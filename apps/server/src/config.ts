@@ -79,6 +79,9 @@ function claudeUsageUrl(raw: string | undefined): string {
 }
 
 const codexHome = process.env.CODEX_HOME ?? join(homeDir, ".codex");
+const claudeConfigDir = process.env.HUB_HOME ? null : process.env.CLAUDE_CONFIG_DIR || null;
+const claudeHome = claudeConfigDir ?? join(homeDir, ".claude");
+const claudeJsonPath = join(claudeConfigDir ?? homeDir, ".claude.json");
 
 export const config = {
   host: process.env.HUB_HOST ?? "0.0.0.0",
@@ -108,13 +111,14 @@ export const config = {
   workspacesRoot: process.env.HUB_WORKSPACES_ROOT ?? null,
   editorCommand: process.env.HUB_EDITOR ?? "code",
   secondBrainRoot: process.env.HUB_SECOND_BRAIN ?? null,
-  claudeConfigPath: join(homeDir, ".claude.json"),
+  claudeHome,
+  claudeConfigPath: claudeJsonPath,
   claudeDesktopConfigPath: claudeDesktopConfigPath(),
   codexHome,
   codexConfigPath: join(codexHome, "config.toml"),
   codexSessionsDir: join(codexHome, "sessions"),
-  claudeCredentialsPath: process.env.HUB_CLAUDE_CREDENTIALS ?? join(homeDir, ".claude", ".credentials.json"),
-  claudeStatePath: process.env.HUB_CLAUDE_STATE ?? join(homeDir, ".claude.json"),
+  claudeCredentialsPath: process.env.HUB_CLAUDE_CREDENTIALS ?? join(claudeHome, ".credentials.json"),
+  claudeStatePath: process.env.HUB_CLAUDE_STATE ?? claudeJsonPath,
   claudeUsageUrl: claudeUsageUrl(process.env.HUB_CLAUDE_USAGE_URL),
-  claudeProjectsDir: process.env.HUB_CLAUDE_PROJECTS_DIR ?? join(homeDir, ".claude", "projects"),
+  claudeProjectsDir: process.env.HUB_CLAUDE_PROJECTS_DIR ?? join(claudeHome, "projects"),
 } as const;

@@ -79,4 +79,5 @@ async function main() {
 }
 
 if (argv[0] === "app-server") serveAppServer();
+else if (argv[0] === "mcp") (await import("./fake-mcp-cli.mjs")).runMcpCli("codex", argv);
 else main();

@@ -1,4 +1,5 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, open, stat, unlink, type FileHandle } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -208,24 +209,78 @@ export function hubSection(content: string): string | null {
 
 const touchUpdated = (content: string, date: string): string => content.replace(/^updated:.*$/m, `updated: ${date}`);
 
+export interface BrainWriteOps {
+  writeFileSync: (path: string, data: string, encoding: "utf8") => void;
+  renameSync: (from: string, to: string) => void;
+  copyFileSync: (from: string, to: string) => void;
+  unlinkSync: (path: string) => void;
+}
+
+const nodeBrainOps: BrainWriteOps = { writeFileSync, renameSync, copyFileSync, unlinkSync };
+const LOCK_ERROR_CODES = new Set(["EPERM", "EBUSY", "EACCES"]);
+const RENAME_RETRIES = 3;
+
+function isLockError(err: unknown): boolean {
+  const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
+  return code !== undefined && LOCK_ERROR_CODES.has(code);
+}
+
+function removeQuietly(path: string, ops: BrainWriteOps): void {
+  try {
+    ops.unlinkSync(path);
+  } catch {
+    return;
+  }
+}
+
+function moveIntoPlace(tmpPath: string, target: string, ops: BrainWriteOps): void {
+  for (let attempt = 0; attempt <= RENAME_RETRIES; attempt += 1) {
+    try {
+      ops.renameSync(tmpPath, target);
+      return;
+    } catch (err) {
+      if (!isLockError(err)) throw err;
+    }
+  }
+  ops.copyFileSync(tmpPath, target);
+  removeQuietly(tmpPath, ops);
+}
+
+export function writeBrainFileAtomic(target: string, content: string, ops: BrainWriteOps = nodeBrainOps): void {
+  const tmpPath = `${target}.${randomUUID()}.tmp`;
+  try {
+    ops.writeFileSync(tmpPath, content, "utf8");
+    moveIntoPlace(tmpPath, target, ops);
+  } catch (err) {
+    removeQuietly(tmpPath, ops);
+    throw err;
+  }
+}
+
+const eolOf = (content: string): string => (content.includes("\r\n") ? "\r\n" : "\n");
+
+const withEol = (text: string, eol: string): string => text.replace(/\r?\n/g, eol);
+
 export function upsertSessionBlock(file: string, sessionId: string, date: string, block: string, root: string | null = null): void {
   let content = existsSync(file) ? readFileSync(file, "utf8") : trailHeader(date);
+  const eol = eolOf(content);
+  const piece = withEol(block, eol);
   const { start, end } = blockMarkers(sessionId);
   const startIdx = content.indexOf(start);
   const endIdx = content.indexOf(end);
   if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-    content = content.slice(0, startIdx) + block + content.slice(endIdx + end.length);
+    content = content.slice(0, startIdx) + piece + content.slice(endIdx + end.length);
   } else {
     const hub = HUB_HEADING_RE.exec(content);
     if (hub) {
-      content = `${content.slice(0, hub.index).trimEnd()}\n\n${block}\n\n${content.slice(hub.index)}`;
+      content = `${content.slice(0, hub.index).trimEnd()}${eol}${eol}${piece}${eol}${eol}${content.slice(hub.index)}`;
     } else {
-      if (!content.endsWith("\n")) content += "\n";
-      content += `\n${block}\n`;
+      if (!content.endsWith("\n")) content += eol;
+      content += `${eol}${piece}${eol}`;
     }
   }
   snapshotVaultFile(root, file);
-  writeFileSync(file, touchUpdated(content, date));
+  writeBrainFileAtomic(file, touchUpdated(content, date));
 }
 
 export function queueSessionBlock(file: string, sessionId: string, date: string, block: string, root: string | null = null): Promise<void> {
@@ -237,10 +292,11 @@ export function queueSessionBlock(file: string, sessionId: string, date: string,
 
 function appendHubLine(file: string, date: string, line: string, root: string): void {
   let content = existsSync(file) ? readFileSync(file, "utf8") : trailHeader(date);
-  if (!content.endsWith("\n")) content += "\n";
-  if (!HUB_HEADING_RE.test(content)) content += "\n## Hub\n\n";
+  const eol = eolOf(content);
+  if (!content.endsWith("\n")) content += eol;
+  if (!HUB_HEADING_RE.test(content)) content += `${eol}## Hub${eol}${eol}`;
   snapshotVaultFile(root, file);
-  writeFileSync(file, touchUpdated(`${content}${line}\n`, date));
+  writeBrainFileAtomic(file, touchUpdated(`${content}${line}${eol}`, date));
 }
 
 export function appendHubSource(root: string, text: string, now = new Date(), link?: TrailLink | null): string {

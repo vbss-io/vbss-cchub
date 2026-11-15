@@ -9,6 +9,7 @@ const tmp = mkdtempSync(join(tmpdir(), "cch-runner-"));
 const fixtures = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const capture = join(tmp, "capture.json");
 process.env.HUB_DATA_DIR = join(tmp, "data");
+process.env.HUB_HOME = join(tmp, "home");
 process.env.HUB_PORT = "4397";
 process.env.HUB_CLAUDE_BIN = process.execPath;
 process.env.HUB_CLAUDE_ARGS_PREFIX = JSON.stringify([join(fixtures, "fake-claude.mjs")]);
@@ -145,6 +146,23 @@ describe("persistent share runner", () => {
     assert.equal(runners.liveRunners().some((item) => item.key === "s3:Bob"), true);
     assert.equal(runners.killRunners("s3:", "revoked"), 1);
     assert.equal(runners.liveRunners().some((item) => item.key === "s3:Bob"), false);
+  });
+
+  it("fails the answer when Claude Code starts in bare mode instead of answering without the hub hooks", async () => {
+    process.env.HUB_SHARE_ENV_PASSTHROUGH = "FAKE_CLAUDE_CAPTURE,FAKE_CLAUDE_DELAY_MS,FAKE_CLAUDE_MODE,FAKE_CLAUDE_INIT";
+    process.env.FAKE_CLAUDE_INIT = "bare";
+    try {
+      const runner = runners.runnerFor("s6:Ann", { cwd: tmp, addDirs: [], resumeSessionId: null, forkSession: false, artifactsRoot: null, profile: types.askProfile("low"), systemPrompt: "g", model: null, label: "Ann" }, null, 60_000, 10_000);
+      const answer = await runner.ask("hello", () => undefined);
+      assert.equal(answer.ok, false);
+      assert.match(answer.error ?? "", /^Claude Code started in bare mode \(no login\/CLAUDE\.md\/hooks\)\. Update CC Hub or pass the needed flags\./);
+      assert.match(answer.error ?? "", /SessionStart hooks/);
+      assert.equal(runner.alive, false);
+      runner.kill("done");
+    } finally {
+      delete process.env.FAKE_CLAUDE_INIT;
+      process.env.HUB_SHARE_ENV_PASSTHROUGH = "FAKE_CLAUDE_CAPTURE,FAKE_CLAUDE_DELAY_MS,FAKE_CLAUDE_MODE";
+    }
   });
 });
 

@@ -12,6 +12,7 @@ const claudeCapture = join(dataDir, "claude-capture.json");
 const codexCapture = join(dataDir, "codex-capture.json");
 
 process.env.HUB_DATA_DIR = dataDir;
+process.env.HUB_HOME = join(dataDir, "home");
 process.env.HUB_PORT = "4399";
 process.env.HUB_CLAUDE_BIN = process.execPath;
 process.env.HUB_CLAUDE_ARGS_PREFIX = JSON.stringify([join(fixtures, "fake-claude.mjs")]);

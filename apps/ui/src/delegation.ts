@@ -254,6 +254,8 @@ export interface McpStatus {
   inFile: boolean;
   registeredAt: number | null;
   error: string | null;
+  updateAvailable: boolean;
+  cli: string | null;
 }
 
 export interface ConnectStatus {
@@ -313,7 +315,7 @@ export interface CodexLimitWindow {
 }
 
 export interface ClaudeLimits {
-  source?: "api" | "cache" | "none";
+  source?: "api" | "cache" | "statusline" | "none";
   fetchedAt?: number | null;
   stale?: boolean;
   fiveHour: ClaudeLimitWindow;
@@ -331,6 +333,32 @@ export interface CodexLimits {
   secondary: CodexLimitWindow;
   planType?: string | null;
   error?: string | null;
+  buckets?: CodexLimitBucket[];
+}
+
+export interface CodexLimitBucket {
+  limitId: string;
+  limitName: string | null;
+  primary: CodexLimitWindow | null;
+  secondary: CodexLimitWindow | null;
+}
+
+export type ClaudeStatuslineState = "installed" | "outdated" | "not-installed";
+
+export interface ClaudeStatuslineStatus {
+  state: ClaudeStatuslineState;
+  installed: boolean;
+  outdated: boolean;
+  settingsPath: string;
+  previousCommand: string | null;
+  error: string | null;
+}
+
+export interface ClaudeLimitsSource {
+  statusline: ClaudeStatuslineStatus;
+  privateFallback: boolean;
+  freshMinutes: number;
+  lastReportAt: number | null;
 }
 
 export interface LimitsSnapshot {
@@ -369,6 +397,13 @@ export const fetchLimits = (): Promise<LimitsSnapshot | null> => optionalJson("/
 export const fetchPlugins = (): Promise<HubPluginInfo[] | null> => optionalJson("/plugins");
 
 export const refreshLimits = (): Promise<LimitsSnapshot> => call("POST", "/limits/refresh");
+
+export const fetchClaudeLimitsSource = (): Promise<ClaudeLimitsSource | null> => optionalJson("/limits/claude-source");
+
+export const changeClaudeStatusline = (action: "install" | "uninstall"): Promise<ClaudeLimitsSource> => call("POST", `/limits/claude-source/${action}`);
+
+export const saveClaudeLimitsSource = (patch: { privateFallback?: boolean; freshMinutes?: number }): Promise<ClaudeLimitsSource> =>
+  call("PUT", "/limits/claude-source", patch);
 
 export interface UsageScanning {
   scanning: true;
@@ -748,7 +783,7 @@ export const createReport = (input: {
 }): Promise<ReportRecord> => call("POST", "/reports", { ...input, source: "hub-ui" });
 
 export type TrustLevel = "low" | "medium" | "high" | "total";
-export type Autonomy = "full" | "safe";
+export type Autonomy = "full" | "auto" | "safe";
 export type ShareState = "active" | "paused" | "expired" | "revoked";
 export type ShareRequestStatus = "running" | "completed" | "failed" | "rejected";
 

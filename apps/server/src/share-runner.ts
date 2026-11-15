@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { config } from "./config.js";
-import { shareEnv, shareSettingsJson } from "./executor.js";
+import { createStartupGuard, observeStartup, shareEnv, shareSettingsJson, startupExpectations, type StartupGuard } from "./executor.js";
 import type { RunProfile } from "./share-types.js";
 
 const MAX_LINE_CHARS = 4_000_000;
@@ -71,6 +71,7 @@ export class ShareRunner {
   private pending: Pending | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private initSeen = false;
+  private startup: StartupGuard | null = null;
   private ownerStale = false;
   sessionId: string | null;
   spawns = 0;
@@ -153,9 +154,13 @@ export class ShareRunner {
     if (target.profile.disallowedTools && target.profile.disallowedTools.length > 0) args.push("--disallowedTools", ...target.profile.disallowedTools);
     args.push("--settings", shareSettingsJson(target.profile.guard !== null));
     for (const dir of target.addDirs) args.push("--add-dir", dir);
+    const env = shareEnv(target.profile.guard === "shell", target.label, target.profile.guard === null, target.profile.artifactWrites ? target.artifactsRoot : null);
+    this.startup = createStartupGuard(
+      startupExpectations({ cwd: target.cwd, env, hooksViaSettings: true, strictMcpConfig: target.profile.strictMcpConfig, restricted: target.profile.restricted }),
+    );
     const child = spawn(config.claudeBin, args, {
       cwd: target.cwd,
-      env: shareEnv(target.profile.guard === "shell", target.label, target.profile.guard === null, target.profile.artifactWrites ? target.artifactsRoot : null),
+      env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       shell: false,
@@ -233,6 +238,12 @@ export class ShareRunner {
     if (this.staleResult(event)) {
       if (this.restartStale()) return;
       this.finish({ ...this.failure("the conversation to continue no longer exists"), sessionId: null, established: false }, true);
+      return;
+    }
+    const startupError = this.startup ? observeStartup(this.startup, event) : null;
+    if (startupError) {
+      if (this.pending) this.finish(this.failure(startupError), true);
+      else this.kill(startupError);
       return;
     }
     if (isString(event.session_id) && event.session_id.length > 0) this.sessionId = event.session_id;

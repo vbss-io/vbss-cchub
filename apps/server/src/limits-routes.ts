@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { claudeSourceRouter } from "./claude-statusline-routes.js";
 import { delegationGuard } from "./delegation-security.js";
 import { getSettings } from "./delegation-store.js";
 import { ensureFirstRefresh, limitsSnapshot, refreshLimits } from "./limits.js";
@@ -6,6 +7,7 @@ import { ensureFirstRefresh, limitsSnapshot, refreshLimits } from "./limits.js";
 export function limitsRouter(): Router {
   const router = Router();
   router.use(delegationGuard);
+  router.use("/claude-source", claudeSourceRouter());
 
   router.get("/", async (_req, res) => {
     try {

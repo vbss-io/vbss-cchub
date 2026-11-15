@@ -18,6 +18,29 @@ function emit(event) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function emitStartup(sessionId, model) {
+  const startup = process.env.CLAUDE_CODE_SIMPLE === "1" ? "bare" : (process.env.FAKE_CLAUDE_INIT ?? "full");
+  if (startup === "none") return;
+  if (startup === "full") {
+    emit({ type: "system", subtype: "hook_started", hook_id: "h1", hook_name: "SessionStart:startup", hook_event: "SessionStart", session_id: sessionId });
+    emit({ type: "system", subtype: "hook_response", hook_id: "h1", hook_name: "SessionStart:startup", hook_event: "SessionStart", output: "", stdout: "", stderr: "", exit_code: 0, outcome: "success", session_id: sessionId });
+  }
+  const bare = startup === "bare";
+  const init = {
+    type: "system",
+    subtype: "init",
+    session_id: sessionId,
+    model,
+    cwd: process.cwd(),
+    apiKeySource: "none",
+    tools: bare ? ["Bash", "Read", "Edit"] : ["Bash", "Read", "Edit", "Glob", "Grep", "mcp__cchub__hub_overview"],
+    mcp_servers: bare ? [] : [{ name: "cchub", status: "connected" }],
+    permissionMode: flag("--permission-mode") ?? "default",
+  };
+  if (startup === "nokey") delete init.apiKeySource;
+  emit(init);
+}
+
 async function respond(prompt, sessionId, model, resume, mode, delay) {
   const sleepDirective = /^sleep:(\d+)$/.exec(prompt);
   const wait = sleepDirective ? Number(sleepDirective[1]) : delay;
@@ -45,7 +68,7 @@ async function streamingMain() {
   const delay = Number(process.env.FAKE_CLAUDE_DELAY_MS ?? 0);
   const capture = process.env.FAKE_CLAUDE_CAPTURE;
   let turns = 0;
-  emit({ type: "system", subtype: "init", session_id: sessionId, model, cwd: process.cwd() });
+  emitStartup(sessionId, model);
   let buffer = "";
   process.stdin.setEncoding("utf8");
   for await (const chunk of process.stdin) {
@@ -111,7 +134,7 @@ async function main() {
     process.exit(2);
   }
 
-  emit({ type: "system", subtype: "init", session_id: sessionId, model, cwd: process.cwd() });
+  emitStartup(sessionId, model);
   if (mode === "noresult") return;
   if (delay > 0) await sleep(delay);
 
@@ -170,4 +193,5 @@ async function main() {
   });
 }
 
-main();
+if (process.argv[2] === "mcp") (await import("./fake-mcp-cli.mjs")).runMcpCli("claude", process.argv.slice(2));
+else main();
