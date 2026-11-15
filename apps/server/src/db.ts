@@ -179,15 +179,32 @@ export function isProcessAlive(pid: number | null): boolean {
   }
 }
 
-const statusByKind: Record<Exclude<HookKind, "meta">, SessionStatus> = {
+const statusByKind: Record<Exclude<HookKind, "meta" | "notification" | "subagent_start" | "subagent_stop">, SessionStatus> = {
   session_start: "active",
   user_prompt: "active",
-  notification: "waiting",
   stop: "idle",
+  stop_failure: "idle",
+  permission_request: "waiting",
   session_end: "ended",
-  subagent_start: "active",
-  subagent_stop: "active",
 };
+
+const WAITING_NOTIFICATIONS: ReadonlySet<string> = new Set(["permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"]);
+const RESUMED_NOTIFICATIONS: ReadonlySet<string> = new Set(["quota_auto_resume_fired"]);
+
+function notificationStatus(notificationType: string | null, message: string | null): SessionStatus | null {
+  if (notificationType === null) return /waiting for your input/i.test(message ?? "") ? "idle" : "waiting";
+  if (notificationType === "idle_prompt") return "idle";
+  if (WAITING_NOTIFICATIONS.has(notificationType)) return "waiting";
+  if (RESUMED_NOTIFICATIONS.has(notificationType)) return "active";
+  return null;
+}
+
+function hookStatus(payload: HookPayload): SessionStatus | null {
+  if (payload.kind === "meta") return "active";
+  if (payload.kind === "notification") return notificationStatus(payload.notificationType, payload.message);
+  if (payload.kind === "subagent_start" || payload.kind === "subagent_stop") return null;
+  return statusByKind[payload.kind];
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS hub_share_requests (
@@ -474,12 +491,11 @@ const apply = db.transaction((payload: HookPayload, now: number): SessionRecord 
     const record = applyMeta(payload);
     if (record) return record;
   }
-  const idlePrompt = payload.kind === "notification" && (payload.notificationType === "idle_prompt" || /waiting for your input/i.test(payload.message ?? ""));
-  const status = payload.kind === "meta" ? "active" : idlePrompt ? "idle" : statusByKind[payload.kind];
-  const keepStatus = payload.kind === "subagent_start" || payload.kind === "subagent_stop" ? 1 : 0;
+  const nextStatus = hookStatus(payload);
+  const keepStatus = nextStatus === null ? 1 : 0;
   upsertStmt.run({
     sessionId: payload.sessionId,
-    status,
+    status: nextStatus ?? "active",
     keepStatus,
     markSeen: payload.kind === "user_prompt" || payload.kind === "session_start" ? 1 : 0,
     cwd: payload.cwd,

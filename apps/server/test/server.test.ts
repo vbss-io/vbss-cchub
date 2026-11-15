@@ -518,6 +518,13 @@ describe("hub surface", () => {
     assert.equal(raw.status, 200);
     assert.equal((raw.json as { agentsRunning: number }).agentsRunning, 1);
 
+    const asked = await http("POST", "/hook/raw?source=wsl", { body: { hook_event_name: "PermissionRequest", session_id: "sess-raw", tool_name: "Bash", tool_input: { command: "ls" }, cwd: box.repoB } });
+    assert.equal(asked.status, 200);
+    assert.deepEqual([(asked.json as { status: string }).status, (asked.json as { lastMessage: string }).lastMessage], ["waiting", "Claude needs your permission to use Bash"]);
+    const failed = await http("POST", "/hook/raw?source=wsl", { body: { hook_event_name: "StopFailure", session_id: "sess-raw", error: "rate_limit", error_details: "429 Too Many Requests" } });
+    assert.equal(failed.status, 200);
+    assert.deepEqual([(failed.json as { status: string }).status, (failed.json as { lastMessage: string }).lastMessage], ["idle", "429 Too Many Requests"]);
+
     const runtimes = (await http("GET", "/api/runtimes")).json as { claudeCode: { count: number }; scannedAt: number };
     assert.ok(typeof runtimes.claudeCode.count === "number");
     const codex = (await http("GET", "/api/codex/sessions")).json as { id: string; title: string; client: string }[];

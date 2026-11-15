@@ -4,6 +4,8 @@ export const HOOK_KINDS = [
   "user_prompt",
   "notification",
   "stop",
+  "stop_failure",
+  "permission_request",
   "session_end",
   "subagent_start",
   "subagent_stop",

@@ -223,7 +223,7 @@ const guardScript = (): string => (config.resourceDir ? join(config.resourceDir,
 
 const hooksDir = (): string => (config.resourceDir ? join(config.resourceDir, "hooks") : join(config.serverDir, "hooks"));
 
-const HUB_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd", "SubagentStart", "SubagentStop"];
+const HUB_HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure", "SessionEnd", "SubagentStart", "SubagentStop"];
 
 export function shareSettingsJson(guard: boolean): string {
   const notify = `"${config.nodeBin}" "${join(hooksDir(), "notify.mjs")}"`;

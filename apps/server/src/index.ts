@@ -79,10 +79,20 @@ const kindByEvent: Record<string, HookKind> = {
   UserPromptSubmit: "user_prompt",
   Notification: "notification",
   Stop: "stop",
+  StopFailure: "stop_failure",
+  PermissionRequest: "permission_request",
   SubagentStart: "subagent_start",
   SubagentStop: "subagent_stop",
   SessionEnd: "session_end",
 };
+
+function rawEventMessage(kind: HookKind, body: Record<string, unknown>): string | null {
+  const toolName = asString(body.tool_name);
+  if (kind === "permission_request") return toolName ? `Claude needs your permission to use ${toolName}` : null;
+  const lastAssistant = asString(body.last_assistant_message)?.slice(0, 400) ?? null;
+  if (kind === "stop_failure") return lastAssistant ?? asString(body.error_details) ?? asString(body.error);
+  return lastAssistant;
+}
 
 function transcriptPathFor(path: string | null, source: string | null): string | null {
   if (!path) return null;
@@ -174,7 +184,7 @@ app.post("/hook/raw", (req, res) => {
     hostPid: null,
     shellPid: null,
     title,
-    message: asString(body.message) ?? asString(body.last_assistant_message)?.slice(0, 400) ?? null,
+    message: asString(body.message) ?? rawEventMessage(kind, body),
     notificationType: asString(body.notification_type),
     model: transcript.model,
     tokensIn: transcript.tokensIn,

@@ -15,6 +15,7 @@ export type HookAction = "status" | "install" | "uninstall";
 interface WslResult {
   distro: string;
   installed?: boolean;
+  outdated?: boolean;
   error?: string;
 }
 
@@ -84,7 +85,7 @@ async function configureWsl(action: HookAction, distro: string): Promise<WslResu
       "--source",
       `wsl-${distro}`,
     ]);
-    return { distro, installed: result.installed === true };
+    return { distro, installed: result.installed === true, outdated: result.outdated === true };
   } catch (error) {
     return { distro, error: error instanceof Error ? error.message : String(error) };
   }
@@ -103,6 +104,6 @@ export function mergeHooks(
   windows: Record<string, unknown>,
   wsl: WslResult[],
 ): Record<string, unknown> {
-  return { ...windows, installed: windows.installed === true, wsl };
+  return { ...windows, installed: windows.installed === true, outdated: windows.outdated === true, wsl };
 }
 

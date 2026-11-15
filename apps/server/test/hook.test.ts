@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
@@ -15,8 +17,11 @@ interface Received {
   cwd: string | null;
   title: string | null;
   claudePid: number | null;
+  message: string | null;
+  notificationType: string | null;
 }
 
+const fakeHome = mkdtempSync(join(tmpdir(), "cch-hook-home-"));
 let server: Server;
 let port = 0;
 const received: Received[] = [];
@@ -48,16 +53,21 @@ before(async () => {
 
 after(() => {
   server.close();
+  rmSync(fakeHome, { recursive: true, force: true });
 });
 
-function runHook(env: Record<string, string>, input: Record<string, unknown>): Promise<{ code: number | null; ms: number }> {
+function runHook(env: Record<string, string>, input: Record<string, unknown>): Promise<{ code: number | null; ms: number; stdout: string }> {
   return new Promise((resolve) => {
     const started = Date.now();
     const child = spawn(process.execPath, [hook], {
-      env: { ...process.env, HUB_HOST_TARGET: "127.0.0.1", HUB_PORT: String(port), HUB_SKIP: "0", ...env },
-      stdio: ["pipe", "ignore", "ignore"],
+      env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, HUB_HOST_TARGET: "127.0.0.1", HUB_PORT: String(port), HUB_SKIP: "0", ...env },
+      stdio: ["pipe", "pipe", "ignore"],
     });
-    child.on("exit", (code) => resolve({ code, ms: Date.now() - started }));
+    let stdout = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.on("close", (code) => resolve({ code, ms: Date.now() - started, stdout }));
     child.stdin.end(JSON.stringify(input));
   });
 }
@@ -81,5 +91,39 @@ describe("hub hook", () => {
     const body = received.find((item) => item.sessionId === "hook-inline");
     assert.ok(body, "inline hook posted before exiting");
     assert.equal(body.kind, "stop");
+  });
+
+  it("observes a PermissionRequest as waiting and prints no decision", async () => {
+    const run = await runHook(
+      { HUB_HOOK_INLINE: "1" },
+      { hook_event_name: "PermissionRequest", session_id: "hook-permission", cwd: "C:/p", tool_name: "Bash", tool_input: { command: "rm -rf build" } },
+    );
+    assert.equal(run.code, 0);
+    assert.equal(run.stdout, "");
+    const body = received.find((item) => item.sessionId === "hook-permission");
+    assert.ok(body, "permission request posted");
+    assert.equal(body.kind, "permission_request");
+    assert.equal(body.message, "Claude needs your permission to use Bash");
+  });
+
+  it("posts a StopFailure as the end of a failed turn with the API error text", async () => {
+    const run = await runHook(
+      { HUB_HOOK_INLINE: "1" },
+      { hook_event_name: "StopFailure", session_id: "hook-stop-failure", cwd: "C:/f", error: "rate_limit", error_details: "429 Too Many Requests", last_assistant_message: "API Error: Rate limit reached" },
+    );
+    assert.equal(run.code, 0);
+    assert.equal(run.stdout, "");
+    const body = received.find((item) => item.sessionId === "hook-stop-failure");
+    assert.ok(body, "stop failure posted");
+    assert.equal(body.kind, "stop_failure");
+    assert.equal(body.message, "API Error: Rate limit reached");
+  });
+
+  it("passes notification_type through to the hub", async () => {
+    await runHook({ HUB_HOOK_INLINE: "1" }, { hook_event_name: "Notification", session_id: "hook-notification", message: "Signed in", notification_type: "auth_success" });
+    const body = received.find((item) => item.sessionId === "hook-notification");
+    assert.ok(body, "notification posted");
+    assert.equal(body.kind, "notification");
+    assert.equal(body.notificationType, "auth_success");
   });
 });

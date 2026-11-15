@@ -133,11 +133,14 @@ export interface RuntimeSnapshot {
 export interface WslHookStatus {
   distro: string;
   installed?: boolean;
+  outdated?: boolean;
   error?: string;
 }
 
 export interface HooksStatus {
   installed: boolean;
+  outdated?: boolean;
+  missing?: string[];
   events: string[];
   settingsPath?: string;
   notifyPath?: string;

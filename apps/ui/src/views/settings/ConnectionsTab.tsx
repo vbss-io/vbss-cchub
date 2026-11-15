@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { HooksStatus } from "../../api";
+import { hooksView } from "../../hooks-status";
 import type { ConnectStatus, McpClient, ShellKind } from "../../delegation";
 
 const MCP_LABEL: Record<McpClient, string> = {
@@ -32,28 +33,29 @@ export function ConnectionsTab({ enabled, hubUrl, connect, hooks, hooksBusy, onT
     }
   };
   const wslInstalled = hooks?.wsl?.filter((item) => item.installed).length ?? 0;
+  const view = hooksView(hooks);
 
   return (
     <>
       <section className="settings__section" id="settings-hooks">
         <h2>Hooks</h2>
         <p className="hint">
-          Claude Code hooks are how sessions reach the hub: session start, prompts, notifications, stops, subagent start and stop, session end. They post to <code>{hubUrl}</code> and never block Claude.
+          Claude Code hooks are how sessions reach the hub: session start, prompts, notifications, permission requests, stops and failed stops, subagent start and stop, session end. They post to <code>{hubUrl}</code> and never block Claude.
         </p>
         <div className="statusrow">
-          <span className={`tag tag--${hooks?.installed ? "go" : "muted"}`}>{!hooks ? "checking" : hooks.installed ? "installed" : "not installed"}</span>
-          {hooks?.installed && <span className="muted">{hooks.events.length} events{wslInstalled > 0 ? ` · ${wslInstalled} WSL distro${wslInstalled === 1 ? "" : "s"}` : ""}</span>}
+          <span className={`tag tag--${view.tone}`}>{view.tag}</span>
+          {view.detail && <span className="muted">{view.detail}{hooks?.installed && wslInstalled > 0 ? ` · ${wslInstalled} WSL distro${wslInstalled === 1 ? "" : "s"}` : ""}</span>}
           {hooks?.settingsPath && <span className="path muted">{hooks.settingsPath}</span>}
           <span className="spacer" />
           <button className={`act ${hooks?.installed ? "" : "act--focus"}`} disabled={hooksBusy || !hooks} onClick={onToggleHooks}>
-            {hooksBusy ? "Working…" : hooks?.installed ? "Remove hooks" : "Install hooks"}
+            {hooksBusy ? "Working…" : view.action}
           </button>
         </div>
         {hooks?.wsl && hooks.wsl.length > 0 && (
           <ul className="plainlist">
             {hooks.wsl.map((item) => (
               <li key={item.distro}>
-                <span className="muted">WSL {item.distro}:</span> {item.error ?? (item.installed ? "installed" : "not installed")}
+                <span className="muted">WSL {item.distro}:</span> {item.error ?? (item.installed ? "installed" : item.outdated ? "update available" : "not installed")}
               </li>
             ))}
           </ul>

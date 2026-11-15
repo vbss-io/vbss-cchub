@@ -255,3 +255,87 @@ it("an idle-prompt notification means idle, a permission prompt means waiting", 
   const decision = db.applyHook(payload({ sessionId: "np-sess", kind: "notification", message: "Claude needs your permission to use Bash", notificationType: "permission_prompt" }));
   assert.equal(decision.status, "waiting");
 });
+
+describe("notification types", () => {
+  for (const type of ["permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"]) {
+    it(`${type} means the session waits for the user`, () => {
+      const sessionId = `nt-wait-${type}`;
+      db.applyHook(payload({ sessionId, kind: "user_prompt" }));
+      const after = db.applyHook(payload({ sessionId, kind: "notification", notificationType: type, message: `needs you (${type})` }));
+      assert.equal(after.status, "waiting");
+      assert.equal(after.lastMessage, `needs you (${type})`);
+    });
+  }
+
+  it("idle_prompt means idle whatever the text says", () => {
+    db.applyHook(payload({ sessionId: "nt-idle", kind: "user_prompt" }));
+    const after = db.applyHook(payload({ sessionId: "nt-idle", kind: "notification", notificationType: "idle_prompt", message: "anything" }));
+    assert.equal(after.status, "idle");
+  });
+
+  it("quota_auto_resume_fired means Claude went back to work", () => {
+    db.applyHook(payload({ sessionId: "nt-resume", kind: "stop_failure", message: "API Error: Rate limit reached" }));
+    const after = db.applyHook(payload({ sessionId: "nt-resume", kind: "notification", notificationType: "quota_auto_resume_fired", message: "Resuming" }));
+    assert.equal(after.status, "active");
+  });
+
+  const unchanged = [
+    "auth_success",
+    "auth_storage_failure",
+    "elicitation_complete",
+    "elicitation_response",
+    "agent_completed",
+    "quota_auto_resume_stale",
+    "quota_auto_resume_disabled",
+    "plugin_notification",
+    "some_future_type",
+  ];
+  for (const type of unchanged) {
+    it(`${type} leaves the status of an active or idle session alone and still records the message`, () => {
+      const working = `nt-keep-active-${type}`;
+      db.applyHook(payload({ sessionId: working, kind: "user_prompt" }));
+      const active = db.applyHook(payload({ sessionId: working, kind: "notification", notificationType: type, message: `info ${type}` }));
+      assert.equal(active.status, "active");
+      assert.equal(active.unread, false);
+      assert.equal(active.lastMessage, `info ${type}`);
+      const resting = `nt-keep-idle-${type}`;
+      db.applyHook(payload({ sessionId: resting, kind: "user_prompt", model: "claude-opus-4-8" }), Date.now() - 2_000);
+      const stopped = db.applyHook(payload({ sessionId: resting, kind: "stop" }), Date.now() - 1_000);
+      assert.equal(stopped.unread, true);
+      db.markSessionSeen(resting);
+      const idle = db.applyHook(payload({ sessionId: resting, kind: "notification", notificationType: type, message: `info ${type}` }));
+      assert.equal(idle.status, "idle");
+      assert.equal(idle.unread, false);
+    });
+  }
+
+  it("without notification_type (older Claude Code) the text decides: waiting for input is idle, anything else waits", () => {
+    db.applyHook(payload({ sessionId: "nt-legacy", kind: "user_prompt" }));
+    const asks = db.applyHook(payload({ sessionId: "nt-legacy", kind: "notification", message: "Claude needs your permission to use Bash" }));
+    assert.equal(asks.status, "waiting");
+    const rests = db.applyHook(payload({ sessionId: "nt-legacy", kind: "notification", message: "Claude is waiting for your input" }));
+    assert.equal(rests.status, "idle");
+  });
+});
+
+describe("turn end and permission hooks", () => {
+  it("StopFailure ends the turn as idle and keeps the API error as the last message", () => {
+    db.applyHook(payload({ sessionId: "sf-sess", kind: "user_prompt", model: "claude-opus-4-8" }), Date.now() - 1_000);
+    const failed = db.applyHook(payload({ sessionId: "sf-sess", kind: "stop_failure", message: "API Error: Rate limit reached" }));
+    assert.equal(failed.status, "idle");
+    assert.equal(failed.lastMessage, "API Error: Rate limit reached");
+    assert.equal(failed.unread, true);
+  });
+
+  it("PermissionRequest waits right away, a new prompt or the end of the turn moves it on", () => {
+    db.applyHook(payload({ sessionId: "pr-sess", kind: "user_prompt" }));
+    const asked = db.applyHook(payload({ sessionId: "pr-sess", kind: "permission_request", message: "Claude needs your permission to use Bash" }));
+    assert.equal(asked.status, "waiting");
+    assert.equal(asked.lastMessage, "Claude needs your permission to use Bash");
+    const prompted = db.applyHook(payload({ sessionId: "pr-sess", kind: "user_prompt" }));
+    assert.equal(prompted.status, "active");
+    db.applyHook(payload({ sessionId: "pr-sess", kind: "permission_request" }));
+    const ended = db.applyHook(payload({ sessionId: "pr-sess", kind: "stop" }));
+    assert.equal(ended.status, "idle");
+  });
+});

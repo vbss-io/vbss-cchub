@@ -219,6 +219,18 @@ describe("codex runner", () => {
   });
 });
 
+describe("delegated run hooks", () => {
+  it("report the end of a failed turn but never observe permission requests a headless run cannot show", async () => {
+    const { shareSettingsJson } = await import("../src/executor.js");
+    for (const guard of [false, true]) {
+      const settings = JSON.parse(shareSettingsJson(guard)) as { hooks: Record<string, unknown[]> };
+      assert.ok(settings.hooks.StopFailure, "StopFailure registered");
+      assert.ok(settings.hooks.Stop, "Stop still registered");
+      assert.equal(settings.hooks.PermissionRequest, undefined);
+    }
+  });
+});
+
 after(() => {
   rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });

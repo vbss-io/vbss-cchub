@@ -172,6 +172,8 @@ const kindByEvent = {
   UserPromptSubmit: "user_prompt",
   Notification: "notification",
   Stop: "stop",
+  StopFailure: "stop_failure",
+  PermissionRequest: "permission_request",
   SubagentStart: "subagent_start",
   SubagentStop: "subagent_stop",
   SessionEnd: "session_end",
@@ -200,6 +202,9 @@ const sessionId = input.session_id ?? process.env.CLAUDE_CODE_SESSION_ID ?? null
 if (!sessionId) process.exit(0);
 const lastAssistant =
   typeof input.last_assistant_message === "string" ? input.last_assistant_message.slice(0, 400) : null;
+const textOf = (value) => (typeof value === "string" && value.length > 0 ? value : null);
+const permissionMessage = kind === "permission_request" && textOf(input.tool_name) ? `Claude needs your permission to use ${input.tool_name}` : null;
+const failureMessage = kind === "stop_failure" ? (textOf(input.error_details) ?? textOf(input.error)) : null;
 const shareLabel = process.env.HUB_SHARE_LABEL ?? null;
 const clientFor = (host) => (shareLabel ? "share" : isHeadless ? (process.env.HUB_DELEGATED === "1" ? "hub" : "headless") : (host ?? "terminal"));
 
@@ -211,7 +216,7 @@ function buildBody(eventKind, hostInfo, transcript, withMessage) {
     source: SOURCE,
     hostPid: hostInfo.hostPid,
     shellPid: hostInfo.shellPid,
-    message: withMessage ? (input.message ?? (input.agent_id ? null : lastAssistant)) : null,
+    message: withMessage ? (input.message ?? permissionMessage ?? (input.agent_id ? null : (lastAssistant ?? failureMessage))) : null,
     notificationType: typeof input.notification_type === "string" ? input.notification_type : null,
     title: transcript ? sessionTitle(sessionId, transcript.title, transcript.customTitle) : null,
     model: transcript ? transcript.model : null,

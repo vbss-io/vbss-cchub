@@ -17,7 +17,8 @@ const settingsPath = flag("--settings") ?? join(homedir(), ".claude", "settings.
 const source = flag("--source");
 const runner = flag("--runner") ?? "node";
 
-const EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd", "SubagentStart", "SubagentStop"];
+const EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure", "SessionEnd", "SubagentStart", "SubagentStop"];
+const TIMEOUTS = { SessionEnd: 5 };
 const posix = (value) => value.replace(/\\/g, "/");
 const quotedRunner = runner === "node" || runner === "sh" ? runner : `"${posix(runner)}"`;
 const command = `${source ? `HUB_SOURCE=${source} ` : ""}${quotedRunner} "${posix(notifyPath)}"`;
@@ -45,10 +46,17 @@ function writeSettings(settings) {
   writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 }
 
+const hubHook = (event) => (TIMEOUTS[event] ? { type: "command", command, timeout: TIMEOUTS[event] } : { type: "command", command });
+
+const isCurrent = (event, entry) =>
+  !TIMEOUTS[event] || entry.hooks.some((h) => typeof h?.command === "string" && typeof h.timeout === "number" && h.timeout > 0);
+
 function status(settings) {
   const hooks = settings?.hooks ?? {};
-  const events = EVENTS.filter((event) => Array.isArray(hooks[event]) && hooks[event].some(isOurs));
-  return { installed: events.length === EVENTS.length, events, settingsPath, notifyPath };
+  const ours = (event) => (Array.isArray(hooks[event]) ? hooks[event].filter(isOurs) : []);
+  const events = EVENTS.filter((event) => ours(event).length > 0);
+  const missing = EVENTS.filter((event) => !ours(event).some((entry) => isCurrent(event, entry)));
+  return { installed: missing.length === 0, outdated: events.length > 0 && missing.length > 0, missing, events, settingsPath, notifyPath };
 }
 
 function install(settings) {
@@ -57,7 +65,7 @@ function install(settings) {
     const list = (Array.isArray(settings.hooks[event]) ? settings.hooks[event] : []).filter(
       (entry) => !isOurs(entry),
     );
-    list.push({ hooks: [{ type: "command", command }] });
+    list.push({ hooks: [hubHook(event)] });
     settings.hooks[event] = list;
   }
   return settings;
