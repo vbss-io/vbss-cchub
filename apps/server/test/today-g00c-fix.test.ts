@@ -1597,3 +1597,162 @@ describe("G00c fix wave 6, findings 1, 3 and 4: the scheduled token is an hourgl
     assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
   });
 });
+
+describe("G00c fix wave 7, finding 1: a group ends where the block of its last line ends, blank lines inside the block included", () => {
+  const T = ` ${SCHEDULED} ${TODAY}`;
+  const scheduleFour = (settings: DelegationSettings, date: string | null): void => {
+    const four = taskIn(settings, "alpha", "Four");
+    today.todayApi.schedule(settings, { projectId: "alpha", line: four.line, raw: four.raw, date, from: TODAY });
+    settle(settings, TODAY);
+  };
+
+  it("Add to focus lands after a child typed below a blank line, and removing it again leaves the daily and the child's date byte for byte", () => {
+    const root = lab(
+      { alpha: project("Alpha", [`- [ ] One${T}`, `- [ ] Two${T}`, `  - [ ] Sub two${T}`, "- [ ] Four"]) },
+      { [TODAY]: dailyOf(TODAY, [alphaLine("One"), alphaLine("Two"), "", "  - [ ] Sub two", "", "- [ ] free"]) },
+    );
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    const typed = read(root, dailyRel(TODAY));
+    scheduleFour(settings, TODAY);
+    const added = read(root, dailyRel(TODAY));
+    assert.ok(added.includes(`${alphaLine("Two")}\n\n  - [ ] Sub two\n${alphaLine("Four")}\n\n- [ ] free`), added);
+    scheduleFour(settings, null);
+    assert.equal(read(root, dailyRel(TODAY)), typed);
+    assert.deepEqual(projectLines(root, "alpha"), [`- [ ] One${T}`, `- [ ] Two${T}`, `  - [ ] Sub two${T}`, "- [ ] Four"]);
+    assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+  });
+
+  for (const how of ["hub", "project"] as const) {
+    it(`a loose note under the last line of the group survives the added line going away from the ${how}`, () => {
+      const note = "  - loose note under two: call Ana 555-1234";
+      const root = lab(
+        { alpha: project("Alpha", [`- [ ] One${T}`, `- [ ] Two${T}`, "- [ ] Four"]) },
+        { [TODAY]: dailyOf(TODAY, [alphaLine("One"), "", alphaLine("Two"), "", note, "", "- [ ] free"]) },
+      );
+      const settings = useVault(root);
+      settle(settings, TODAY);
+      const typed = read(root, dailyRel(TODAY));
+      scheduleFour(settings, TODAY);
+      const added = read(root, dailyRel(TODAY));
+      assert.ok(added.includes(`${alphaLine("Two")}\n\n${note}\n${alphaLine("Four")}\n`), added);
+      if (how === "hub") scheduleFour(settings, null);
+      else {
+        editProject(root, "alpha", (content) => content.replace(`- [ ] Four${T}`, "- [ ] Four"));
+        settle(settings, TODAY);
+      }
+      assert.equal(read(root, dailyRel(TODAY)), typed);
+      assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+    });
+  }
+});
+
+describe("G00c fix wave 7, finding 2: adding then removing the scheduled token gives the line back byte for byte", () => {
+  const D = "2026-11-16";
+  const PRES = ["", "Ship ", "Ship it ", "Ship"];
+  const SPACES = ["", " ", "   ", "\t", " "];
+  const VALUES = ["2026-11-20", "2026-13-45", "2026-1-5", "10:30", "tomorrow", "\u{1F389}", "[[link]]", "", "2026-11-20x", "2026-11-20."];
+  const POSTS = ["", " it", ` ${DUE} 2026-11-30`, " ^abc12", " #tag", " #tag it", ` ${DUE} 2026-11-30 ^abc12`, "  ", ` ${DONE} 2026-11-10`];
+  const EXTRA = [
+    `- [ ] Ship  ${DUE} 2026-11-30`,
+    `- [ ] Ship\t${DUE} 2026-11-30`,
+    `- [ ] Ship \t${DUE} 2026-11-30`,
+    `- [ ] Ship  ${DONE} 2026-11-10`,
+    "- [ ] Ship   ^abc",
+    "- [ ] Ship  ",
+    `- [ ] Ship ${START} 2026-11-01  ${DUE} 2026-11-30`,
+    `- [ ] Ship ${REPEAT} every day  #tag`,
+    `- [ ] ${DUE} 2026-11-30  Ship`,
+  ];
+
+  it("for every line without a scheduled token, in the token matrix and beyond", () => {
+    const settings = useVault(lab({ alpha: project("Alpha", ["- [ ] x"]) }));
+    const raws = [...EXTRA];
+    for (const pre of PRES) for (const space of SPACES) for (const value of VALUES) for (const post of POSTS) {
+      if (`${pre}${space}${value}${post}` !== "") raws.push(`- [ ] ${pre}${SCHEDULED}${space}${value}${post}`);
+    }
+    let checked = 0;
+    for (const raw of raws) {
+      if (board.withScheduledToken(raw, settings.tasks, null) !== raw) continue;
+      const added = board.withScheduledToken(raw, settings.tasks, D);
+      assert.notEqual(added, raw, raw);
+      assert.equal(board.withScheduledToken(added, settings.tasks, null), raw, `${JSON.stringify(raw)} -> ${JSON.stringify(added)}`);
+      checked += 1;
+    }
+    assert.ok(checked > 600, String(checked));
+  });
+
+  it("removing an existing token takes one space next to it and never collapses the rest", () => {
+    const settings = useVault(lab({ alpha: project("Alpha", ["- [ ] x"]) }));
+    const cases: [string, string][] = [
+      [`- [ ] Ship  ${SCHEDULED} 2026-11-20  #tag`, "- [ ] Ship   #tag"],
+      [`- [ ] Ship\t${SCHEDULED} 2026-11-20 ${DUE} 2026-11-30`, `- [ ] Ship\t${DUE} 2026-11-30`],
+      [`- [ ] Ship ${SCHEDULED} 2026-11-20\t${DUE} 2026-11-30`, `- [ ] Ship\t${DUE} 2026-11-30`],
+      [`- [ ] Ship  ${SCHEDULED} 2026-11-20`, "- [ ] Ship "],
+      [`- [ ] Ship ${SCHEDULED}2026-11-20 later`, "- [ ] Ship later"],
+    ];
+    for (const [raw, cleared] of cases) assert.equal(board.withScheduledToken(raw, settings.tasks, null), cleared, raw);
+  });
+});
+
+describe("G00c fix wave 7, finding 3: the hourglass value a typed line replaced comes back when the line goes", () => {
+  const FUTURE = shift(TODAY, 5);
+  const CASES: [string, string][] = [
+    ["Ship", `Ship ${SCHEDULED} 2026-13-45`],
+    ["Ship", `Ship ${SCHEDULED}2026-02-30`],
+    ["Ship", `Ship ${SCHEDULED}${FUTURE}`],
+    ["Ship later", `Ship ${SCHEDULED}  ${FUTURE} later`],
+  ];
+  for (const [title, raw] of CASES) {
+    it(`restores ${JSON.stringify(raw)} byte for byte`, () => {
+      const root = lab({ alpha: project("Alpha", [`- [ ] ${raw}`, "- [ ] Other"]) }, { [TODAY]: dailyOf(TODAY, ["- [ ] free"]) });
+      const settings = useVault(root);
+      settle(settings, TODAY);
+      assert.equal(taskIn(settings, "alpha", title).title, title);
+      const line = alphaLine(title);
+      editDaily(root, TODAY, (content) => content.replace("- [ ] free", `- [ ] free\n${line}`));
+      settle(settings, TODAY);
+      assert.equal(taskIn(settings, "alpha", title).scheduled, TODAY);
+      editDaily(root, TODAY, (content) => content.replace(`${line}\n`, ""));
+      settle(settings, TODAY);
+      assert.deepEqual(projectLines(root, "alpha"), [`- [ ] ${raw}`, "- [ ] Other"]);
+      assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
+    });
+  }
+});
+
+describe("G00c fix wave 7, finding 4: a signifier right after the date ends the scheduled token", () => {
+  it("reads the date and keeps the signifier, while another hourglass or an emoji glued to the date stays text", () => {
+    const root = lab({ alpha: project("Alpha", ["- [ ] x"]) });
+    const settings = useVault(root);
+    const D = "2026-11-20";
+    const lines = [
+      `- [ ] A ${SCHEDULED} ${D}${DUE} 2026-11-30`,
+      `- [ ] B ${SCHEDULED} ${D}${DONE} 2026-11-10`,
+      `- [ ] C ${SCHEDULED} ${D}${START} 2026-11-01`,
+      `- [ ] D ${SCHEDULED} ${D}➕ 2026-11-01`,
+      `- [ ] E ${SCHEDULED} ${D}⛔ abc`,
+      `- [ ] F ${SCHEDULED} ${D}${REPEAT} every day`,
+      `- [ ] G ⌛ ${D}`,
+      `- [ ] H ${SCHEDULED} ${D}\u{1F389}`,
+    ];
+    write(root, "projects/alpha.md", project("Alpha", lines));
+    const tasks = board
+      .readBoard(settings)
+      .tasks.filter((task) => task.projectId === "alpha")
+      .sort((a, b) => a.line - b.line);
+    assert.deepEqual(
+      tasks.map((task) => task.scheduled),
+      [D, D, D, D, D, D, null, null],
+    );
+    assert.equal(tasks[0]?.title, "A");
+    assert.equal(tasks[0]?.due, "2026-11-30");
+    assert.equal(tasks[2]?.start, "2026-11-01");
+    assert.equal(tasks[5]?.repeat, "every day");
+    for (const task of tasks.slice(0, 6)) assert.ok(!task.title.includes(SCHEDULED), task.title);
+    assert.equal(tasks[6]?.title, `G ⌛ ${D}`);
+    assert.equal(tasks[7]?.title, `H ${SCHEDULED} ${D}\u{1F389}`);
+    assert.equal(board.withScheduledToken(lines[0] as string, settings.tasks, "2026-11-16"), `- [ ] A ${SCHEDULED} 2026-11-16${DUE} 2026-11-30`);
+    assert.equal(board.withScheduledToken(lines[0] as string, settings.tasks, null), `- [ ] A ${DUE} 2026-11-30`);
+  });
+});

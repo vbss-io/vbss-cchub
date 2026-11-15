@@ -59,7 +59,9 @@ import {
   readProjectState,
   replaceProjectFile,
   writeBoardTask,
+  scheduledTokenOf,
   writeScheduledToken,
+  writeScheduledTokenText,
   type AddToDailyInput,
   type AddToDailyResult,
   type BoardCheckbox,
@@ -543,7 +545,8 @@ interface StoredYield {
 
 interface StoredMove {
   print: string;
-  from: string;
+  from: string | null;
+  token?: string;
 }
 
 interface SyncSets {
@@ -628,9 +631,7 @@ function parseSync(value: unknown): SyncSets | null {
   const yielded = Array.isArray(value.yielded)
     ? value.yielded.flatMap((item: unknown): StoredYield[] => (isRecord(item) && typeof item.print === "string" && typeof item.to === "string" && isValidDailyDate(item.to) ? [{ print: item.print, to: item.to }] : []))
     : [];
-  const moved = Array.isArray(value.moved)
-    ? value.moved.flatMap((item: unknown): StoredMove[] => (isRecord(item) && typeof item.print === "string" && typeof item.from === "string" && isValidDailyDate(item.from) ? [{ print: item.print, from: item.from }] : []))
-    : [];
+  const moved = Array.isArray(value.moved) ? value.moved.flatMap(parseMove) : [];
   return {
     linked: parseStrings(value.linked),
     dated: parseStrings(value.dated),
@@ -639,6 +640,14 @@ function parseSync(value: unknown): SyncSets | null {
     ...(moved.length > 0 ? { moved } : {}),
     ...(value.adopted === true ? { adopted: true } : {}),
   };
+}
+
+function parseMove(item: unknown): StoredMove[] {
+  if (!isRecord(item) || typeof item.print !== "string") return [];
+  const token = typeof item.token === "string" ? item.token : undefined;
+  const from = typeof item.from === "string" && isValidDailyDate(item.from) ? item.from : null;
+  if (from === null && (item.from !== null || token === undefined)) return [];
+  return [{ print: item.print, from, ...(token !== undefined ? { token } : {}) }];
 }
 
 function parseUnmatched(value: unknown): StoredUnmatched[] {
@@ -966,9 +975,8 @@ function insertionSpot(settings: DelegationSettings, texts: string[], board: Com
     if (at < texts.length && isBlankText(texts[at])) return { at: at + 1, prefix: [], suffix: at + 1 < texts.length && !isBlankText(texts[at + 1]) ? [""] : [] };
     return { at, prefix: [""], suffix: at < texts.length ? [""] : [] };
   }
-  let top = last;
-  while (top > range.heading && (isBlankText(texts[top]) || indentWidth(texts[top] as string) > 0)) top -= 1;
-  const lastText = top > range.heading ? (texts[top] as string) : undefined;
+  const top = lineBlocks(texts, range.heading + 1, last + 1).at(-1)?.[0];
+  const lastText = top !== undefined && indentWidth(texts[top] as string) === 0 ? (texts[top] as string) : undefined;
   if (lastText !== undefined && isPlaceholderLine(lastText)) return { at: last + 1, prefix: [], suffix: [] };
   const lastProject = projectOfFocusLine(lastText, board);
   const firstProject = projectOfFocusLine(first, board);
@@ -1081,7 +1089,7 @@ function insertMissing(
     }
     const texts = textsOf();
     const start = at[0] as number;
-    const last = start + taskBlock(texts.join("\n"), start).split(LINE_SPLIT_RE).length - 1;
+    const last = start + blockLength(texts.join("\n"), start) - 1;
     const parentLead = leadOf(texts[start] as string);
     let childLead: string | null = null;
     for (let index = start + 1; index <= last; index += 1) {
@@ -1198,23 +1206,10 @@ function insertMissing(
 function projectGroupEnd(settings: DelegationSettings, texts: string[], board: ComposeBoard, projectId: string): number | null {
   const range = focusRange(texts, settings);
   if (!range) return null;
-  const ownTop = (text: string): boolean => indentWidth(text) === 0 && projectOfFocusLine(text, board) === projectId;
   let end: number | null = null;
-  let index = range.heading + 1;
-  while (index < range.end) {
-    if (!ownTop(texts[index] as string)) {
-      index += 1;
-      continue;
-    }
-    let last = index;
-    index += 1;
-    while (index < range.end) {
-      const text = texts[index] as string;
-      if (isBlankText(text) || (indentWidth(text) === 0 && !ownTop(text))) break;
-      last = index;
-      index += 1;
-    }
-    end = last;
+  for (const [start, stop] of lineBlocks(texts, range.heading + 1, range.end)) {
+    const text = texts[start] as string;
+    if (indentWidth(text) === 0 && projectOfFocusLine(text, board) === projectId) end = stop - 1;
   }
   return end;
 }
@@ -2064,7 +2059,8 @@ function legacySets(settings: DelegationSettings, date: string, baseline: Baseli
 
 interface Restore {
   task: BoardTask;
-  to: string;
+  to: string | null;
+  token?: string;
 }
 
 interface Reconciled {
@@ -2226,7 +2222,7 @@ function reconcile(
   const linkedBase = new Set(base.linked);
   const datedBase = new Set(base.dated);
   const adopted = base.adopted === true;
-  const movedFrom = new Map((base.moved ?? []).map((item) => [item.print, item.from]));
+  const movedFrom = new Map((base.moved ?? []).map((item) => [item.print, item]));
   const lineCredit = renameCredit(linkedBase, new Set(lines.keys()), prints);
   const dateCredit = renameCredit(datedBase, new Set(datedNow.keys()), prints);
   const out: Reconciled = { schedule: [], unschedule: [], restore: [], removed: 0, drop: [], insert: new Set<string>(), yielded: [], projects: new Set<string>() };
@@ -2254,9 +2250,9 @@ function reconcile(
     if (task === null || leaving.has(task.id) || isRecurringTask(task) || isHistory(task) || task.scheduled !== date) continue;
     if (own === null && (lines.has(fingerprint(task)) || linkedBase.has(fingerprint(task)) || held.has(fingerprint(task)))) continue;
     leaving.add(task.id);
-    const from = movedFrom.get(print);
-    if (from === undefined) out.unschedule.push(task);
-    else out.restore.push({ task, to: from });
+    const move = movedFrom.get(print);
+    if (move === undefined) out.unschedule.push(task);
+    else out.restore.push({ task, to: move.from, ...(move.token !== undefined ? { token: move.token } : {}) });
     out.removed += 1;
   }
   for (const print of datedBase) {
@@ -2311,6 +2307,16 @@ let committingFor: string | null = null;
 
 function applyDates(settings: DelegationSettings, date: string, plan: Reconciled): number {
   let written = 0;
+  const restoreToken = (task: BoardTask, token: string): boolean => {
+    try {
+      writeScheduledTokenText(settings, { projectId: task.projectId, line: task.line, raw: task.raw, token });
+      written += 1;
+      return true;
+    } catch (err) {
+      console.error(`focus mirror could not restore the scheduled token of ${task.id} from the daily of ${date}: ${errorText(err)}`);
+      return false;
+    }
+  };
   const write = (task: BoardTask, scheduled: string | null, moves: boolean): void => {
     try {
       writeScheduled(settings, task, scheduled, moves);
@@ -2323,23 +2329,44 @@ function applyDates(settings: DelegationSettings, date: string, plan: Reconciled
   try {
     for (const task of plan.schedule) write(task, date, true);
     for (const task of plan.unschedule) write(task, null, true);
-    for (const item of plan.restore) write(item.task, item.to, false);
+    for (const item of plan.restore) if (item.token === undefined || !restoreToken(item.task, item.token)) write(item.task, item.to, false);
   } finally {
     committingFor = null;
   }
   return written;
 }
 
-function movesAfter(base: SyncSets, plan: Reconciled, data: BoardData, date: string): StoredMove[] {
+function movesAfter(settings: DelegationSettings, base: SyncSets, plan: Reconciled, data: BoardData, date: string): StoredMove[] {
   const prints = printIndex(data);
   const restored = new Set(plan.restore.map((item) => fingerprint(item.task)));
-  const fresh = plan.schedule.flatMap((task): StoredMove[] => (task.scheduled !== null && task.scheduled !== date ? [{ print: fingerprint(task), from: task.scheduled }] : []));
+  const fresh = plan.schedule.flatMap((task): StoredMove[] => {
+    const token = scheduledTokenOf(task.raw, settings.tasks);
+    const from = task.scheduled !== null && task.scheduled !== date ? task.scheduled : null;
+    if (token === null && from === null) return [];
+    return [{ print: fingerprint(task), from, ...(token !== null ? { token } : {}) }];
+  });
   const kept = (base.moved ?? []).filter((item) => !restored.has(item.print) && !fresh.some((other) => other.print === item.print));
   return [...kept, ...fresh].filter((item) => taskOfPrint(prints, item.print)?.scheduled === date);
 }
 
 function blockLength(content: string, line: number): number {
   return Math.max(1, taskBlock(content, line).split(LINE_SPLIT_RE).length);
+}
+
+function lineBlocks(texts: readonly string[], from: number, to: number): [number, number][] {
+  const content = texts.join("\n");
+  const blocks: [number, number][] = [];
+  let index = from;
+  while (index < to) {
+    if (isBlankText(texts[index])) {
+      index += 1;
+      continue;
+    }
+    const end = Math.min(index + blockLength(content, index), to);
+    blocks.push([index, end]);
+    index = end;
+  }
+  return blocks;
 }
 
 function dropBlocks(doc: ParsedDoc, content: string, starts: number[], mirrors: ReadonlyMap<number, ReadonlySet<number>> | null = null): number {
@@ -2793,7 +2820,7 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
           new Set(printsOf(synced.filter((member) => !reconciled.drop.includes(member.entry.line)).map((member) => member.task))),
           held,
           reconciled.yielded,
-          movesAfter(base, reconciled, data, date),
+          movesAfter(settings, base, reconciled, data, date),
         ),
       },
     });
@@ -3244,7 +3271,7 @@ function noteView(settings: DelegationSettings, date: string, daily: DailyReadRe
       index += 1;
       continue;
     }
-    const length = Math.max(1, taskBlock(content, index).split(LINE_SPLIT_RE).length);
+    const length = blockLength(content, index);
     const end = Math.min(index + length, range.end);
     const entry = entries.get(index);
     const task = entry?.match.task ?? null;

@@ -518,14 +518,17 @@ function signifierMatches(text: string, config: TasksFeatureSettings): RegExpMat
   return [...text.matchAll(signifierRegExp(config))].filter((match) => {
     const at = (match.index ?? 0) + (match[1] ?? "").length;
     if (spans.some(([from, to]) => at >= from && at < to)) return false;
-    if (match[2] === SCHEDULED_MARK) return endsAtWhitespace(text, match);
+    if (match[2] === SCHEDULED_MARK) return endsAtBoundary(text, match);
     if (match[2] !== undefined) return isBoardDate(match[3] ?? "");
     return (match[4] ?? "").trim() !== "";
   });
 }
 
-function endsAtWhitespace(text: string, match: RegExpMatchArray): boolean {
-  return (match[5] ?? "") !== "" || (match.index ?? 0) + match[0].length === text.length;
+const TOKEN_END_MARKS = [DUE_MARK, "\u2705", START_MARK, "\u2795", "\u26D4", REPEAT_MARK];
+
+function endsAtBoundary(text: string, match: RegExpMatchArray): boolean {
+  const end = (match.index ?? 0) + match[0].length;
+  return (match[5] ?? "") !== "" || end === text.length || TOKEN_END_MARKS.some((mark) => text.startsWith(mark, end));
 }
 
 function stripSignifiers(text: string, matches: RegExpMatchArray[]): string {
@@ -1659,27 +1662,49 @@ function scheduledTokenText(token: string, scheduled: string): string {
   return `${/[ \t]$/u.test(lead) ? lead : `${lead} `}${scheduled}`;
 }
 
+const STOP_LEAD_RE = new RegExp(`^${STOP_SOURCE}`, "u");
+const isSpace = (ch: string | undefined): boolean => ch !== undefined && /\s/u.test(ch);
+
+function removalRange(rest: string, span: TokenSpan): [number, number] {
+  const before = span.start > 0 && isSpace(rest[span.start - 1]);
+  const after = isSpace(rest[span.end]);
+  if (span.start === 0) return [span.start, after ? span.end + 1 : span.end];
+  if (before && after) return rest[span.end] === " " && STOP_LEAD_RE.test(rest.slice(span.end + 1)) ? [span.start, span.end + 1] : [span.start - 1, span.end];
+  if (before && span.end >= rest.length) return [span.start - 1, span.end];
+  return [span.start, span.end];
+}
+
 function withoutSpans(rest: string, spans: TokenSpan[]): string {
   let next = rest;
   for (const span of [...spans].reverse()) {
-    const before = next.slice(0, span.start);
-    const kept = before.trimEnd();
-    next = kept.length < before.length ? kept + next.slice(span.end) : before + next.slice(span.end).trimStart();
+    const [from, to] = removalRange(next, span);
+    next = next.slice(0, from) + next.slice(to);
   }
   return next;
 }
 
-export function withScheduledToken(raw: string, config: TasksFeatureSettings, scheduled: string | null): string {
+interface TokenLine {
+  head: string;
+  rest: string;
+  spans: TokenSpan[];
+  own: TokenSpan[];
+}
+
+function tokenLine(raw: string, config: TasksFeatureSettings): TokenLine | null {
   const parts = raw.match(TASK_PARTS_RE);
-  if (!parts) throw new BadRequestError("not a task line");
+  if (!parts) return null;
   const rest = parts[5] as string;
-  const head = raw.slice(0, raw.length - rest.length);
   const spans = tokenSpans(rest, config);
-  const own = spans.filter((span) => span.mark === SCHEDULED_MARK);
-  if (scheduled === null) return `${head}${withoutSpans(rest, own)}`;
-  const [first, ...others] = own;
+  return { head: raw.slice(0, raw.length - rest.length), rest, spans, own: spans.filter((span) => span.mark === SCHEDULED_MARK) };
+}
+
+function placeScheduledToken(raw: string, config: TasksFeatureSettings, render: (current: string | null) => string): string {
+  const line = tokenLine(raw, config);
+  if (line === null) throw new BadRequestError("not a task line");
+  const { head, rest, spans } = line;
+  const [first, ...others] = line.own;
   if (first !== undefined) {
-    const marked = `${rest.slice(0, first.start)}${scheduledTokenText(rest.slice(first.start, first.end), scheduled)}${rest.slice(first.end)}`;
+    const marked = `${rest.slice(0, first.start)}${render(rest.slice(first.start, first.end))}${rest.slice(first.end)}`;
     const grown = marked.length - rest.length;
     return `${head}${withoutSpans(marked, others.map((span) => ({ ...span, start: span.start + grown, end: span.end + grown })))}`;
   }
@@ -1687,9 +1712,31 @@ export function withScheduledToken(raw: string, config: TasksFeatureSettings, sc
   const block = rest.match(BLOCK_ID_RE);
   const limit = block === null ? rest.length : (block.index ?? rest.length);
   const at = Math.min(spot.at, limit);
-  const token = `${SCHEDULED_MARK} ${scheduled}`;
+  const token = render(null);
   const inserted = spot.before && spot.at <= limit ? `${token} ` : ` ${token}`;
   return `${head}${rest.slice(0, at)}${inserted}${rest.slice(at)}`;
+}
+
+export function withScheduledToken(raw: string, config: TasksFeatureSettings, scheduled: string | null): string {
+  if (scheduled === null) {
+    const line = tokenLine(raw, config);
+    if (line === null) throw new BadRequestError("not a task line");
+    return `${line.head}${withoutSpans(line.rest, line.own)}`;
+  }
+  return placeScheduledToken(raw, config, (current) => (current === null ? `${SCHEDULED_MARK} ${scheduled}` : scheduledTokenText(current, scheduled)));
+}
+
+export function scheduledTokenOf(raw: string, config: TasksFeatureSettings): string | null {
+  const line = tokenLine(raw, config);
+  const first = line?.own[0];
+  return line === null || first === undefined ? null : line.rest.slice(first.start, first.end);
+}
+
+export function withScheduledTokenText(raw: string, config: TasksFeatureSettings, token: string): string {
+  if (!SCHEDULED_LEAD_RE.test(token) || /[\r\n]/u.test(token)) throw new BadRequestError("not a scheduled token");
+  const next = placeScheduledToken(raw, config, () => token);
+  if (scheduledTokenOf(next, config) !== token) throw new BadRequestError("the scheduled token does not fit the line");
+  return next;
 }
 
 export interface ScheduledTokenInput {
@@ -1699,15 +1746,30 @@ export interface ScheduledTokenInput {
   scheduled: string | null;
 }
 
+export interface ScheduledTokenTextInput {
+  projectId: string;
+  line: number;
+  raw: string;
+  token: string;
+}
+
 export function writeScheduledToken(settings: DelegationSettings, input: ScheduledTokenInput): BoardWriteResult {
   const scheduled = dateValueOf(input.scheduled, "scheduled");
+  return writeTokenLine(settings, input, (raw, config) => withScheduledToken(raw, config, scheduled));
+}
+
+export function writeScheduledTokenText(settings: DelegationSettings, input: ScheduledTokenTextInput): BoardWriteResult {
+  return writeTokenLine(settings, input, (raw, config) => withScheduledTokenText(raw, config, input.token));
+}
+
+function writeTokenLine(settings: DelegationSettings, input: { projectId: string; line: number; raw: string }, edit: (raw: string, config: TasksFeatureSettings) => string): BoardWriteResult {
   const file = locateProject(settings, input.projectId);
   const content = readProjectFile(file);
   const config = settings.tasks;
   checkFresh(content, file, config, input.line, input.raw);
   ensureNotOccurrence(parseBoardTasks(content, file.id, config), input.line, config);
   const doc = openDoc(content);
-  (doc.lines[input.line] as DocLine).text = withScheduledToken(input.raw, config, scheduled);
+  (doc.lines[input.line] as DocLine).text = edit(input.raw, config);
   const next = renderDoc(doc);
   let updatedAt = statSync(file.abs).mtimeMs;
   if (next !== content) updatedAt = commitFile(file, next);
