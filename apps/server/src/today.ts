@@ -59,6 +59,8 @@ import {
   readProjectState,
   replaceProjectFile,
   writeBoardTask,
+  isScheduledManual,
+  scheduledManualReason,
   scheduledTokenOf,
   writeScheduledToken,
   writeScheduledTokenText,
@@ -2308,6 +2310,7 @@ let committingFor: string | null = null;
 function applyDates(settings: DelegationSettings, date: string, plan: Reconciled): number {
   let written = 0;
   const restoreToken = (task: BoardTask, token: string): boolean => {
+    if (isScheduledManual(task.raw, settings.tasks)) return true;
     try {
       writeScheduledTokenText(settings, { projectId: task.projectId, line: task.line, raw: task.raw, token });
       written += 1;
@@ -2318,6 +2321,7 @@ function applyDates(settings: DelegationSettings, date: string, plan: Reconciled
     }
   };
   const write = (task: BoardTask, scheduled: string | null, moves: boolean): void => {
+    if (isScheduledManual(task.raw, settings.tasks)) return;
     try {
       writeScheduled(settings, task, scheduled, moves);
       written += 1;
@@ -3528,6 +3532,8 @@ function enterDaily(settings: DelegationSettings, date: string, task: BoardTask)
 function schedule(settings: DelegationSettings, input: ScheduleInput): { task: BoardTask } {
   if (input.date !== null) validateDate(input.date);
   if (input.from !== undefined) validateDate(input.from);
+  const manual = scheduledManualReason(input.raw, settings.tasks);
+  if (manual !== null) throw new BadRequestError(manual);
   const before = loadBoardData(settings);
   const old = before ? flattenTasks(before.tasks).find((task) => task.projectId === input.projectId && task.line === input.line) : undefined;
   const from = input.from ?? old?.scheduled ?? null;
@@ -3650,7 +3656,7 @@ function clearToday(settings: DelegationSettings, date: string): ClearTodayResul
   const doc = openDoc(daily.content);
   dropBlocks(doc, daily.content, [...new Set(members.map((member) => member.line))]);
   writeFocusDoc(settings, date, daily, renderDoc(doc), "clear");
-  const doomed = flattenTasks(data.tasks).filter((task) => task.scheduled === date && !isRecurringTask(task) && !isHistory(task));
+  const doomed = flattenTasks(data.tasks).filter((task) => task.scheduled === date && !isRecurringTask(task) && !isHistory(task) && !isScheduledManual(task.raw, settings.tasks));
   const before = projectStates(settings, new Set(doomed.map((task) => task.projectId)));
   let unscheduled = 0;
   for (const task of doomed) {

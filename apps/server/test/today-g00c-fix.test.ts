@@ -1756,3 +1756,87 @@ describe("G00c fix wave 7, finding 4: a signifier right after the date ends the 
     assert.equal(board.withScheduledToken(lines[0] as string, settings.tasks, null), `- [ ] A ${DUE} 2026-11-30`);
   });
 });
+
+describe("final guard: a project line the hourglass writer cannot edit safely is left byte for byte", () => {
+  const FUTURE = shift(TODAY, 5);
+  const REASON = /edit it in Obsidian/;
+  const CASES: [string, string, string][] = [
+    ["two hourglass dates, one of them invalid", `Ship ${SCHEDULED} 2026-13-45 ${SCHEDULED} ${FUTURE}`, "Ship"],
+    ["two valid hourglass dates", `Ship ${SCHEDULED} ${FUTURE} ${SCHEDULED} ${shift(TODAY, 6)}`, "Ship"],
+    ["a title that is only the hourglass token", `${SCHEDULED} ${FUTURE}`, `${SCHEDULED} ${FUTURE}`],
+    ["a title that is only the hourglass token and a due date", `${SCHEDULED} ${FUTURE} ${DUE} 2026-12-30`, `${SCHEDULED} ${FUTURE} ${DUE} 2026-12-30`],
+  ];
+  const PROJECT_REL = "projects/alpha.md";
+
+  function setup(raw: string): { root: string; settings: DelegationSettings; line: number } {
+    const root = lab({ alpha: project("Alpha", [`- [ ] ${raw}`, "- [ ] Other"]) }, { [TODAY]: dailyOf(TODAY, ["- [ ] free"]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    const found = flatten(board.readBoard(settings).tasks).find((task) => task.projectId === "alpha" && task.raw === `- [ ] ${raw}`);
+    assert.ok(found);
+    return { root, settings, line: found.line };
+  }
+
+  for (const [name, raw, title] of CASES) {
+    describe(name, () => {
+      it("typing the daily line and deleting it never touches the project line", () => {
+        const { root, settings } = setup(raw);
+        const line = alphaLine(title);
+        editDaily(root, TODAY, (content) => content.replace("- [ ] free", `- [ ] free\n${line}`));
+        settle(settings, TODAY);
+        assert.deepEqual(projectLines(root, "alpha"), [`- [ ] ${raw}`, "- [ ] Other"]);
+        assert.ok(read(root, dailyRel(TODAY)).includes(line));
+        assert.ok(focusTitles(settings, TODAY).length >= 1);
+        editDaily(root, TODAY, (content) => content.replace(`${line}\n`, ""));
+        settle(settings, TODAY);
+        assert.deepEqual(projectLines(root, "alpha"), [`- [ ] ${raw}`, "- [ ] Other"]);
+      });
+
+      it("Add to focus and Remove from focus return an error and write nothing", () => {
+        const { root, settings, line } = setup(raw);
+        const before = snapshot(root, [PROJECT_REL, dailyRel(TODAY)]);
+        const input = { projectId: "alpha", line, raw: `- [ ] ${raw}` };
+        assert.throws(() => today.todayApi.schedule(settings, { ...input, date: TODAY }), REASON);
+        assert.throws(() => today.todayApi.schedule(settings, { ...input, date: null }), REASON);
+        assert.deepEqual(snapshot(root, [PROJECT_REL, dailyRel(TODAY)]), before);
+      });
+
+      it("Clear today and Undo leave the project line byte for byte", () => {
+        const { root, settings } = setup(raw);
+        const line = alphaLine(title);
+        editDaily(root, TODAY, (content) => content.replace("- [ ] free", `- [ ] free\n${line}`));
+        settle(settings, TODAY);
+        const before = snapshot(root, [PROJECT_REL]);
+        const cleared = today.todayApi.clearToday(settings, TODAY);
+        assert.deepEqual(snapshot(root, [PROJECT_REL]), before);
+        today.todayApi.undoClear(settings, TODAY, cleared.token);
+        assert.deepEqual(snapshot(root, [PROJECT_REL]), before);
+      });
+    });
+  }
+
+  it("the writers refuse the line and the board action names the reason", () => {
+    const { root, settings, line } = setup(`Ship ${SCHEDULED} 2026-13-45 ${SCHEDULED} ${FUTURE}`);
+    const input = { projectId: "alpha", line, raw: `- [ ] Ship ${SCHEDULED} 2026-13-45 ${SCHEDULED} ${FUTURE}` };
+    const before = snapshot(root, [PROJECT_REL]);
+    assert.throws(() => board.writeScheduledToken(settings, { ...input, scheduled: null }), /several ⏳ dates - edit it in Obsidian/);
+    assert.throws(() => board.writeScheduledToken(settings, { ...input, scheduled: TODAY }), REASON);
+    assert.throws(() => board.writeScheduledTokenText(settings, { ...input, token: `${SCHEDULED} ${TODAY}` }), REASON);
+    assert.deepEqual(snapshot(root, [PROJECT_REL]), before);
+  });
+
+  it("a normal single token line still schedules, unschedules and mirrors", () => {
+    const root = lab({ alpha: project("Alpha", ["- [ ] Ship", "- [ ] Other"]) }, { [TODAY]: dailyOf(TODAY, ["- [ ] free"]) });
+    const settings = useVault(root);
+    settle(settings, TODAY);
+    const task = taskIn(settings, "alpha", "Ship");
+    today.todayApi.schedule(settings, { projectId: "alpha", line: task.line, raw: task.raw, date: TODAY });
+    settle(settings, TODAY);
+    assert.equal(taskIn(settings, "alpha", "Ship").scheduled, TODAY);
+    assert.ok(read(root, dailyRel(TODAY)).includes(alphaLine("Ship")));
+    const dated = taskIn(settings, "alpha", "Ship");
+    today.todayApi.schedule(settings, { projectId: "alpha", line: dated.line, raw: dated.raw, date: null });
+    settle(settings, TODAY);
+    assert.deepEqual(projectLines(root, "alpha"), ["- [ ] Ship", "- [ ] Other"]);
+  });
+});

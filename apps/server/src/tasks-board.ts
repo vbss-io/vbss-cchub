@@ -1020,6 +1020,7 @@ export function rewriteTaskLine(raw: string, config: TasksFeatureSettings, chang
   const parts = raw.match(TASK_PARTS_RE);
   if (!parts) throw new BadRequestError("not a task line");
   const [, head, box, close, gap, restRaw] = parts as unknown as [string, string, string, string, string, string];
+  if (change.scheduled !== undefined) requireScheduledEditable(raw, config);
   const signified = splitSignifiers(restRaw, config);
   if (signified.conflict !== null) throw new BadRequestError(`the task has two different ${signified.conflict} values, fix the line in the file first`);
   const dates = mergeDates(signified, change, config);
@@ -1726,6 +1727,26 @@ export function withScheduledToken(raw: string, config: TasksFeatureSettings, sc
   return placeScheduledToken(raw, config, (current) => (current === null ? `${SCHEDULED_MARK} ${scheduled}` : scheduledTokenText(current, scheduled)));
 }
 
+const SEVERAL_SCHEDULED_ERROR = `this task line has several ${SCHEDULED_MARK} dates - edit it in Obsidian`;
+const SCHEDULED_ONLY_ERROR = `this task line has no title besides its dates - edit it in Obsidian`;
+
+export function scheduledManualReason(raw: string, config: TasksFeatureSettings): string | null {
+  const line = tokenLine(raw, config);
+  if (line === null) return null;
+  if (line.own.length >= 2) return SEVERAL_SCHEDULED_ERROR;
+  if (removePriorityTokens(stripSignifiers(line.rest, signifierMatches(line.rest, config)), config) === "") return SCHEDULED_ONLY_ERROR;
+  return null;
+}
+
+export function isScheduledManual(raw: string, config: TasksFeatureSettings): boolean {
+  return scheduledManualReason(raw, config) !== null;
+}
+
+function requireScheduledEditable(raw: string, config: TasksFeatureSettings): void {
+  const reason = scheduledManualReason(raw, config);
+  if (reason !== null) throw new BadRequestError(reason);
+}
+
 export function scheduledTokenOf(raw: string, config: TasksFeatureSettings): string | null {
   const line = tokenLine(raw, config);
   const first = line?.own[0];
@@ -1755,11 +1776,17 @@ export interface ScheduledTokenTextInput {
 
 export function writeScheduledToken(settings: DelegationSettings, input: ScheduledTokenInput): BoardWriteResult {
   const scheduled = dateValueOf(input.scheduled, "scheduled");
-  return writeTokenLine(settings, input, (raw, config) => withScheduledToken(raw, config, scheduled));
+  return writeTokenLine(settings, input, (raw, config) => {
+    requireScheduledEditable(raw, config);
+    return withScheduledToken(raw, config, scheduled);
+  });
 }
 
 export function writeScheduledTokenText(settings: DelegationSettings, input: ScheduledTokenTextInput): BoardWriteResult {
-  return writeTokenLine(settings, input, (raw, config) => withScheduledTokenText(raw, config, input.token));
+  return writeTokenLine(settings, input, (raw, config) => {
+    requireScheduledEditable(raw, config);
+    return withScheduledTokenText(raw, config, input.token);
+  });
 }
 
 function writeTokenLine(settings: DelegationSettings, input: { projectId: string; line: number; raw: string }, edit: (raw: string, config: TasksFeatureSettings) => string): BoardWriteResult {
