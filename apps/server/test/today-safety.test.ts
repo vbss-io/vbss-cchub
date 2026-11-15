@@ -34,6 +34,7 @@ before(async () => {
   daily = await import("../src/daily.js");
   today = await import("../src/today.js");
   today.installTodayHooks();
+  today.setFocusStability({ delayMs: 0 });
 });
 
 beforeEach(() => today.forgetTodayState());
@@ -467,10 +468,12 @@ describe("tick conflicts", () => {
     assert.deepEqual(today.todayApi.regenerateFocusMirror(settings, TODAY), { changed: false, skipped: null, applied: 0 });
   });
 
-  it("never sync the checkbox of a line whose task carries no scheduled date", () => {
-    const root = lab({ lab: project("Lab", ["- [ ] Legacy linked"]) }, { [TODAY]: dailyWith(["- [ ] [[lab|Lab]] - Legacy linked"]) });
+  it("G00c: never sync the checkbox of a line the hub wrote whose task carries no scheduled date", () => {
+    const root = lab({ lab: project("Lab", ["- [ ] Legacy linked"]) });
     const settings = useVault(root);
+    daily.writeDaily(settings, TODAY, dailyWith(["- [ ] [[lab|Lab]] - Legacy linked"]));
     today.todayApi.regenerateFocusMirror(settings, TODAY);
+    assert.equal(taskIn(settings, "lab", "Legacy linked").scheduled, null);
     const task = taskIn(settings, "lab", "Legacy linked");
     board.writeBoardTask(settings, { projectId: "lab", line: task.line, raw: task.raw, status: "doing" });
     today.todayApi.regenerateFocusMirror(settings, TODAY);
@@ -1206,10 +1209,12 @@ describe("fix wave 3, finding 1: Note tab saves go through the tick planner", ()
     assert.equal(readFileSync(dailyPath(root), "utf8"), before);
   });
 
-  it("a status write from the board never runs the legacy marks in scheduled mode", () => {
-    const root = lab({ alpha: project("Alpha Project", ["- [ ] Legacy linked"]) }, { [TODAY]: dailyWith(["- [ ] [[alpha|Alpha Project]] - Legacy linked", "- [ ] [[alpha|Alpha Project]] - Legacy linked"]) });
+  it("G00c: a status write from the board never runs the legacy marks in scheduled mode on lines the hub wrote", () => {
+    const root = lab({ alpha: project("Alpha Project", ["- [ ] Legacy linked"]) });
     const settings = useVault(root);
+    daily.writeDaily(settings, TODAY, dailyWith(["- [ ] [[alpha|Alpha Project]] - Legacy linked", "- [ ] [[alpha|Alpha Project]] - Legacy linked"]));
     today.todayApi.regenerateFocusMirror(settings, TODAY);
+    assert.equal(taskIn(settings, "alpha", "Legacy linked").scheduled, null);
     const before = readFileSync(dailyPath(root), "utf8");
     const task = taskIn(settings, "alpha", "Legacy linked");
     const result = board.writeBoardTaskSynced(settings, { projectId: "alpha", line: task.line, raw: task.raw, status: "done" });

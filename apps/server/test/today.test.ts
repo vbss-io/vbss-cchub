@@ -39,6 +39,7 @@ before(async () => {
   today = await import("../src/today.js");
   sse = await import("../src/sse.js");
   today.installTodayHooks();
+  today.setFocusStability({ delayMs: 0 });
 });
 
 beforeEach(() => today.forgetTodayState());
@@ -619,15 +620,15 @@ describe("migration", () => {
   ].join("\n");
   const DAILY_FOCUS = ["- [ ] [[lab|Lab]] - Mig one", "- [ ] [[lab|Lab]] - Mig two", "- [ ] [[lab|Lab]] - Mig three", "  - [ ] Mig three child", "- [ ] Free line", "- Loose bullet"];
 
-  it("schedules the linked tasks only, skips a different date and leaves unlinked lines and other tasks alone", () => {
+  it("G00c: schedules the linked tasks only, moves an open task of another date to the day of its line and leaves unlinked lines and other tasks alone", () => {
     const root = lab({ lab: PROJECT }, { [TODAY]: dailyWith(TODAY, DAILY_FOCUS) });
     const settings = useVault(root);
     const result = today.todayApi.migrateFocus(settings, TODAY);
-    assert.deepEqual([result.scheduled, result.synced, result.failed], [2, 0, []]);
-    assert.deepEqual(result.skipped.map((entry) => [entry.title, entry.scheduled, entry.reason]), [["Mig two", TOMORROW, "scheduled-elsewhere"]]);
+    assert.deepEqual([result.scheduled, result.synced, result.failed], [3, 0, []]);
+    assert.deepEqual(result.skipped, []);
     const lines = read(root, "projects/lab.md").split("\n");
     assert.equal(lines.includes(`- [ ] Mig one ${SCHEDULED} ${TODAY}`), true);
-    assert.equal(lines.includes(`- [ ] Mig two ${SCHEDULED} ${TOMORROW}`), true);
+    assert.equal(lines.includes(`- [ ] Mig two ${SCHEDULED} ${TODAY}`), true);
     assert.equal(lines.includes(`- [ ] Mig three ${SCHEDULED} ${TODAY}`), true);
     assert.equal(lines.includes("  - [ ] Mig three child"), true);
     assert.equal(lines.includes("- [ ] Mig four"), true);
@@ -676,7 +677,7 @@ describe("migration", () => {
     const settings = useVault(root);
     const first = today.readToday(settings, TODAY);
     assert.deepEqual(first.focus.map((entry) => entry.task.title), ["Mig one", "Mig two", "Mig three"]);
-    assert.equal(taskIn(settings, "lab", "Mig two").scheduled, TOMORROW);
+    assert.equal(taskIn(settings, "lab", "Mig two").scheduled, TODAY);
     assert.equal(store.getSetting(`today.migrated.${TODAY}`), "1");
     const file = join(root, "projects", "lab.md");
     const afterFirst = readFileSync(file);
@@ -815,10 +816,11 @@ describe("loop protection", () => {
     assert.equal(readFileSync(file, "utf8"), content);
   });
 
-  it("stays inert on a daily without any scheduled task, so the old add-to-daily flow keeps its behaviour", () => {
+  it("G00c: stays inert on a daily the hub wrote without any scheduled task, so the old add-to-daily flow keeps its behaviour", () => {
     const project = "# Lab\n\n## Open loops\n\n- [ ] Plain linked task\n";
-    const root = lab({ lab: project }, { [TODAY]: dailyWith(TODAY, ["- [ ] [[lab|Lab]] - Plain linked task"]) });
+    const root = lab({ lab: project });
     const settings = useVault(root);
+    daily.writeDaily(settings, TODAY, dailyWith(TODAY, ["- [ ] [[lab|Lab]] - Plain linked task"]));
     const files = [join(root, "projects", "lab.md"), join(root, "daily", `${TODAY}.md`)];
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     const write = (mark: string): void => writeFileSync(files[1] as string, readFileSync(files[1] as string, "utf8").replace(/- \[.\] \[\[lab\|Lab\]\]/, `- [${mark}] [[lab|Lab]]`));
@@ -961,7 +963,7 @@ describe("note blocks", () => {
     assert.equal("noteBlocks" in today.readToday(settings, TODAY), false);
   });
 
-  it("a task created from a block with its text in its labelled project, scheduled for the day, links that same line and adds only one project line", () => {
+  it("G00c: a task created from a block with its text in its labelled project, scheduled for the day, links that same line and adds only one project line, the labelled linked line getting the date of the day", () => {
     const root = lab({ lab: NOTE_PROJECT }, { [TODAY]: dailyWith(TODAY, NOTE_FOCUS) });
     const settings = useVault(root);
     store.setSetting(`today.migrated.${TODAY}`, "1");
@@ -973,7 +975,7 @@ describe("note blocks", () => {
     board.createBoardTask(settings, { projectId: block.projectId, title: block.text, scheduled: TODAY });
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     const projectAfter = read(root, "projects/lab.md").split("\n");
-    assert.deepEqual(projectAfter.filter((line) => !projectBefore.includes(line)), [`- [ ] Write the **spec** for _v2_ ${SCHEDULED} ${TODAY}`]);
+    assert.deepEqual(projectAfter.filter((line) => !projectBefore.includes(line)), [`- [ ] Unscheduled task ${SCHEDULED} ${TODAY}`, `- [ ] Write the **spec** for _v2_ ${SCHEDULED} ${TODAY}`]);
     assert.equal(projectAfter.length, projectBefore.length + 1);
     assert.equal(readFileSync(dailyFile).equals(dailyBefore), true);
     const payload = today.readToday(settings, TODAY);

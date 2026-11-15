@@ -101,6 +101,21 @@ describe("finished occurrences are read-only and the recurrence day holds", () =
     mkdirSync(dailyDir, { recursive: true });
     writeFileSync(dailyPath(), content);
   };
+  const hubSettled = async (): Promise<void> => {
+    const state = (): string => `${readVault()}\u0000${readDailyFile()}`;
+    const deadline = Date.now() + 20_000;
+    let last = state();
+    let since = Date.now();
+    while (Date.now() - since < 2500) {
+      assert.ok(Date.now() < deadline, "the hub settles the new daily");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const now = state();
+      if (now !== last) {
+        last = now;
+        since = Date.now();
+      }
+    }
+  };
   const readDailyFile = (): string => readFileSync(dailyPath(), "utf8");
   const settings = (patch: Record<string, unknown>): Promise<HttpResult> => http("PUT", "/delegation/settings", patch);
   const boardPayload = async (): Promise<Record<string, unknown>> => (await http("GET", "/delegation/tasks-board")).json;
@@ -155,9 +170,10 @@ describe("finished occurrences are read-only and the recurrence day holds", () =
   });
 
   describe("lock", () => {
-    it("refuses every hub write on a copy in the done section and inside its block, and writes nothing", async () => {
+    it("G00c: refuses every hub write on a copy in the done section and inside its block, and writes nothing, once the hub settled the new daily", async () => {
       assert.equal((await patch(await find("Weekly report"), { status: "done" })).json.recurred, true);
       writeDailyFile(focus("- [ ] [[acme|Acme Corp]] - Plain task"));
+      await hubSettled();
       const acme = readVault();
       const globex = readVault("globex.md");
       const daily = readDailyFile();
@@ -214,10 +230,11 @@ describe("finished occurrences are read-only and the recurrence day holds", () =
       assert.equal(readVault("globex.md"), globex);
     });
 
-    it("refuses hub writes on the copy left after the original when no done section is configured", async () => {
+    it("G00c: refuses hub writes on the copy left after the original when no done section is configured, once the hub settled the new daily", async () => {
       assert.equal((await settings({ tasks: { doneSection: "" } })).status, 200);
       assert.equal((await patch(await find("Weekly report"), { status: "done" })).json.recurred, true);
       writeDailyFile(focus("- [ ] [[acme|Acme Corp]] - Plain task"));
+      await hubSettled();
       const acme = readVault();
       const daily = readDailyFile();
       const copy = (await board()).find((task) => task.title === "Weekly report" && task.doneAt !== null);

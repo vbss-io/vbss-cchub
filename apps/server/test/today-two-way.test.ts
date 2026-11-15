@@ -33,6 +33,7 @@ before(async () => {
   daily = await import("../src/daily.js");
   today = await import("../src/today.js");
   today.installTodayHooks();
+  today.setFocusStability({ delayMs: 0 });
 });
 
 beforeEach(() => today.forgetTodayState());
@@ -291,11 +292,11 @@ describe("G00c D2: a line in the daily mirrors into the scheduled date", () => {
 });
 
 describe("G00c D4: a scheduled date changed in the project mirrors into the daily", () => {
-  it("removing the date in the project removes the line and its child block from the daily", () => {
+  it("G00c: removing the date in the project removes the line and its subtask lines, and keeps its free notes one level out", () => {
     const { root, settings } = primed();
     editProject(root, "alpha", (content) => content.replace(`- [-] Task two #p1 ${SCHEDULED} ${TODAY} ${DUE} 2026-12-01`, `- [-] Task two #p1 ${DUE} 2026-12-01`));
     today.todayApi.regenerateFocusMirror(settings, TODAY);
-    assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, [LINE_ONE, "", LINE_BETA, "- [ ] free text of the day"]));
+    assert.equal(read(root, dailyRel(TODAY)), dailyOf(TODAY, [LINE_ONE, "- a note under two", "", LINE_BETA, "- [ ] free text of the day"]));
     assert.deepEqual(focusTitles(settings, TODAY), ["Task one", "Beta one"]);
     assertSettled(settings, root, TODAY, RELS(TODAY));
   });
@@ -311,12 +312,12 @@ describe("G00c D4: a scheduled date changed in the project mirrors into the dail
     assertSettled(settings, root, TODAY, RELS(TODAY));
   });
 
-  it("when both sides changed the same task, the daily wins", () => {
+  it("G00c: when both sides changed the same task, the daily wins", () => {
     const root = lab({ alpha: ALPHA(TODAY), beta: BETA(TODAY) }, { [TODAY]: dailyOf(TODAY, [LINE_ONE, "- [ ] [[alpha|Alpha]] - Task four"]) });
     const settings = useVault(root);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
-    assert.equal(taskIn(settings, "alpha", "Task four").scheduled, null);
-    editProject(root, "alpha", (content) => content.replace("- [ ] Task four\n", `- [ ] Task four ${SCHEDULED} ${TODAY}\n`));
+    assert.equal(taskIn(settings, "alpha", "Task four").scheduled, TODAY);
+    editProject(root, "alpha", (content) => content.replace(`- [ ] Task four ${SCHEDULED} ${TODAY}\n`, `- [ ] Task four #p2 ${SCHEDULED} ${TODAY}\n`));
     const edited = editDaily(root, TODAY, (content) => content.replace("- [ ] [[alpha|Alpha]] - Task four\n", ""));
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Task four").scheduled, null);
@@ -368,9 +369,16 @@ describe("G00c D3: hub actions write the daily first", () => {
     assertSettled(settings, root, TODAY, RELS(TODAY));
   });
 
-  it("Remove from focus of a line-only task deletes the line and keeps a date of another day", () => {
-    const root = lab({ alpha: ALPHA(TODAY), beta: BETA(TODAY) }, { [TODAY]: dailyOf(TODAY, [LINE_ONE, "- [ ] [[alpha|Alpha]] - Task three"]) });
+  it("G00c: Remove from focus of a line whose task moved to a later daily deletes the line and keeps that date", () => {
+    const root = lab(
+      { alpha: ALPHA(TODAY), beta: BETA(TODAY) },
+      { [TODAY]: dailyOf(TODAY, [LINE_ONE, "- [ ] [[alpha|Alpha]] - Task three"]), [TOMORROW]: dailyOf(TOMORROW, ["- [ ] [[alpha|Alpha]] - Task three"]) },
+    );
     const settings = useVault(root);
+    today.todayApi.regenerateFocusMirror(settings, TODAY);
+    assert.equal(taskIn(settings, "alpha", "Task three").scheduled, TODAY);
+    today.todayApi.regenerateFocusMirror(settings, TOMORROW);
+    assert.equal(taskIn(settings, "alpha", "Task three").scheduled, TOMORROW);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     assert.ok(focusTitles(settings, TODAY).includes("Task three"));
     const three = taskIn(settings, "alpha", "Task three");
@@ -422,13 +430,13 @@ describe("G00c D3: hub actions write the daily first", () => {
     assert.throws(() => today.todayApi.undoClear(settings, TODAY, cleared.token), /nothing to undo/);
   });
 
-  it("Undo refuses when the daily changed after the clear and writes nothing", () => {
+  it("G00c: Undo refuses when the daily changed after the clear, names the daily and writes nothing", () => {
     const { root, settings } = primed();
     const cleared = today.todayApi.clearToday(settings, TODAY);
     editDaily(root, TODAY, (content) => content.replace("- 10:00 Standup", "- 10:00 Standup moved"));
     today.flushMirrors(settings);
     const after = snapshot(root, RELS(TODAY));
-    assert.throws(() => today.todayApi.undoClear(settings, TODAY, cleared.token), /changed on disk/);
+    assert.throws(() => today.todayApi.undoClear(settings, TODAY, cleared.token), new RegExp(`^Error: the daily of ${TODAY} changed after Clear today, nothing was restored$`));
     assert.deepEqual(snapshot(root, RELS(TODAY)), after);
   });
 });

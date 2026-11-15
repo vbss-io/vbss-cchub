@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync, watch, type FSWatcher } from "node:fs";
-import { basename, isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join, relative, sep } from "node:path";
 import {
   findHeadingIndex,
   isPlaceholderLine,
@@ -1612,6 +1612,102 @@ export function restoreTaskLine(settings: DelegationSettings, input: RestoreLine
   if (target === undefined || target.text !== input.raw) throw new TaskConflictError(findTaskAt(parseBoardTasks(content, file.id, settings.tasks), input.line));
   target.text = input.restored;
   const next = renderDoc(doc);
+  if (next !== content) commitFile(file, next);
+}
+
+interface TokenSpan {
+  mark: string | undefined;
+  start: number;
+  end: number;
+}
+
+function tokenSpans(rest: string, config: TasksFeatureSettings): TokenSpan[] {
+  return signifierMatches(rest, config).map((match) => {
+    const at = match.index ?? 0;
+    return { mark: match[2], start: at + (match[1] ?? "").length, end: at + match[0].length - (match[5] ?? "").length };
+  });
+}
+
+function scheduledInsertAt(rest: string, spans: TokenSpan[], config: TasksFeatureSettings): { at: number; before: boolean } {
+  const start = spans.find((span) => span.mark === START_MARK);
+  if (start) return { at: start.end, before: false };
+  const due = spans.find((span) => span.mark === DUE_MARK);
+  if (due) return { at: due.start, before: true };
+  const repeat = spans.find((span) => span.mark === undefined);
+  if (repeat) return { at: repeat.end, before: false };
+  const stamped = splitAnyStamp(rest, config);
+  const body = stamped.tail === "" ? rest : rest.slice(0, rest.length - stamped.tail.length);
+  return { at: body.trimEnd().length, before: false };
+}
+
+export function withScheduledToken(raw: string, config: TasksFeatureSettings, scheduled: string | null): string {
+  const parts = raw.match(TASK_PARTS_RE);
+  if (!parts) throw new BadRequestError("not a task line");
+  const rest = parts[5] as string;
+  const head = raw.slice(0, raw.length - rest.length);
+  const spans = tokenSpans(rest, config);
+  const own = spans.filter((span) => span.mark === SCHEDULED_MARK);
+  if (scheduled === null) {
+    let next = rest;
+    for (const span of [...own].reverse()) {
+      const before = next.slice(0, span.start);
+      const kept = before.trimEnd();
+      next = kept.length < before.length ? kept + next.slice(span.end) : before + next.slice(span.end).trimStart();
+    }
+    return `${head}${next}`;
+  }
+  if (own.length > 0) {
+    let next = rest;
+    for (const span of [...own].reverse()) {
+      const token = next.slice(span.start, span.end);
+      next = next.slice(0, span.start) + token.replace(/\d{4}-\d{2}-\d{2}$/, scheduled) + next.slice(span.end);
+    }
+    return `${head}${next}`;
+  }
+  const spot = scheduledInsertAt(rest, spans, config);
+  const token = `${SCHEDULED_MARK} ${scheduled}`;
+  const inserted = spot.before ? `${token} ` : ` ${token}`;
+  return `${head}${rest.slice(0, spot.at)}${inserted}${rest.slice(spot.at)}`;
+}
+
+export interface ScheduledTokenInput {
+  projectId: string;
+  line: number;
+  raw: string;
+  scheduled: string | null;
+}
+
+export function writeScheduledToken(settings: DelegationSettings, input: ScheduledTokenInput): BoardWriteResult {
+  const scheduled = dateValueOf(input.scheduled, "scheduled");
+  const file = locateProject(settings, input.projectId);
+  const content = readProjectFile(file);
+  const config = settings.tasks;
+  checkFresh(content, file, config, input.line, input.raw);
+  ensureNotOccurrence(parseBoardTasks(content, file.id, config), input.line, config);
+  const doc = openDoc(content);
+  (doc.lines[input.line] as DocLine).text = withScheduledToken(input.raw, config, scheduled);
+  const next = renderDoc(doc);
+  let updatedAt = statSync(file.abs).mtimeMs;
+  if (next !== content) updatedAt = commitFile(file, next);
+  const task = findTaskAt(parseBoardTasks(next, file.id, config), input.line) as BoardTask;
+  return { task, updatedAt, moved: false, recurred: false };
+}
+
+export interface ProjectFileState {
+  projectId: string;
+  rel: string;
+  content: string;
+}
+
+export function readProjectState(settings: DelegationSettings, projectId: string): ProjectFileState {
+  const file = locateProject(settings, projectId);
+  return { projectId, rel: relative(file.vault, file.abs).split(sep).join("/"), content: readProjectFile(file) };
+}
+
+export function replaceProjectFile(settings: DelegationSettings, projectId: string, expected: string, next: string): void {
+  const file = locateProject(settings, projectId);
+  const content = readProjectFile(file);
+  if (content !== expected) throw new TaskConflictError(null);
   if (next !== content) commitFile(file, next);
 }
 

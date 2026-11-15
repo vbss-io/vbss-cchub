@@ -32,6 +32,7 @@ before(async () => {
   daily = await import("../src/daily.js");
   today = await import("../src/today.js");
   today.installTodayHooks();
+  today.setFocusStability({ delayMs: 0 });
 });
 
 beforeEach(() => today.forgetTodayState());
@@ -250,7 +251,7 @@ describe("late lines: a skill writes the focus after the hub created the daily",
     assert.equal(read(root, "projects/cemig.md"), cemig);
   });
 
-  it("does not schedule lines that were already in the daily when the hub first saw it", () => {
+  it("G00c: schedules the labelled lines that were already in the daily when the hub first saw it, once", () => {
     const content = ["---", "type: daily", "---", "", `# ${TODAY}`, "", "## Focus", "", LATE[0] as string, "", "## Meetings", "", "-", ""].join("\n");
     const root = lab({ [TODAY]: content });
     const settings = useVault(root);
@@ -258,10 +259,10 @@ describe("late lines: a skill writes the focus after the hub created the daily",
     const cemig = read(root, "projects/cemig.md");
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     appendToFocus(root, TODAY, ["- [ ] typed by hand"]);
-    assert.equal(read(root, "projects/cemig.md"), cemig);
+    assert.equal(read(root, "projects/cemig.md"), cemig.replace("- [-] Teams (fase 4): melhorar a experiência no Teams", `- [-] Teams (fase 4): melhorar a experiência no Teams ${SCHEDULED} ${TODAY}`));
     const payload = today.readToday(settings, TODAY);
     const teams = taskIn(settings, "cemig", "Teams (fase 4): melhorar a experiência no Teams");
-    assert.equal(teams.scheduled, null);
+    assert.equal(teams.scheduled, TODAY);
     assert.deepEqual(payload.focus.map((entry) => entry.task.id), [teams.id]);
     assert.deepEqual(payload.inNoteLinks.filter((item) => item.taskId !== null), []);
     const before = read(root, dailyRel(TODAY));
