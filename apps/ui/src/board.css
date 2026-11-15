@@ -68,6 +68,22 @@
   outline: none;
 }
 
+.board-sub__status {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  width: 92px;
+}
+
+.board-sub__status .board-status {
+  width: 100%;
+}
+
+.bf--end .bf__panel {
+  left: auto;
+  right: 0;
+}
+
 .bf__group {
   display: flex;
   flex-direction: column;

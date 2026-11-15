@@ -56,9 +56,11 @@ import {
   recentlyDoneTasks,
   clearedNotice,
   movesInNote,
+  type BacklogFilters,
 } from "./today-model";
 
 const TODAY = "2026-11-12";
+const SHOW_ALL: BacklogFilters = { ...DEFAULT_BACKLOG_FILTERS, hiddenPriorities: [] };
 
 const task = (id: string, projectId: string, line: number, patch: Partial<BoardTask> = {}, subtasks: BoardTask[] = []): BoardTask => ({
   id,
@@ -256,30 +258,30 @@ describe("backlog filtering", () => {
   ];
 
   it("hides done, archived, hold by default and excluded ids", () => {
-    const groups = backlogGroups(tasks, projects, [], new Set(["a1"]), DEFAULT_BACKLOG_FILTERS);
+    const groups = backlogGroups(tasks, projects, [], new Set(["a1"]), SHOW_ALL);
     const ids = groups.flatMap((group) => group.tasks.map((item) => item.id));
     assert.deepEqual(ids, ["a2", "b1", "c2"]);
   });
 
   it("orders groups by the project order", () => {
-    const groups = backlogGroups(tasks, projects, ["c", "b"], new Set(), DEFAULT_BACKLOG_FILTERS);
+    const groups = backlogGroups(tasks, projects, ["c", "b"], new Set(), SHOW_ALL);
     assert.deepEqual(groups.map((group) => group.project.id), ["c", "b", "a"]);
   });
 
   it("filters by search across title, reason and project", () => {
-    const byReason = backlogGroups(tasks, projects, [], new Set(), { ...DEFAULT_BACKLOG_FILTERS, search: "legal" });
+    const byReason = backlogGroups(tasks, projects, [], new Set(), { ...SHOW_ALL, search: "legal" });
     assert.deepEqual(byReason.flatMap((group) => group.tasks.map((item) => item.id)), ["b1"]);
-    const byProject = backlogGroups(tasks, projects, [], new Set(), { ...DEFAULT_BACKLOG_FILTERS, search: "charlie docs" });
+    const byProject = backlogGroups(tasks, projects, [], new Set(), { ...SHOW_ALL, search: "charlie docs" });
     assert.deepEqual(byProject.flatMap((group) => group.tasks.map((item) => item.id)), ["c2"]);
   });
 
   it("filters by project and by status chips", () => {
-    const onlyBravo = backlogGroups(tasks, projects, [], new Set(), { ...DEFAULT_BACKLOG_FILTERS, projectId: "b", statuses: ["hold"] });
+    const onlyBravo = backlogGroups(tasks, projects, [], new Set(), { ...SHOW_ALL, projectId: "b", statuses: ["hold"] });
     assert.deepEqual(onlyBravo.flatMap((group) => group.tasks.map((item) => item.id)), ["b2"]);
   });
 
   it("counts tasks and toggles statuses keeping the canonical order", () => {
-    const groups = backlogGroups(tasks, projects, [], new Set(), DEFAULT_BACKLOG_FILTERS);
+    const groups = backlogGroups(tasks, projects, [], new Set(), SHOW_ALL);
     assert.equal(countBacklog(groups), 4);
     assert.deepEqual(toggleBacklogStatus(["todo", "blocked"], "doing"), ["todo", "doing", "blocked"]);
     assert.deepEqual(toggleBacklogStatus(["todo", "doing"], "todo"), ["doing"]);
@@ -623,10 +625,24 @@ describe("backlog priority and in-Today filters", () => {
     assert.deepEqual(shown.map((item) => item.id), ["a2"]);
   });
 
+  it("starts with the no-priority tasks hidden and P0-P3 shown", () => {
+    assert.deepEqual(DEFAULT_BACKLOG_FILTERS.hiddenPriorities, [null]);
+    assert.deepEqual(backlogTasks(tasks, projects, new Set(), DEFAULT_BACKLOG_FILTERS).map((item) => item.id), ["a1", "a2", "b1"]);
+    assert.deepEqual(backlogTasks(tasks, projects, new Set(), SHOW_ALL).map((item) => item.id), ["a1", "a2", "a3", "b1"]);
+  });
+
+  it("keeps a saved choice and only treats the new default as untouched", () => {
+    assert.deepEqual(parseBacklogFilters('{"statuses":["todo"],"hiddenPriorities":[],"showInToday":true}').hiddenPriorities, []);
+    assert.deepEqual(parseBacklogFilters('{"statuses":["todo"],"hiddenPriorities":[3]}').hiddenPriorities, [3]);
+    assert.equal(hasCustomBacklogFilters(DEFAULT_BACKLOG_FILTERS), false);
+    assert.equal(hasCustomBacklogFilters(SHOW_ALL), true);
+    assert.equal(hasCustomBacklogFilters({ ...DEFAULT_BACKLOG_FILTERS, hiddenPriorities: [null, 3] }), true);
+  });
+
   it("shows the tasks already in Today by default and hides them when the toggle is off, carried ones always out", () => {
     const inToday = new Set(["a1"]);
-    assert.deepEqual(backlogTasks(tasks, projects, new Set(["b1"]), DEFAULT_BACKLOG_FILTERS, inToday).map((item) => item.id), ["a1", "a2", "a3"]);
-    assert.deepEqual(backlogTasks(tasks, projects, new Set(["b1"]), { ...DEFAULT_BACKLOG_FILTERS, showInToday: false }, inToday).map((item) => item.id), ["a2", "a3"]);
+    assert.deepEqual(backlogTasks(tasks, projects, new Set(["b1"]), SHOW_ALL, inToday).map((item) => item.id), ["a1", "a2", "a3"]);
+    assert.deepEqual(backlogTasks(tasks, projects, new Set(["b1"]), { ...SHOW_ALL, showInToday: false }, inToday).map((item) => item.id), ["a2", "a3"]);
   });
 
   it("remembers project, statuses, priorities and the toggle but never the search", () => {
@@ -640,7 +656,7 @@ describe("backlog priority and in-Today filters", () => {
   });
 
   it("windows the grouped backlog to the first tasks so a long backlog does not make the page endless", () => {
-    const groups = backlogGroups(tasks, projects, [], new Set(), DEFAULT_BACKLOG_FILTERS);
+    const groups = backlogGroups(tasks, projects, [], new Set(), SHOW_ALL);
     assert.deepEqual(windowBacklogGroups(groups, 2).map((group) => [group.project.id, group.tasks.map((item) => item.id)]), [["a", ["a1", "a2"]]]);
     assert.deepEqual(windowBacklogGroups(groups, 4).map((group) => group.tasks.length), [3, 1]);
     assert.deepEqual(windowBacklogGroups(groups, 0), []);

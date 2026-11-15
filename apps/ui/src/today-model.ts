@@ -41,7 +41,7 @@ export interface BacklogFilters {
   showInToday?: boolean;
 }
 
-export const DEFAULT_BACKLOG_FILTERS: BacklogFilters = { search: "", projectId: null, statuses: ["todo", "doing", "blocked"], hiddenPriorities: [], showInToday: true };
+export const DEFAULT_BACKLOG_FILTERS: BacklogFilters = { search: "", projectId: null, statuses: ["todo", "doing", "blocked"], hiddenPriorities: [null], showInToday: true };
 
 export const BACKLOG_FILTERS_KEY = "hub.today.backlogFilters";
 
@@ -72,7 +72,10 @@ export const serializeBacklogFilters = (filters: BacklogFilters): string =>
 export function hasCustomBacklogFilters(filters: BacklogFilters): boolean {
   const defaults = DEFAULT_BACKLOG_FILTERS.statuses;
   const sameStatuses = filters.statuses.length === defaults.length && defaults.every((status) => filters.statuses.includes(status));
-  return filters.projectId !== null || !sameStatuses || (filters.hiddenPriorities ?? []).length > 0 || filters.showInToday === false || filters.search.trim() !== "";
+  const hidden = new Set(filters.hiddenPriorities ?? []);
+  const defaultHidden = DEFAULT_BACKLOG_FILTERS.hiddenPriorities ?? [];
+  const sameHidden = hidden.size === defaultHidden.length && defaultHidden.every((level) => hidden.has(level));
+  return filters.projectId !== null || !sameStatuses || !sameHidden || filters.showInToday === false || filters.search.trim() !== "";
 }
 
 export type BacklogIntent = "today" | "tomorrow" | "done" | "doing" | "open" | "next" | "prev";

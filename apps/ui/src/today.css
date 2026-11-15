@@ -662,9 +662,10 @@
 }
 
 .backlog__row {
+  --backlog-status-w: 3.5rem;
   position: relative;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--backlog-status-w);
   align-items: center;
   gap: 4px 6px;
   min-width: 0;
@@ -700,8 +701,42 @@
   pointer-events: none;
 }
 
-.backlog__title {
+.backlog__body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.backlog__main {
+  display: flex;
   flex: 1 1 6rem;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.backlog__meta {
+  display: inline-flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.backlog__status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: var(--backlog-status-w);
+  min-width: 0;
+}
+
+.backlog__title {
+  flex: 1 1 auto;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -721,7 +756,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
 }
 
 .backlog__add {
@@ -745,6 +779,10 @@
 }
 
 @media (hover: none) {
+  .backlog__row {
+    grid-template-columns: minmax(0, 1fr) var(--backlog-status-w) auto;
+  }
+
   .backlog__add {
     position: static;
     flex: none;

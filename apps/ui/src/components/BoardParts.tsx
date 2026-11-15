@@ -720,11 +720,6 @@ function SubtaskRow({ task, ...shared }: Omit<SubtasksProps, "tasks"> & { task: 
           <BoardTitle task={task} editing={editing} disabled={busy} readOnly={locked} onEditingChange={setEditing} onRename={(title) => onRename(task, title)} />
         </span>
         <BoardPriorityBadge priority={task.priority} levels={levels} />
-        {locked ? (
-          <BoardStatusChip status={task.status} />
-        ) : (
-          <BoardStatusSelect value={task.status} label={`Status of ${task.title}`} disabled={busy} onChange={(status) => onStatus(task, status)} />
-        )}
         {!locked && today && !today.isLinked(task.id) && today.addState.visible && (
           <button
             className="act act--icon board-act"
@@ -736,6 +731,13 @@ function SubtaskRow({ task, ...shared }: Omit<SubtasksProps, "tasks"> & { task: 
             <IconCalendarPlus />
           </button>
         )}
+        <span className="board-sub__status">
+          {locked ? (
+            <BoardStatusChip status={task.status} />
+          ) : (
+            <BoardStatusSelect value={task.status} label={`Status of ${task.title}`} disabled={busy} onChange={(status) => onStatus(task, status)} />
+          )}
+        </span>
       </div>
       {today && <BoardOutOfSyncBadge outOfSync={today.isLinked(task.id) && today.isOutOfSync(task.id)} />}
       <BoardReason task={task} disabled={busy} readOnly={locked} onChange={(reason) => onReason(task, reason)} />

@@ -16,11 +16,12 @@ interface FiltersProps {
   subprojects?: { checked: boolean; disabled: boolean; onChange: (checked: boolean) => void };
   canReset: boolean;
   onReset: () => void;
+  align?: "start" | "end";
 }
 
 const VIEWPORT_GUTTER = 8;
 
-export function BoardFilters({ count, groups, subprojects, canReset, onReset }: FiltersProps) {
+export function BoardFilters({ count, groups, subprojects, canReset, onReset, align = "start" }: FiltersProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -41,7 +42,7 @@ export function BoardFilters({ count, groups, subprojects, canReset, onReset }: 
     if (!open || !element) return;
     element.style.transform = "";
     const rect = element.getBoundingClientRect();
-    const overflowRight = Math.min(0, window.innerWidth - VIEWPORT_GUTTER - rect.right);
+    const overflowRight = Math.min(0, document.documentElement.clientWidth - VIEWPORT_GUTTER - rect.right);
     const shift = Math.max(overflowRight, VIEWPORT_GUTTER - rect.left);
     if (shift !== 0) element.style.transform = `translateX(${shift}px)`;
   }, [open]);
@@ -56,7 +57,7 @@ export function BoardFilters({ count, groups, subprojects, canReset, onReset }: 
   return (
     <div
       ref={root}
-      className="bf"
+      className={`bf ${align === "end" ? "bf--end" : ""}`}
       onKeyDown={onKeyDown}
       onBlur={(event) => {
         if (open && !root.current?.contains(event.relatedTarget as Node | null)) setOpen(false);

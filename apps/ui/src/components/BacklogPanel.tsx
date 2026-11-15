@@ -196,7 +196,6 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, inToday 
     const progress = subtaskProgress(task);
     return (
       <span className="backlog__chips">
-        {task.status !== "todo" && <span className={`tag tag--board-${task.status}`}>{BOARD_STATUS_LABEL[task.status]}</span>}
         {task.priority !== null && (
           <span className={`chip board-prio board-prio--${priorityTone(task.priority)}`} title={`Priority P${task.priority}`}>
             P{task.priority}
@@ -221,6 +220,10 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, inToday 
     );
   };
 
+  const renderStatus = (task: BoardTask) => (
+    <span className="backlog__status">{task.status !== "todo" && <span className={`tag tag--board-${task.status}`}>{BOARD_STATUS_LABEL[task.status]}</span>}</span>
+  );
+
   return (
     <section className="backlog" aria-label="Backlog">
       <div className="backlog__top">
@@ -228,7 +231,7 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, inToday 
           <h3>
             Backlog <span className="backlog__count">{total}</span>
           </h3>
-          <BoardFilters count={chips.length} groups={filterGroups} canReset={hasCustomBacklogFilters(filters)} onReset={() => setFilters({ ...DEFAULT_BACKLOG_FILTERS })} />
+          <BoardFilters count={chips.length} groups={filterGroups} canReset={hasCustomBacklogFilters(filters)} onReset={() => setFilters({ ...DEFAULT_BACKLOG_FILTERS })} align="end" />
         </header>
         <div className="backlog__filters">
           <input
@@ -299,16 +302,23 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, inToday 
                   onDragStart={(event) => onDragStart(event, task)}
                   onDragEnd={() => onDragActive(false)}
                 >
-                  {task.status === "doing" && <span className="statusmark statusmark--doing" role="img" aria-label="In progress" title="In progress" />}
-                  <span className="backlog__title" onClick={() => onOpen(task)}>
-                    <InlineText text={task.title} />
-                  </span>
-                  {planned && (
-                    <span className="backlog__in-today" title={isToday ? "Already in today's focus" : `Already in the focus of ${date}`}>
-                      in Today
+                  <span className="backlog__body">
+                    <span className="backlog__main">
+                      {task.status === "doing" && <span className="statusmark statusmark--doing" role="img" aria-label="In progress" title="In progress" />}
+                      <span className="backlog__title" onClick={() => onOpen(task)}>
+                        <InlineText text={task.title} />
+                      </span>
                     </span>
-                  )}
-                  {renderChips(task)}
+                    <span className="backlog__meta">
+                      {planned && (
+                        <span className="backlog__in-today" title={isToday ? "Already in today's focus" : `Already in the focus of ${date}`}>
+                          in Today
+                        </span>
+                      )}
+                      {renderChips(task)}
+                    </span>
+                  </span>
+                  {renderStatus(task)}
                   {!planned && (
                     <button
                       type="button"

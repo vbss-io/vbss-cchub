@@ -602,18 +602,20 @@ export function FocusOutliner({
     const tone = dueTone(node.due, node.status, today);
     const showStatus = node.status !== "todo" && node.status !== "done";
     return (
-      <span className="outliner__chips">
-        {showStatus && <span className={`tag tag--board-${node.status}`}>{BOARD_STATUS_LABEL[node.status]}</span>}
-        {node.priority !== null && (
-          <span className={`chip board-prio board-prio--${priorityTone(node.priority)}`} title={`Priority P${node.priority}`}>
-            P{node.priority}
-          </span>
-        )}
-        {node.due !== null && tone !== null && (
-          <span className={`chip board-due board-due--${tone}`} title={`Due ${node.due}`}>
-            {formatDayMonth(node.due)}
-          </span>
-        )}
+      <span className="outliner__meta">
+        <span className="outliner__chips">
+          {node.priority !== null && (
+            <span className={`chip board-prio board-prio--${priorityTone(node.priority)}`} title={`Priority P${node.priority}`}>
+              P{node.priority}
+            </span>
+          )}
+          {node.due !== null && tone !== null && (
+            <span className={`chip board-due board-due--${tone}`} title={`Due ${node.due}`}>
+              {formatDayMonth(node.due)}
+            </span>
+          )}
+        </span>
+        <span className="outliner__status">{showStatus && <span className={`tag tag--board-${node.status}`}>{BOARD_STATUS_LABEL[node.status]}</span>}</span>
       </span>
     );
   };
