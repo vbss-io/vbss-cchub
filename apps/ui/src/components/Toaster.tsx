@@ -1,58 +1,42 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactElement } from "react";
-import { focusSession, reportUiDiag, reportUiError, requestNavigate, subscribe, type ToastCard } from "../api";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactElement } from "react";
+import { fetchSessions, focusSession, reportUiDiag, reportUiError, requestNavigate, subscribe, type ToastCard } from "../api";
+import { sessionClient } from "../clients";
+import { getTask } from "../delegation";
 import { IconClose, IconSessions, IconShare, IconTasks } from "../icons";
 import type { NotifEventKind } from "../notifications";
+import {
+  sessionToastContext,
+  taskToastContext,
+  TOAST_ATTENTION_MS,
+  TOAST_LOOK,
+  toastLifetime,
+  toastStack,
+  toastTarget,
+  toastView,
+  type ToastContext,
+  type ToastSource,
+} from "../toast-model";
+import type { SessionRecord } from "../types";
+import { shortClientName } from "./RunChips";
 
 const inTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-const MAX_VISIBLE = 4;
-const AUTO_MS = 6_000;
-const ATTENTION_MS = 10_000;
 const TICK_MS = 250;
 const WIDTH = 380;
 const MARGIN = 16;
 const TASKBAR_GUESS = 48;
 
-const ATTENTION: ReadonlySet<NotifEventKind> = new Set(["sessionNeedsYou", "taskNeedsYou", "taskFailed"]);
-const lifetimeOf = (kind: NotifEventKind): number => (ATTENTION.has(kind) ? ATTENTION_MS : AUTO_MS);
-
-const TONE: Record<NotifEventKind, string> = {
-  sessionNeedsYou: "pend",
-  sessionIdle: "ok",
-  sessionFinished: "ok",
-  taskCompleted: "ok",
-  taskFailed: "hold",
-  taskNeedsYou: "pend",
-  shareAsk: "brand",
-  shareImplement: "brand",
+const SOURCE_ICON: Readonly<Record<ToastSource, () => ReactElement>> = {
+  session: () => <IconSessions size={14} />,
+  task: () => <IconTasks size={14} />,
+  share: () => <IconShare size={14} />,
 };
-
-const SESSION_KINDS: ReadonlySet<NotifEventKind> = new Set(["sessionNeedsYou", "sessionIdle", "sessionFinished"]);
-
-function iconFor(kind: NotifEventKind): ReactElement {
-  if (kind === "shareAsk" || kind === "shareImplement") return <IconShare size={16} />;
-  if (SESSION_KINDS.has(kind)) return <IconSessions size={16} />;
-  return <IconTasks size={16} />;
-}
-
-function hashFor(kind: NotifEventKind, id: string): string {
-  if (kind === "shareAsk" || kind === "shareImplement") return `#/share/${id}`;
-  if (SESSION_KINDS.has(kind)) return "#/sessions";
-  return `#/tasks/${id}`;
-}
-
-function relTime(at: number, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - at) / 1000));
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  return `${Math.floor(minutes / 60)}h ago`;
-}
 
 interface Card extends ToastCard {
   key: number;
   lifetime: number;
   elapsed: number;
+  context: ToastContext | null;
 }
 
 interface MonitorLike {
@@ -115,12 +99,12 @@ async function applyWindowUnsafe(count: number, height: number): Promise<void> {
 }
 
 async function openTarget(kind: NotifEventKind, id: string): Promise<void> {
-  const hash = hashFor(kind, id);
+  const { hash, focus } = toastTarget(kind, id);
   if (!inTauri()) {
     window.open(`${location.origin}${location.pathname}${hash}`, "_blank", "noopener");
     return;
   }
-  if (SESSION_KINDS.has(kind)) {
+  if (focus) {
     try {
       const result = await focusSession(id);
       if (result.ok) return;
@@ -132,6 +116,22 @@ async function openTarget(kind: NotifEventKind, id: string): Promise<void> {
   await requestNavigate(hash);
 }
 
+async function sessionContext(id: string, cache: Map<string, SessionRecord>): Promise<ToastContext | null> {
+  if (!cache.has(id)) for (const session of await fetchSessions()) cache.set(session.sessionId, session);
+  const session = cache.get(id);
+  if (!session) return null;
+  const client = sessionClient(session);
+  return sessionToastContext(session, shortClientName(client), client.label);
+}
+
+async function contextFor(toast: ToastCard, cache: Map<string, SessionRecord>): Promise<ToastContext | null> {
+  const source = TOAST_LOOK[toast.kind].source;
+  if (source === "session") return sessionContext(toast.id, cache);
+  if (source === "share") return null;
+  const { task } = await getTask(toast.id);
+  return taskToastContext({ workspace: task.workspace, cwd: task.cwd, runner: task.runner, isolation: task.isolation, branch: task.branch });
+}
+
 export function Toaster(): ReactElement {
   const [cards, setCards] = useState<Card[]>([]);
   const [now, setNow] = useState(() => Date.now());
@@ -139,13 +139,24 @@ export function Toaster(): ReactElement {
   const seq = useRef(0);
   const stackRef = useRef<HTMLDivElement | null>(null);
   const applied = useRef<{ count: number; height: number }>({ count: -1, height: -1 });
+  const sessionsRef = useRef(new Map<string, SessionRecord>());
 
   const pushCard = useCallback((toast: ToastCard) => {
     void reportUiDiag({ window: "toast", lastToast: toast.title, lastToastAt: new Date().toISOString() });
-    setCards((prev) => [...prev, { ...toast, key: seq.current++, lifetime: lifetimeOf(toast.kind), elapsed: 0 }]);
+    const key = seq.current++;
+    setCards((prev) => [...prev, { ...toast, key, lifetime: toastLifetime(toast.kind), elapsed: 0, context: null }]);
+    void contextFor(toast, sessionsRef.current)
+      .then((context) => {
+        if (context) setCards((prev) => prev.map((card) => (card.key === key ? { ...card, context } : card)));
+      })
+      .catch(() => undefined);
   }, []);
 
-  useEffect(() => subscribe({ onSession: () => undefined, onToast: pushCard }), [pushCard]);
+  const rememberSession = useCallback((session: SessionRecord) => {
+    sessionsRef.current.set(session.sessionId, session);
+  }, []);
+
+  useEffect(() => subscribe({ onSession: rememberSession, onToast: pushCard }), [pushCard, rememberSession]);
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -159,7 +170,7 @@ export function Toaster(): ReactElement {
     let lastTick = Date.now();
     const tick = () => {
       const current = Date.now();
-      const delta = Math.min(current - lastTick, ATTENTION_MS);
+      const delta = Math.min(current - lastTick, TOAST_ATTENTION_MS);
       lastTick = current;
       setNow(current);
       setCards((prev) => {
@@ -192,8 +203,7 @@ export function Toaster(): ReactElement {
 
   const dismiss = useCallback((key: number) => setCards((prev) => prev.filter((item) => item.key !== key)), []);
 
-  const hidden = Math.max(0, cards.length - MAX_VISIBLE);
-  const visible = cards.slice(hidden);
+  const { hidden, visible } = toastStack(cards);
   const stop = (event: MouseEvent) => event.stopPropagation();
 
   return (
@@ -209,27 +219,69 @@ export function Toaster(): ReactElement {
         }}
       >
         {hidden > 0 && <div className="toaster__more">+{hidden} more</div>}
-        {visible.map((card) => (
-          <div key={card.key} className={`tcard tcard--${TONE[card.kind]}`} role="button" tabIndex={0} onClick={() => onCardClick(card)}>
-            <span className="tcard__icon">{iconFor(card.kind)}</span>
-            <div className="tcard__main">
-              <div className="tcard__title">{card.title}</div>
-              {card.body && <div className="tcard__ctx">{card.body}</div>}
-              <div className="tcard__time">{relTime(card.at, now)}</div>
-            </div>
-            <button
-              className="tcard__close"
-              onMouseDown={stop}
-              onClick={(event) => {
-                event.stopPropagation();
-                dismiss(card.key);
-              }}
-              aria-label="Dismiss"
+        {visible.map((card) => {
+          const view = toastView(card, card.context, now);
+          const [source, ...rest] = view.parts;
+          return (
+            <div
+              key={card.key}
+              className={`tcard tcard--${view.tone}`}
+              role="button"
+              tabIndex={0}
+              aria-label={`${view.label}: ${view.title}`}
+              onClick={() => onCardClick(card)}
             >
-              <IconClose size={14} />
-            </button>
-          </div>
-        ))}
+              <div className="tcard__head">
+                <span className="tcard__title" title={view.title}>
+                  {view.title}
+                </span>
+                <span className={`tcard__status tcard__status--${view.tone}`}>{view.label}</span>
+                <button
+                  className="tcard__close"
+                  onMouseDown={stop}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    dismiss(card.key);
+                  }}
+                  aria-label="Dismiss"
+                  title="Dismiss"
+                >
+                  <IconClose size={14} />
+                </button>
+              </div>
+              <div className="tcard__meta">
+                {source && (
+                  <span className="tcard__source" title={source.title}>
+                    <span className="tcard__icon" aria-hidden="true">
+                      {SOURCE_ICON[view.source]()}
+                    </span>
+                    <span className="tcard__part">{source.text}</span>
+                  </span>
+                )}
+                {rest.map((part) => (
+                  <Fragment key={part.key}>
+                    <span className="tcard__sep" aria-hidden="true">
+                      ·
+                    </span>
+                    <span className={part.key === "time" ? "tcard__part tcard__part--time" : "tcard__part"} title={part.title}>
+                      {part.text}
+                    </span>
+                  </Fragment>
+                ))}
+                {view.extras.length > 0 && (
+                  <span className="tcard__more" title={view.extras.join("\n")} aria-label={`${view.extras.length} more: ${view.extras.join(", ")}`} role="note">
+                    +{view.extras.length}
+                  </span>
+                )}
+              </div>
+              {view.reason && (
+                <div className={`tcard__why tcard__why--${view.tone}`} title={view.reason}>
+                  <span className="tcard__why-text">{view.reason}</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
