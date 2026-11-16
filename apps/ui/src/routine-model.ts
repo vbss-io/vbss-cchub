@@ -1,4 +1,4 @@
-import type { RoutineInput, RoutineRecord, RoutineRunRecord, RoutineRunStatus, RoutineSchedule, RoutineTrigger } from "./types";
+import type { RoutineInput, RoutineRecord, RoutineRunEvent, RoutineRunRecord, RoutineRunStatus, RoutineSchedule, RoutineTrigger } from "./types";
 
 export type ScheduleKind = RoutineSchedule["kind"];
 
@@ -206,6 +206,17 @@ export const runWhen = (run: Pick<RoutineRunRecord, "startedAt" | "dueAt">, now:
 export const isRoutineTask = (task: { createdBy: string | null }): boolean => task.createdBy !== null && task.createdBy.startsWith("routine:");
 
 export const shouldNotifyTask = (task: { createdBy: string | null }): boolean => !isRoutineTask(task);
+
+export interface RoutineFailureNotice {
+  id: string;
+  title: string;
+  detail: string | null;
+}
+
+export function routineFailureNotice(run: Pick<RoutineRunEvent, "runId" | "taskId" | "status" | "routineName" | "error">): RoutineFailureNotice | null {
+  if (run.status !== "failed") return null;
+  return { id: run.taskId ?? run.runId, title: run.routineName ?? "Routine", detail: run.error };
+}
 
 export const creatorLabel = (createdBy: string | null, fallback: string): string => {
   if (createdBy === null) return fallback;

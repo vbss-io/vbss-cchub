@@ -15,7 +15,7 @@ import { needsYouOnTop, parseOrigin, runsRouteOf, type Origin } from "./runs-mod
 import { SessionsModeSwitch } from "./components/SessionsModeSwitch";
 import { isTransientMode, mapScope, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, SESSIONS_MODE_KEY, sessionsModeRouteOf, sessionsSubtitle, type SessionsMode } from "./sessions-mode";
 import { RoutinesView } from "./views/RoutinesView";
-import { sessionsBadgeWithRoutines, shouldNotifyTask } from "./routine-model";
+import { routineFailureNotice, sessionsBadgeWithRoutines, shouldNotifyTask } from "./routine-model";
 import { useRoutineUnread } from "./use-routines";
 import type { RoutineStreamEvent } from "./routines-api";
 import { StatusBar } from "./components/StatusBar";
@@ -703,6 +703,8 @@ export function App() {
         for (const listener of routineListeners.current) listener({ kind: "routines" });
       },
       onRoutineRun: (run) => {
+        const failure = routineFailureNotice(run);
+        if (failure) notifyEvent("taskFailed", failure);
         for (const listener of routineListeners.current) listener({ kind: "routine-run", run });
       },
       onRoutinesInbox: (unread) => {

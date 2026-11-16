@@ -24,7 +24,7 @@ import { isDirectory, samePath } from "./workspaces.js";
 
 export const ROUTINE_SOURCE_PREFIX = "routine:";
 const SUMMARY_MAX = 4000;
-const TOAST_BODY_MAX = 300;
+const EVENT_ERROR_MAX = 300;
 const DEFAULT_TICK_MS = 30_000;
 const DEFAULT_BOOT_DELAY_MS = 5_000;
 
@@ -50,21 +50,24 @@ export function schedulerGate(): string | null {
   return null;
 }
 
-function broadcastInbox(run: RoutineRunRecord): void {
-  broadcast("routine-run", { routineId: run.routineId, runId: run.id, taskId: run.taskId, status: run.status, read: run.read });
-  broadcast("routines-inbox", { unread: unreadInboxCount() });
-  broadcast("routines", { changedAt: Date.now() });
+function eventError(run: RoutineRunRecord): string | null {
+  if (run.status !== "failed") return null;
+  const detail = (run.error ?? "the run failed").replace(/\s+/g, " ").trim();
+  return detail.length > EVENT_ERROR_MAX ? `${detail.slice(0, EVENT_ERROR_MAX)}…` : detail;
 }
 
-function failureToast(run: RoutineRunRecord, name: string): void {
-  const detail = (run.error ?? "the run failed").replace(/\s+/g, " ").trim();
-  broadcast("toast", {
-    kind: "taskFailed",
-    id: run.taskId ?? run.id,
-    title: `Routine failed · ${name}`,
-    body: detail.length > TOAST_BODY_MAX ? `${detail.slice(0, TOAST_BODY_MAX)}…` : detail,
-    at: Date.now(),
+function broadcastInbox(run: RoutineRunRecord, name: string | null = null): void {
+  broadcast("routine-run", {
+    routineId: run.routineId,
+    runId: run.id,
+    taskId: run.taskId,
+    status: run.status,
+    read: run.read,
+    routineName: run.routineName ?? name,
+    error: eventError(run),
   });
+  broadcast("routines-inbox", { unread: unreadInboxCount() });
+  broadcast("routines", { changedAt: Date.now() });
 }
 
 function folderBusy(routine: RoutineRecord): boolean {
@@ -137,8 +140,7 @@ export function fireRoutine(routine: RoutineRecord, options: FireOptions): Routi
       note: options.note ?? null,
       missedSlots: options.missedSlots ?? null,
     });
-    broadcastInbox(failed);
-    failureToast(failed, routine.name);
+    broadcastInbox(failed, routine.name);
     return failed;
   }
   const run = insertRoutineRun({ routineId: routine.id, taskId: task.id, trigger: options.trigger, status: "running", dueAt: options.dueAt, startedAt: now, note: options.note ?? null, missedSlots: options.missedSlots ?? null });
@@ -171,8 +173,7 @@ export function handleRunFinished(info: RunFinishedInfo): RoutineRunRecord | nul
   const status = STATUS_BY_OUTCOME[info.status] ?? "failed";
   const finished = finishRoutineRun(pending.id, { status, summary: summaryFor(info), error: status === "completed" ? null : info.error });
   if (!finished) return null;
-  broadcastInbox(finished);
-  if (status === "failed") failureToast(finished, finished.routineName ?? info.task.title);
+  broadcastInbox(finished, info.task.title);
   return finished;
 }
 

@@ -458,6 +458,8 @@ export interface RoutineRunEvent {
   taskId: string | null;
   status: RoutineRunStatus;
   read: boolean;
+  routineName: string | null;
+  error: string | null;
 }
 
 export type DiffLineKind = "add" | "del" | "ctx";

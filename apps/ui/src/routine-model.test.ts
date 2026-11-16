@@ -21,6 +21,7 @@ import {
   runTone,
   scheduleFromForm,
   sessionsBadgeWithRoutines,
+  routineFailureNotice,
   shouldNotifyTask,
   targetLabel,
   toggleDay,
@@ -284,6 +285,10 @@ describe("routine tasks and notifications", () => {
     assert.equal(shouldNotifyTask({ createdBy: "routine:abc" }), false);
     assert.equal(shouldNotifyTask({ createdBy: "mcp" }), true);
     assert.equal(shouldNotifyTask({ createdBy: null }), true);
+    const base = { runId: "run-1", taskId: "task-1", routineName: "nightly check", error: "error_max_turns" };
+    assert.deepEqual(routineFailureNotice({ ...base, status: "failed" }), { id: "task-1", title: "nightly check", detail: "error_max_turns" });
+    assert.deepEqual(routineFailureNotice({ ...base, taskId: null, routineName: null, status: "failed" }), { id: "run-1", title: "Routine", detail: "error_max_turns" });
+    for (const status of ["completed", "running", "skipped", "missed", "cancelled", "interrupted", "attention"] as const) assert.equal(routineFailureNotice({ ...base, status }), null, status);
   });
 
   it("labels the creator of routine and review tasks without the internal id", () => {

@@ -178,7 +178,7 @@ describe("routines", () => {
     assert.ok(store.listInbox().length >= 2);
   });
 
-  it("toasts only when a routine run fails", async () => {
+  it("never broadcasts a toast and carries the failure on the routine-run event", async () => {
     const routine = makeRoutine();
     process.env.FAKE_CLAUDE_MODE = "error";
     let run;
@@ -190,10 +190,12 @@ describe("routines", () => {
     const done = await finished(run.id);
     assert.equal(done.status, "failed");
     assert.match(done.error ?? "", /error_max_turns/);
-    const toast = toasts().pop()?.data as { kind: string; title: string; id: string } | undefined;
-    assert.equal(toast?.kind, "taskFailed");
-    assert.match(toast?.title ?? "", /Routine failed · nightly check/);
-    assert.equal(toast?.id, done.taskId);
+    assert.equal(toasts().length, 0);
+    const failedEvent = events.filter((item) => item.event === "routine-run").map((item) => item.data as { status: string; routineName: string | null; taskId: string | null; error: string | null }).pop();
+    assert.equal(failedEvent?.status, "failed");
+    assert.equal(failedEvent?.routineName, "nightly check");
+    assert.equal(failedEvent?.taskId, done.taskId);
+    assert.match(failedEvent?.error ?? "", /error_max_turns/);
   });
 
   it("skips a scheduled slot while the previous run is still going and refuses a second manual run", async () => {
