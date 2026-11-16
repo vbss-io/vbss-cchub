@@ -10,7 +10,8 @@
     "start": "node dist/index.js",
     "delegate": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
-    "test": "node --import tsx --test \"test/**/*.test.ts\""
+    "test": "node --import tsx --test \"test/**/*.test.ts\"",
+    "coverage": "node ../../scripts/coverage.mjs --only server"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

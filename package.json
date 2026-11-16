@@ -14,7 +14,8 @@
     "desktop:dev": "npm run dev -w @cch/desktop",
     "desktop:build": "npm run build -w @cch/desktop",
     "release": "node scripts/release.mjs",
-    "test": "npm test -w @cch/server"
+    "test": "npm test -w @cch/server",
+    "coverage": "node scripts/coverage.mjs"
   },
   "devDependencies": {
     "concurrently": "^10.0.6"
