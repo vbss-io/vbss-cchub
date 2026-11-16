@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from "react";
-import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusCodexApp, focusSession, getHooks, hubBase, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type DailyStreamEvent, type HooksStatus, type ShareStreamEvent, type TasksBoardStreamEvent } from "./api";
-import { attentionCount, sessionsBadge, sessionsBadgeTitle } from "./attention";
+import { archiveCodexThread, archiveSession, createGroup, deleteCodexThread, deleteGroup, deleteSession, fetchClaims, fetchCodexSessions, fetchGroups, fetchRuntimes, fetchSessions, focusCodexApp, focusSession, getHooks, hubBase, openCodexSession as openCodexExternal, openSession as openSessionExternal, releaseClaim, renameCodexThread, renameSession, reorderGroups, reportUiDiag, setHooks, setSessionFavorite, subscribe, unarchiveCodexThread, updateGroup, type ClaimRecord, type DailyStreamEvent, type HooksStatus, type ShareStreamEvent, type TasksBoardStreamEvent } from "./api";
+import { attentionCount, codexAttentionCount, sessionsBadge, sessionsBadgeTitle } from "./attention";
 import { isHubRun } from "./clients";
 import { BrandMark, Wordmark } from "./components/BrandMark";
+import { openOutcome } from "./act-model";
+import { ApprovalsProvider, useApprovalsStore } from "./approvals-context";
 import { CodexDrawer } from "./components/CodexDrawer";
 import { CommandPalette } from "./components/CommandPalette";
 import { SessionDrawer } from "./components/SessionDrawer";
@@ -12,7 +14,7 @@ import { SessionsModeSwitch } from "./components/SessionsModeSwitch";
 import { mapScope, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, SESSIONS_MODE_KEY, sessionsModeRouteOf, sessionsSubtitle, type SessionsMode } from "./sessions-mode";
 import { StatusBar } from "./components/StatusBar";
 import { WhatsNew } from "./components/WhatsNew";
-import { addCapture, configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getUiPrefs, putUiPrefs, UiPrefsUnavailableError, type UiPrefs, type UiPrefsPatch, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
+import { addCapture, configureCodexHooks, configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getUiPrefs, putUiPrefs, UiPrefsUnavailableError, type UiPrefs, type UiPrefsPatch, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
 import { IconChevron, IconClose, IconMore, IconSearch, IconSettings, IconSidebar } from "./icons";
 import { isMock, MOCK_GROUPS, MOCK_SESSIONS } from "./mock";
 import { unlockAudio } from "./notify";
@@ -300,6 +302,8 @@ export function App() {
   const [hooksBusy, setHooksBusy] = useState(false);
   const [runtimes, setRuntimes] = useState<RuntimeSnapshot | null>(null);
   const [codexSessions, setCodexSessions] = useState<CodexSessionRecord[]>([]);
+  const approvalsStore = useApprovalsStore();
+  const approvalHandlers = approvalsStore.handlers;
   const [hubEnabled, setHubEnabled] = useState(true);
   const [settings, setSettings] = useState<DelegationSettings | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([]);
@@ -578,6 +582,7 @@ export function App() {
       onOpen: () => {
         if (!mounted) return;
         connection.streamOpen();
+        approvalHandlers.reload();
         loadCore();
         void loadHub();
         loadUiPrefs();
@@ -608,6 +613,12 @@ export function App() {
       },
       onCodex: (list) => {
         if (mounted) setCodexSessions(list);
+      },
+      onPermissionRequest: (record) => {
+        if (mounted) approvalHandlers.onPermissionRequest(record);
+      },
+      onPermissionResolved: (event) => {
+        if (mounted) approvalHandlers.onPermissionResolved(event);
       },
       onRemoved: (sessionId) =>
         setSessions((prev) => {
@@ -681,7 +692,7 @@ export function App() {
       mounted = false;
       unsubscribe();
     };
-  }, [goToHash]);
+  }, [goToHash, approvalHandlers]);
 
   useEffect(() => {
     if (!hubEnabled || isMock) return;
@@ -730,7 +741,8 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessions, tick],
   );
-  const attention = attentionCount(liveSessions);
+  const codexWaiting = codexAttentionCount(codexSessions);
+  const attention = attentionCount(liveSessions) + codexWaiting;
   const hubRunning = tasks.filter((t) => t.status === "running" || t.status === "pending").length;
   const hubAttention = tasks.filter((t) => t.status === "attention" || t.status === "failed" || t.status === "interrupted").length;
 
@@ -785,6 +797,7 @@ export function App() {
   const saveSettings = async (patch: SettingsPatch) => {
     try {
       setSettings(await updateSettings(patch));
+      if (patch.approvals) void getHooks().then(setHooksState).catch(() => undefined);
       await loadHub();
       setConnect(null);
       await loadConnect();
@@ -813,6 +826,31 @@ export function App() {
       fail(err instanceof Error ? err.message : "could not change the connection");
     }
   };
+
+  const codexHooks = async (action: "install" | "uninstall") => {
+    try {
+      await configureCodexHooks(action);
+      await loadConnect();
+      ok(action === "install" ? "Codex hooks written. Review and trust them in Codex (/hooks in the CLI, Settings > Hooks in the app)." : "Codex hooks removed.");
+    } catch (err) {
+      fail(err instanceof Error ? err.message : "could not change the Codex hooks");
+    }
+  };
+
+  const openExternally = useCallback(
+    async (open: () => Promise<Parameters<typeof openOutcome>[0]>) => {
+      try {
+        const outcome = openOutcome(await open());
+        if (outcome.kind === "opened") ok(outcome.text);
+        else fail(outcome.text);
+      } catch (err) {
+        fail(err instanceof Error ? err.message : "could not open the session");
+      }
+    },
+    [ok, fail],
+  );
+  const openClaudeExternally = useCallback((id: string) => void openExternally(() => openSessionExternal(id)), [openExternally]);
+  const openCodexExternally = useCallback((id: string) => void openExternally(() => openCodexExternal(id)), [openExternally]);
 
   const moveGroup = (id: string, direction: -1 | 1) => {
     const index = groups.findIndex((group) => group.id === id);
@@ -909,7 +947,7 @@ export function App() {
   useEffect(() => {
     saveSidebarHint(sidebarCollapsed);
   }, [sidebarCollapsed]);
-  const sessionsNavBadge = sessionsBadge(liveSessions, tasks, delegatedEnabled);
+  const sessionsNavBadge = sessionsBadge(liveSessions, tasks, delegatedEnabled, codexWaiting);
   const badgeOf = (key: View): number => (key === "sessions" ? sessionsNavBadge.count : 0);
   const navTitle = (key: View, label: string): string => (key === "sessions" ? sessionsBadgeTitle(label, sessionsNavBadge) : railItemTitle(label, badgeOf(key)));
   const navCurrent = navCurrentKey(effectiveView, runsMode, flowEnabled);
@@ -1105,6 +1143,7 @@ export function App() {
 
   return (
     <UiPrefsProvider value={uiPrefsValue}>
+      <ApprovalsProvider store={approvalsStore}>
       <div className={`shell ${drawerSession || codexDrawerThread || taskDrawer || sharePanel ? "shell--panel" : ""} ${rail ? "shell--rail" : ""}`}>
         {connection.offline && !isMock && <HubOfflineBanner />}
         <nav className="nav" aria-label="Main">
@@ -1202,6 +1241,8 @@ export function App() {
                 tick={tick}
                 onOpen={openSession}
                 onFocus={(id) => void focusSession(id)}
+                onOpenSession={openClaudeExternally}
+                onOpenCodexSession={openCodexExternally}
                 onArchive={(id) => void archiveSession(id)}
                 onDelete={(id) => void deleteSession(id)}
                 onRename={(id, title) => void renameSession(id, title)}
@@ -1332,6 +1373,7 @@ export function App() {
                 onSaveSettings={saveSettings}
                 onShell={shell}
                 onMcp={mcp}
+                onCodexHooks={codexHooks}
                 autostart={autostart}
                 onAutostart={async (enabled) => {
                   try {
@@ -1403,6 +1445,7 @@ export function App() {
               setDrawer(null);
               navigate("tasks", id);
             }}
+            onOpenSession={openClaudeExternally}
           />
         )}
         {codexDrawerThread && (
@@ -1412,6 +1455,7 @@ export function App() {
             delegatedEnabled={delegatedEnabled}
             codexAppRunning={runtimes?.codexApp.running ?? false}
             onFocusApp={() => void focusFromPalette(focusCodexApp)}
+            onOpenSession={openCodexExternally}
             onArchive={(id) => void archiveCodexThread(id)}
             onUnarchive={(id) => void unarchiveCodexThread(id)}
             onClose={() => setCodexDrawer(null)}
@@ -1465,6 +1509,7 @@ export function App() {
           </div>
         )}
       </div>
+      </ApprovalsProvider>
     </UiPrefsProvider>
   );
 }

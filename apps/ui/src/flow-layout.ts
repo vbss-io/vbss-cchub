@@ -235,7 +235,7 @@ export function buildFlow(input: FlowInput): FlowGraph {
     const laneRunning =
       laneSessions.some((session) => session.status === "active" || session.status === "waiting") ||
       agentsRunningTotal > 0 ||
-      lane.codex.some((thread) => thread.status === "active") ||
+      lane.codex.some((thread) => thread.status === "active" || thread.status === "waiting") ||
       lane.looseTasks.some(taskRunning) ||
       laneSessions.some((session) => (tasksBySession.get(session.sessionId) ?? []).some(taskRunning));
     const laneDim = !laneRunning;
@@ -340,8 +340,8 @@ export function buildFlow(input: FlowInput): FlowGraph {
         ...base("codex", `c:${thread.id}`, wsId, lane.key),
         title: thread.customTitle ?? thread.title,
         subtitle: `codex · ${thread.status}`,
-        tone: thread.status === "active" ? "go" : "muted",
-        running: thread.status === "active",
+        tone: thread.status === "waiting" ? "pend" : thread.status === "active" ? "go" : "muted",
+        running: thread.status === "active" || thread.status === "waiting",
         dim: laneDim,
         codexId: thread.id,
       });

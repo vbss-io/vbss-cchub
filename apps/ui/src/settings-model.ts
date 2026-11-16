@@ -71,7 +71,7 @@ export const SETTINGS_TAB_KEYWORDS: Readonly<Record<string, string[]>> = {
   "plugin-limits": ["usage", "quota", "tokens", "plugin"],
   "plugin-widget": ["tray", "overlay", "edge", "rings", "plugin"],
   "plugin-share": ["share", "sharing", "ngrok", "tunnel", "identity", "plugin"],
-  connections: ["hooks", "mcp", "shell", "alias", "wk", "claude code", "codex"],
+  connections: ["hooks", "mcp", "shell", "alias", "wk", "claude code", "codex", "approvals", "permission", "allow", "deny", "codex hooks"],
   notifications: ["alerts", "toast", "sound"],
   groups: ["sessions", "workspace"],
   about: ["support", "version", "backups", "data", "whats new", "sponsor"],

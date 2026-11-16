@@ -1,9 +1,11 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactElement } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactElement } from "react";
 import { fetchSessions, focusSession, reportUiDiag, reportUiError, requestNavigate, subscribe, type ToastCard } from "../api";
+import { ApprovalsProvider, useApprovalsStore, type ApprovalsStore } from "../approvals-context";
+import { approvalToastsOn, toastQueue } from "../approvals-model";
 import { sessionClient } from "../clients";
 import { getTask } from "../delegation";
 import { IconClose, IconSessions, IconShare, IconTasks } from "../icons";
-import type { NotifEventKind } from "../notifications";
+import { loadNotifEventConfig, type NotifEventKind } from "../notifications";
 import {
   sessionToastContext,
   taskToastContext,
@@ -16,7 +18,8 @@ import {
   type ToastContext,
   type ToastSource,
 } from "../toast-model";
-import type { SessionRecord } from "../types";
+import type { PermissionRequestRecord, SessionRecord } from "../types";
+import { ApprovalRequest } from "./ApprovalRequest";
 import { shortClientName } from "./RunChips";
 
 const inTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -133,7 +136,18 @@ async function contextFor(toast: ToastCard, cache: Map<string, SessionRecord>): 
 }
 
 export function Toaster(): ReactElement {
+  const approvalsStore = useApprovalsStore();
+  return (
+    <ApprovalsProvider store={approvalsStore}>
+      <ToasterStack approvalsStore={approvalsStore} />
+    </ApprovalsProvider>
+  );
+}
+
+function ToasterStack({ approvalsStore }: { approvalsStore: ApprovalsStore }): ReactElement {
   const [cards, setCards] = useState<Card[]>([]);
+  const [dismissedApprovals, setDismissedApprovals] = useState<ReadonlySet<string>>(() => new Set());
+  const approvalHandlers = approvalsStore.handlers;
   const [now, setNow] = useState(() => Date.now());
   const hoveringRef = useRef(false);
   const seq = useRef(0);
@@ -156,7 +170,24 @@ export function Toaster(): ReactElement {
     sessionsRef.current.set(session.sessionId, session);
   }, []);
 
-  useEffect(() => subscribe({ onSession: rememberSession, onToast: pushCard }), [pushCard, rememberSession]);
+  useEffect(
+    () =>
+      subscribe({
+        onSession: rememberSession,
+        onToast: pushCard,
+        onOpen: approvalHandlers.reload,
+        onPermissionRequest: approvalHandlers.onPermissionRequest,
+        onPermissionResolved: approvalHandlers.onPermissionResolved,
+      }),
+    [pushCard, rememberSession, approvalHandlers],
+  );
+
+  const approvalCards = useMemo(() => (approvalToastsOn(loadNotifEventConfig()) ? toastQueue(approvalsStore.list, dismissedApprovals) : []), [approvalsStore.list, dismissedApprovals]);
+  const dismissApproval = useCallback((id: string) => setDismissedApprovals((prev) => new Set(prev).add(id)), []);
+  const openApprovalSession = useCallback((request: PermissionRequestRecord) => {
+    if (request.agent === "claude") void openTarget("sessionNeedsYou", request.sessionId);
+    else void requestNavigate("#/sessions");
+  }, []);
 
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -191,10 +222,11 @@ export function Toaster(): ReactElement {
 
   useLayoutEffect(() => {
     const height = (stackRef.current?.offsetHeight ?? 0) + MARGIN;
-    if (applied.current.count === cards.length && applied.current.height === height) return;
-    applied.current = { count: cards.length, height };
-    void applyWindow(cards.length, Math.max(height, 1));
-  }, [cards]);
+    const count = cards.length + approvalCards.length;
+    if (applied.current.count === count && applied.current.height === height) return;
+    applied.current = { count, height };
+    void applyWindow(count, Math.max(height, 1));
+  }, [cards, approvalCards]);
 
   const onCardClick = useCallback((card: Card) => {
     void openTarget(card.kind, card.id);
@@ -219,6 +251,23 @@ export function Toaster(): ReactElement {
         }}
       >
         {hidden > 0 && <div className="toaster__more">+{hidden} more</div>}
+        {approvalCards.map((request) => (
+          <div key={request.id} className="tcard tcard--pend tcard--approval" role="group" aria-label={`Permission request: ${request.toolName}`}>
+            <div className="tcard__head">
+              <span className="tcard__title" title={request.title ?? request.sessionId}>
+                {request.title ?? request.sessionId.slice(0, 8)}
+              </span>
+              <span className="tcard__status tcard__status--pend">Needs you</span>
+              <button className="tcard__close" onClick={() => dismissApproval(request.id)} aria-label="Dismiss" title="Dismiss, the request stays in the hub">
+                <IconClose size={14} />
+              </button>
+            </div>
+            <ApprovalRequest request={request} compact reasonField={false} />
+            <button type="button" className="show-more__btn tcard__open" onClick={() => openApprovalSession(request)}>
+              Open session
+            </button>
+          </div>
+        ))}
         {visible.map((card) => {
           const view = toastView(card, card.context, now);
           const [source, ...rest] = view.parts;

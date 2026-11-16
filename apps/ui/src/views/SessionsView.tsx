@@ -162,6 +162,8 @@ interface Props {
   onOrigin: (origin: Origin) => void;
   onOpen: (sessionId: string) => void;
   onFocus: (sessionId: string) => void;
+  onOpenSession?: (sessionId: string) => void;
+  onOpenCodexSession?: (id: string) => void;
   onArchive: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onRename: (sessionId: string, title: string) => void;
@@ -198,6 +200,8 @@ export function SessionsView({
   onOrigin,
   onOpen,
   onFocus,
+  onOpenSession,
+  onOpenCodexSession,
   onArchive,
   onDelete,
   onRename,
@@ -319,7 +323,8 @@ export function SessionsView({
         if (bucket === "hidden") continue;
         const name = codexNameOf(thread);
         if (!matchesQuery(`${name} ${thread.cwd ?? ""} ${thread.lastMessage ?? ""}`)) continue;
-        take(bucket, false, { id: thread.id, kind: "codex", thread, status: thread.status, updatedAt: thread.updatedAt, name, cwd: thread.cwd, needs: false, workspace: workspaceOf(workspaces, thread.cwd) });
+        const attention = thread.status === "waiting";
+        take(bucket, attention, { id: thread.id, kind: "codex", thread, status: thread.status, updatedAt: thread.updatedAt, name, cwd: thread.cwd, needs: attention && LIVE_BUCKETS.includes(bucket), workspace: workspaceOf(workspaces, thread.cwd) });
       }
     }
     if (showTasks) {
@@ -424,6 +429,7 @@ export function SessionsView({
           workspace={item.workspace}
           codexAppRunning={codexAppRunning}
           onOpen={onOpenCodex}
+          onOpenSession={onOpenCodexSession}
           onRename={onRenameCodex}
           onArchive={onArchiveCodex}
           onUnarchive={onUnarchiveCodex}
@@ -469,6 +475,7 @@ export function SessionsView({
         onArchive={onArchive}
         onDelete={onDelete}
         onFocus={onFocus}
+        onOpenSession={onOpenSession}
         onRename={onRename}
         onFavorite={onFavorite}
       />

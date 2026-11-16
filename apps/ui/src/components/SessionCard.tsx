@@ -1,9 +1,12 @@
 import { useState, type MouseEvent } from "react";
+import { canOpenSession } from "../act-model";
+import { useApprovals } from "../approvals-context";
 import { sessionClient } from "../clients";
 import { IconFocus, IconStar } from "../icons";
 import { relativeTime } from "../time";
 import type { SessionRecord, SessionStatus } from "../types";
 import { shortFolder } from "../wsmatch";
+import { ApprovalList } from "./ApprovalRequest";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 import { sessionStatusTone } from "../runs-model";
 import { CtxMeter, RunFoot, RunMeta, RunStatus, type MetaPart } from "./RunChips";
@@ -59,6 +62,7 @@ interface Props {
   onArchive: (sessionId: string) => void;
   onDelete: (sessionId: string) => void;
   onFocus: (sessionId: string) => void;
+  onOpenSession?: (sessionId: string) => void;
   onRename: (sessionId: string, title: string) => void;
   onFavorite: (sessionId: string, favorite: boolean) => void;
 }
@@ -75,12 +79,14 @@ export function SessionCard({
   onArchive,
   onDelete,
   onFocus,
+  onOpenSession,
   onRename,
   onFavorite,
 }: Props) {
   const [confirming, setConfirming] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const menu = useCardMenu();
+  const approvals = useApprovals().forSession("claude", session.sessionId);
 
   const archived = session.archivedAt != null;
   const favorite = session.favoriteAt != null;
@@ -120,6 +126,7 @@ export function SessionCard({
 
   const stop = (event: MouseEvent) => event.stopPropagation();
   const menuItems: CardMenuItem[] = [
+    ...(onOpenSession && canOpenSession({ status: session.status, archivedAt: session.archivedAt, stale }) ? [{ key: "open", label: "Open session", onSelect: () => onOpenSession(session.sessionId) }] : []),
     { key: "rename", label: "Rename", onSelect: () => setRenaming(true) },
     ...(archived ? [] : [{ key: "archive", label: "Archive", onSelect: () => onArchive(session.sessionId) }]),
     { key: "favorite", label: favorite ? "Unfavorite" : "Favorite", onSelect: () => onFavorite(session.sessionId, !favorite) },
@@ -216,6 +223,8 @@ export function SessionCard({
       </div>
 
       <RunMeta client={clientInfo} clientTitle={`${clientInfo.label} · ${folder}`} parts={metaParts} extras={extras} />
+
+      <ApprovalList requests={approvals} />
 
       <RunFoot actions={canFocus || archived ? actions : undefined}>
         {model && (

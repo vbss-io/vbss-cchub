@@ -32,10 +32,11 @@ export function sessionTabs({ agentsTotal, agentsRunning, asks, forks, delegated
 
 export const visibleTab = <K extends string>(tab: K, tabs: readonly DrawerTab<K>[], fallback: K): K => (tabs.some((item) => item.key === tab) ? tab : fallback);
 
-export type SessionMenuKey = "share" | "large" | "archive";
+export type SessionMenuKey = "open" | "share" | "large" | "archive";
 
-export function sessionMenuKeys({ canShare, archived }: { canShare: boolean; archived: boolean }): SessionMenuKey[] {
+export function sessionMenuKeys({ canShare, archived, canOpen = false }: { canShare: boolean; archived: boolean; canOpen?: boolean }): SessionMenuKey[] {
   const keys: SessionMenuKey[] = [];
+  if (canOpen) keys.push("open");
   if (canShare) keys.push("share");
   keys.push("large");
   if (!archived) keys.push("archive");
@@ -45,12 +46,13 @@ export function sessionMenuKeys({ canShare, archived }: { canShare: boolean; arc
 export type CodexPrimary = "focus-app" | null;
 
 export const codexPrimaryAction = ({ status, appRunning }: { status: CodexSessionRecord["status"]; appRunning: boolean }): CodexPrimary =>
-  appRunning && (status === "active" || status === "idle") ? "focus-app" : null;
+  appRunning && (status === "active" || status === "waiting" || status === "idle") ? "focus-app" : null;
 
-export type CodexMenuKey = "task" | "large" | "archive" | "unarchive";
+export type CodexMenuKey = "open" | "task" | "large" | "archive" | "unarchive";
 
-export function codexMenuKeys({ hubTask, delegatedOn, archived }: { hubTask: boolean; delegatedOn: boolean; archived: boolean }): CodexMenuKey[] {
+export function codexMenuKeys({ hubTask, delegatedOn, archived, canOpen = false }: { hubTask: boolean; delegatedOn: boolean; archived: boolean; canOpen?: boolean }): CodexMenuKey[] {
   const keys: CodexMenuKey[] = [];
+  if (canOpen) keys.push("open");
   if (hubTask && delegatedOn) keys.push("task");
   keys.push("large");
   keys.push(archived ? "unarchive" : "archive");

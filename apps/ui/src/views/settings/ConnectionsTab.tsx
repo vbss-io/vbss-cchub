@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { HooksStatus } from "../../api";
+import { APPROVAL_WINDOW_MAX, APPROVAL_WINDOW_MIN, backupNote, codexHooksView, parseWindow, windowHint } from "../../act-model";
 import { HOOK_EVENTS_HINT, hooksView } from "../../hooks-status";
-import type { ConnectStatus, McpClient, ShellKind } from "../../delegation";
+import type { ConnectStatus, DelegationSettings, McpClient, SettingsPatch, ShellKind } from "../../delegation";
 
 const MCP_LABEL: Record<McpClient, string> = {
   "claude-code": "Claude Code (CLI, VS Code, terminal)",
@@ -20,9 +21,60 @@ interface Props {
   onToggleHooks: () => void;
   onShell: (kind: ShellKind, action: "install" | "uninstall") => Promise<void>;
   onMcp: (client: McpClient, action: "install" | "uninstall") => Promise<void>;
+  settings: DelegationSettings | null;
+  onSaveSettings: (patch: SettingsPatch) => Promise<void>;
+  onCodexHooks: (action: "install" | "uninstall") => Promise<void>;
 }
 
-export function ConnectionsTab({ enabled, hubUrl, connect, hooks, hooksBusy, onToggleHooks, onShell, onMcp }: Props) {
+interface WindowFieldProps {
+  id: string;
+  label: string;
+  value: number;
+  disabled: boolean;
+  onCommit: (seconds: number) => void;
+}
+
+function WindowField({ id, label, value, disabled, onCommit }: WindowFieldProps) {
+  const [draft, setDraft] = useState(String(value));
+  const [invalid, setInvalid] = useState(false);
+  useEffect(() => {
+    setDraft(String(value));
+    setInvalid(false);
+  }, [value]);
+  const commit = () => {
+    const seconds = parseWindow(draft);
+    if (seconds === null) {
+      setInvalid(true);
+      return;
+    }
+    setInvalid(false);
+    if (seconds !== value) onCommit(seconds);
+  };
+  return (
+    <label className="field" htmlFor={id}>
+      <span>{label}</span>
+      <input
+        id={id}
+        className="in"
+        type="number"
+        inputMode="numeric"
+        min={APPROVAL_WINDOW_MIN}
+        max={APPROVAL_WINDOW_MAX}
+        value={draft}
+        disabled={disabled}
+        aria-invalid={invalid}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") commit();
+        }}
+      />
+      <small className={invalid ? "error" : "hint"}>{invalid ? `Use a whole number from ${APPROVAL_WINDOW_MIN} to ${APPROVAL_WINDOW_MAX}.` : windowHint(value)}</small>
+    </label>
+  );
+}
+
+export function ConnectionsTab({ enabled, hubUrl, connect, hooks, hooksBusy, onToggleHooks, onShell, onMcp, settings, onSaveSettings, onCodexHooks }: Props) {
   const [busy, setBusy] = useState(false);
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -34,13 +86,16 @@ export function ConnectionsTab({ enabled, hubUrl, connect, hooks, hooksBusy, onT
   };
   const wslInstalled = hooks?.wsl?.filter((item) => item.installed).length ?? 0;
   const view = hooksView(hooks);
+  const codexView = codexHooksView(connect?.codexHooks ?? null);
+  const codexHooks = connect?.codexHooks ?? null;
+  const approvals = settings?.approvals ?? null;
 
   return (
     <>
       <section className="settings__section" id="settings-hooks">
         <h2>Hooks</h2>
         <p className="hint">
-          Claude Code hooks are how sessions reach the hub: {HOOK_EVENTS_HINT}. They post to <code>{hubUrl}</code> and never block Claude.
+          Claude Code hooks are how sessions reach the hub: {HOOK_EVENTS_HINT}. They post to <code>{hubUrl}</code> and never block Claude; only a permission request waits for your answer, for the window set under Approvals.
         </p>
         <div className="statusrow">
           <span className={`tag tag--${view.tone}`}>{view.tag}</span>
@@ -59,6 +114,58 @@ export function ConnectionsTab({ enabled, hubUrl, connect, hooks, hooksBusy, onT
               </li>
             ))}
           </ul>
+        )}
+      </section>
+
+      <section className="settings__section" id="settings-approvals">
+        <h2>Approvals from the hub</h2>
+        <p className="hint">
+          When a session asks for permission, the hub can show it with Allow and Deny. Your answer is a one-time decision for that request only; it never grants "always allow" and never changes the mode. If you do not answer in time, the
+          prompt stays in the terminal or app exactly as it was. Set a window to 0 to only observe.
+        </p>
+        {!enabled && <p className="callout">Available once the hub surface is on.</p>}
+        {enabled && !approvals && <p className="muted">Loading…</p>}
+        {approvals && (
+          <div className="form">
+            <WindowField id="approvals-claude" label="Claude Code window (seconds)" value={approvals.claudeWindowSec} disabled={!enabled} onCommit={(seconds) => void onSaveSettings({ approvals: { claudeWindowSec: seconds } })} />
+            <WindowField id="approvals-codex" label="Codex window (seconds)" value={approvals.codexWindowSec} disabled={!enabled} onCommit={(seconds) => void onSaveSettings({ approvals: { codexWindowSec: seconds } })} />
+          </div>
+        )}
+        <p className="hint">
+          The window is also written into the hook timeout, so after changing it use <strong>Update hooks</strong> above for Claude Code
+          {hooks?.permissionTimeout ? ` (hook timeout ${hooks.permissionTimeout} s)` : ""} and the Codex hooks below.
+        </p>
+      </section>
+
+      <section className="settings__section" id="settings-codex-hooks">
+        <h2>Codex hooks</h2>
+        <p className="hint">
+          Codex hooks make Codex sessions live in the hub (running, needs you, idle, ended) and let you approve a permission request from here. They are added to <code>~/.codex/hooks.json</code> next to yours, a copy is kept, and
+          Remove puts the file back as it was.
+        </p>
+        {!enabled && <p className="callout">Available once the hub surface is on.</p>}
+        {enabled && !codexHooks && <p className="muted">Loading…</p>}
+        {codexHooks && (
+          <>
+            <div className="statusrow">
+              <span className={`tag tag--${codexView.tone}`}>{codexView.tag}</span>
+              {codexView.detail && <span className="muted">{codexView.detail}</span>}
+              <span className="path muted">{codexHooks.path}</span>
+              <span className="spacer" />
+              {codexView.canRemove && (
+                <button className="act" disabled={busy} onClick={() => void run(() => onCodexHooks("uninstall"))}>
+                  Remove hooks
+                </button>
+              )}
+              {codexView.canInstall && (
+                <button className="act act--focus" disabled={busy} onClick={() => void run(() => onCodexHooks("install"))}>
+                  {codexView.installLabel}
+                </button>
+              )}
+            </div>
+            <p className="callout">{codexHooks.trustNote}</p>
+            {backupNote(codexHooks) && <p className="hint">{backupNote(codexHooks)}</p>}
+          </>
         )}
       </section>
 

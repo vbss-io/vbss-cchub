@@ -1,6 +1,6 @@
 import type { TaskStatus } from "./delegation";
 import { taskNeedsYou } from "./runs-model";
-import type { SessionRecord } from "./types";
+import type { CodexSessionRecord, SessionRecord } from "./types";
 
 type AttentionSession = Pick<SessionRecord, "status" | "unread" | "helperOf">;
 
@@ -13,6 +13,11 @@ export function attentionCount(sessions: readonly AttentionSession[]): number {
   return sessions.filter(needsYou).length;
 }
 
+type AttentionCodex = Pick<CodexSessionRecord, "status" | "archivedAt" | "hidden">;
+
+export const codexAttentionCount = (threads: readonly AttentionCodex[]): number =>
+  threads.filter((thread) => thread.status === "waiting" && thread.archivedAt == null && !thread.hidden).length;
+
 interface AttentionTask {
   status: TaskStatus;
   archivedAt: number | null;
@@ -24,8 +29,8 @@ export interface SessionsBadge {
   tasks: number;
 }
 
-export function sessionsBadge(sessions: readonly AttentionSession[], tasks: readonly AttentionTask[], delegatedOn: boolean): SessionsBadge {
-  const waiting = attentionCount(sessions);
+export function sessionsBadge(sessions: readonly AttentionSession[], tasks: readonly AttentionTask[], delegatedOn: boolean, codexWaiting = 0): SessionsBadge {
+  const waiting = attentionCount(sessions) + codexWaiting;
   const needing = delegatedOn ? tasks.filter((task) => task.archivedAt == null && taskNeedsYou(task.status)).length : 0;
   return { count: waiting + needing, sessions: waiting, tasks: needing };
 }

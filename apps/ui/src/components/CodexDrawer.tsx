@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { canOpenCodex, canReplyToCodex, replyBlock, type ReplyBlock } from "../act-model";
+import { useApprovals } from "../approvals-context";
+import { replyCodexThread } from "../delegation-actions";
 import { fetchCodexLive } from "../api";
 import { codexClient } from "../clients";
 import { codexMenuKeys, codexPrimaryAction, type CodexMenuKey } from "../drawer-model";
@@ -12,6 +15,7 @@ import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 import { RunChip } from "./RunChips";
 import { Toggletip } from "./Toggletip";
 import { ClampScope } from "./ShowMore";
+import { ApprovalList } from "./ApprovalRequest";
 
 interface Props {
   thread: CodexSessionRecord;
@@ -21,6 +25,7 @@ interface Props {
   onClose: () => void;
   onOpenTask: (taskId: string) => void;
   onFocusApp: () => void;
+  onOpenSession?: (id: string) => void;
   onArchive: (id: string) => void;
   onUnarchive: (id: string) => void;
 }
@@ -38,7 +43,73 @@ const sourceLabel = (thread: CodexSessionRecord): string => {
   return thread.threadSource ? (THREAD_SOURCE[thread.threadSource] ?? thread.threadSource.replace(/_/g, " ")) : "—";
 };
 
-export function CodexDrawer({ thread, workspace, delegatedEnabled, codexAppRunning, onClose, onOpenTask, onFocusApp, onArchive, onUnarchive }: Props) {
+type ReplyState = { kind: "idle" } | { kind: "sending" } | { kind: "sent" } | { kind: "blocked"; block: ReplyBlock };
+
+function CodexReply({ threadId, onOpenSession }: { threadId: string; onOpenSession?: (id: string) => void }) {
+  const [text, setText] = useState("");
+  const [state, setState] = useState<ReplyState>({ kind: "idle" });
+
+  useEffect(() => {
+    setText("");
+    setState({ kind: "idle" });
+  }, [threadId]);
+
+  const send = async () => {
+    const body = text.trim();
+    if (body.length === 0 || state.kind === "sending") return;
+    setState({ kind: "sending" });
+    try {
+      const result = await replyCodexThread(threadId, body);
+      if (result.ok) {
+        setText("");
+        setState({ kind: "sent" });
+      } else {
+        setState({ kind: "blocked", block: replyBlock(result.code, result.message) });
+      }
+    } catch (err) {
+      setState({ kind: "blocked", block: replyBlock(null, err instanceof Error ? err.message : "") });
+    }
+  };
+
+  return (
+    <div className="reply">
+      <label className="reply__label" htmlFor={`reply-${threadId}`}>
+        Reply to this run
+      </label>
+      <textarea
+        id={`reply-${threadId}`}
+        className="in reply__box"
+        value={text}
+        disabled={state.kind === "sending"}
+        placeholder="Send a follow-up to the Codex run the hub started"
+        onChange={(event) => {
+          setText(event.target.value);
+          if (state.kind !== "sending") setState({ kind: "idle" });
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+            event.preventDefault();
+            void send();
+          }
+        }}
+      />
+      <div className="reply__row">
+        {state.kind === "sent" && <span className="reply__note">Sent. The run continues in the hub.</span>}
+        {state.kind === "blocked" && <span className="reply__note reply__note--blocked">{state.block.text}</span>}
+        {state.kind === "blocked" && state.block.offerOpen && onOpenSession && (
+          <button type="button" className="act" onClick={() => onOpenSession(threadId)}>
+            Open session
+          </button>
+        )}
+        <button type="button" className="act act--focus" disabled={text.trim().length === 0 || state.kind === "sending"} onClick={() => void send()}>
+          {state.kind === "sending" ? "Sending..." : "Send reply"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function CodexDrawer({ thread, workspace, delegatedEnabled, codexAppRunning, onClose, onOpenTask, onFocusApp, onOpenSession, onArchive, onUnarchive }: Props) {
   const [tab, setTab] = useState<Tab>("activity");
   const [entries, setEntries] = useState<TranscriptEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +136,7 @@ export function CodexDrawer({ thread, workspace, delegatedEnabled, codexAppRunni
           }
         });
     void load();
-    const live = thread.status === "active" || thread.status === "idle";
+    const live = thread.status !== "ended";
     const id = live ? setInterval(() => void load(), 5_000) : null;
     return () => {
       mounted = false;
@@ -119,14 +190,18 @@ export function CodexDrawer({ thread, workspace, delegatedEnabled, codexAppRunni
   const clientInfo = codexClient(thread.client);
   const primary = codexPrimaryAction({ status: thread.status, appRunning: codexAppRunning });
   const hubTaskId = thread.hubTaskId;
+  const approvals = useApprovals().forSession("codex", thread.id);
+  const canOpen = !!onOpenSession && canOpenCodex({ status: thread.status, archivedAt: thread.archivedAt });
   const menuAction: Record<CodexMenuKey, CardMenuItem> = {
+    open: { key: "open", label: "Open session", onSelect: () => onOpenSession?.(thread.id) },
     task: { key: "task", label: "Open in Delegated", onSelect: () => hubTaskId && onOpenTask(hubTaskId) },
     large: { key: "large", label: full ? "Back to the side panel" : "Open in a large view", onSelect: () => setFull((value) => !value) },
     archive: { key: "archive", label: "Archive", onSelect: () => onArchive(thread.id) },
     unarchive: { key: "unarchive", label: "Unarchive", onSelect: () => onUnarchive(thread.id) },
   };
-  const menuItems = codexMenuKeys({ hubTask: hubTaskId !== null, delegatedOn: delegatedEnabled, archived: thread.archivedAt != null }).map((key) => menuAction[key]);
-  const live = thread.status === "active" || thread.status === "idle";
+  const menuItems = codexMenuKeys({ hubTask: hubTaskId !== null, delegatedOn: delegatedEnabled, archived: thread.archivedAt != null, canOpen }).map((key) => menuAction[key]);
+  const live = thread.status !== "ended";
+  const canReply = canReplyToCodex(thread);
 
   return (
     <>
@@ -164,6 +239,12 @@ export function CodexDrawer({ thread, workspace, delegatedEnabled, codexAppRunni
           </div>
         </header>
 
+        {approvals.length > 0 && (
+          <div className="drawer__approvals">
+            <ApprovalList requests={approvals} />
+          </div>
+        )}
+
         <div className="drawer__tabs" role="tablist">
           <button role="tab" aria-selected={tab === "activity"} className={`pill ${tab === "activity" ? "pill--on" : ""}`} onClick={() => setTab("activity")}>
             Activity
@@ -197,6 +278,7 @@ export function CodexDrawer({ thread, workspace, delegatedEnabled, codexAppRunni
                   onShowDetail={() => setDetail(true)}
                   resetKey={`codex:${thread.id}`}
                 />
+                {canReply && <CodexReply threadId={thread.id} onOpenSession={onOpenSession} />}
               </>
             )}
             {tab === "details" && (

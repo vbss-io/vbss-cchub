@@ -15,9 +15,9 @@ describe("hooks status view", () => {
     assert.equal(view.detail, "missing StopFailure, SessionEnd");
   });
 
-  it("describes only the events the hub registers", () => {
-    assert.doesNotMatch(HOOK_EVENTS_HINT, /permission request/i);
-    assert.match(HOOK_EVENTS_HINT, /notifications \(such as permission prompts\)/);
+  it("describes the events the hub registers, permission requests included", () => {
+    assert.match(HOOK_EVENTS_HINT, /permission requests/);
+    assert.match(HOOK_EVENTS_HINT, /tool results/);
     assert.match(HOOK_EVENTS_HINT, /failed stops/);
   });
 

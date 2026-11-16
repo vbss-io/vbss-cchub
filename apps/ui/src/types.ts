@@ -88,7 +88,7 @@ export interface SessionLiveSummary {
   agentCounts: { total: number; running: number };
 }
 
-export type CodexSessionStatus = "active" | "idle" | "ended";
+export type CodexSessionStatus = "active" | "waiting" | "idle" | "ended";
 
 export type CodexClient = "codex-app" | "codex-cli" | "codex-exec" | "codex-vscode";
 

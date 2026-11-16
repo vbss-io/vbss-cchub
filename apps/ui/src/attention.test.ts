@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { attentionCount, needsYou, sessionsBadge, sessionsBadgeTitle } from "./attention";
+import { attentionCount, codexAttentionCount, needsYou, sessionsBadge, sessionsBadgeTitle } from "./attention";
 import type { TaskStatus } from "./delegation";
 import type { SessionStatus } from "./types";
 
@@ -53,6 +53,19 @@ describe("attentionCount", () => {
   });
 });
 
+describe("codexAttentionCount", () => {
+  const thread = (status: "active" | "waiting" | "idle" | "ended", archivedAt: number | null = null, hidden = false) => ({ status, archivedAt, hidden });
+
+  it("counts waiting Codex threads like waiting Claude sessions", () => {
+    assert.equal(codexAttentionCount([thread("waiting"), thread("active"), thread("idle"), thread("ended")]), 1);
+  });
+
+  it("leaves archived and hidden threads out", () => {
+    assert.equal(codexAttentionCount([thread("waiting", 5), thread("waiting", null, true), thread("waiting")]), 1);
+    assert.equal(codexAttentionCount([]), 0);
+  });
+});
+
 describe("sessionsBadge", () => {
   const task = (status: TaskStatus, archivedAt: number | null = null) => ({ status, archivedAt });
   const sessions = [session("waiting"), session("idle", true), session("active")];
@@ -60,6 +73,11 @@ describe("sessionsBadge", () => {
 
   it("adds the delegated tasks that need you when the Delegated plugin is on", () => {
     assert.deepEqual(sessionsBadge(sessions, tasks, true), { count: 5, sessions: 2, tasks: 3 });
+  });
+
+  it("adds waiting Codex threads to the session count", () => {
+    assert.deepEqual(sessionsBadge(sessions, tasks, true, 2), { count: 7, sessions: 4, tasks: 3 });
+    assert.deepEqual(sessionsBadge([], [], false, 1), { count: 1, sessions: 1, tasks: 0 });
   });
 
   it("counts only sessions when the Delegated plugin is off", () => {

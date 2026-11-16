@@ -1,4 +1,5 @@
 import { hubBase } from "./api";
+import { isReplyCode, type CodexReplyCode } from "./act-model";
 import { discardWorktree, getWorktree, mergeWorktree, type Isolation, type PermissionMode, type TaskRecord, type WorktreeInfo } from "./delegation";
 
 const base = `${hubBase}/delegation`;
@@ -39,6 +40,25 @@ export const retryTask = async (id: string, permissionMode: PermissionMode | nul
     ...(permissionMode ? { permissionMode } : {}),
   });
 };
+
+export type CodexReplyResult = { ok: true } | { ok: false; code: CodexReplyCode | null; message: string };
+
+export async function replyCodexThread(threadId: string, text: string): Promise<CodexReplyResult> {
+  const res = await fetch(`${base}/codex/${encodeURIComponent(threadId)}/reply`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (res.ok) return { ok: true };
+  const raw = await res.text();
+  let json: { error?: string; code?: unknown } | null = null;
+  try {
+    json = raw.length > 0 ? (JSON.parse(raw) as { error?: string; code?: unknown }) : null;
+  } catch {
+    json = null;
+  }
+  return { ok: false, code: res.status === 409 && isReplyCode(json?.code) ? json.code : null, message: json?.error ?? `request failed (${res.status})` };
+}
 
 export const taskArchivedAt = (task: TaskRecord): number | null =>
   (task as TaskRecord & { archivedAt?: number | null }).archivedAt ?? null;
