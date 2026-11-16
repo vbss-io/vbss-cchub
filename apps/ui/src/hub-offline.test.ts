@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { initialOfflineState, isProbing, justRecovered, OFFLINE_THRESHOLD_MS, reduceOffline, type OfflineEvent, type OfflineState } from "./hub-offline";
 
 const run = (events: OfflineEvent[], start: OfflineState = initialOfflineState): OfflineState => events.reduce((state, event) => reduceOffline(state, event), start);

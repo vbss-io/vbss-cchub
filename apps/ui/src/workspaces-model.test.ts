@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { contextLabel, decodeWorkspaceParam, filterWorkspaces, repoCountLabel, splitRepoLines, workspaceMenuEntries } from "./workspaces-model";
 
 const NAMES = [{ name: "preview" }, { name: "Storefront" }, { name: "vbss.io" }];

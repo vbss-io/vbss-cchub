@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { agentStepsLabel, sessionRelations, splitAgents, toggleExpanded } from "./drawer-model";
 import { codexMenuKeys, codexPrimaryAction, sessionMenuKeys, sessionPrimaryAction, sessionTabs, visibleTab, type SessionTabInput } from "./drawer-model";
 

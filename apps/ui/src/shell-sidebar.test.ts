@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { applyUiPrefsPatch, emptyUiPrefs, normalizeUiPrefs } from "./plugins/ui-prefs";
 import { parseSidebarHint, railItemTitle, resolveSidebarCollapsed, SHELL_PREFS_SCREEN, SIDEBAR_COLLAPSED_KEY, sidebarHintValue, sidebarToggleLabel, storedSidebarCollapsed, withSidebarCollapsed } from "./shell-sidebar";
 

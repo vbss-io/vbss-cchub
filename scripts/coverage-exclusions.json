@@ -1,0 +1,15 @@
+{
+  "ui": {
+    "src/main.tsx": "bootstrap: mounts App, Widget or Toaster into #root and imports the global stylesheets",
+    "src/types.ts": "type-only: API payload types and interfaces, emits no JavaScript",
+    "src/plugins/types.ts": "type-only: plugin contract types, emits no JavaScript",
+    "src/views/settings/types.ts": "type-only: settings tab prop types, emits no JavaScript"
+  },
+  "server": {
+    "src/plugins/types.ts": "type-only: plugin contract types, emits no JavaScript"
+  },
+  "vscode-ext": {},
+  "desktop": {
+    "src/main.rs": "bootstrap: five-line binary entrypoint that only calls vbss_cchub_lib::run()"
+  }
+}

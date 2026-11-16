@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import assert from "node:assert/strict";
 import type { WorkspaceRecord } from "./delegation";
 import { repoOf, workspaceOf } from "./wsmatch";

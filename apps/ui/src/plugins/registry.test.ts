@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import type { HubFeatures } from "../delegation";
 import { DEFAULT_PINNED, defaultSidebarPrefs, enabledPlugins, enabledViews, featureOn, isPluginEnabled, isViewEnabled, navViews, parseView, PLUGINS, pluginCommandActions, pluginSettingsTabs, sidebarModel } from "./registry";
 import { applyUiPrefsPatch, emptyUiPrefs, normalizeUiPrefs } from "./ui-prefs";

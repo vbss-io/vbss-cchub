@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import type { BoardProject, BoardTask, DailyYesterday, DailyYesterdayTask, TodayEntry, TodayOutOfSync } from "./delegation";
 import {
   backlogGroups,

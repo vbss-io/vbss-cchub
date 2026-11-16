@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { addToTasksDefaults, canOrganizeFocus, organizeFocusNotice, dailyLinkState, syncStatusFor, appendNewItem, carryOverFromYesterday, formatNewItemLine, defaultYesterdayCarry, defaultYesterdayDone, focusPreviewLines, doingFocusItem, hasFocusItem, isDoingBlock, keepPickedDoingItems, mergeTrailIntoSummary, parseMeetings, parseNewItems, shouldPersistWizardDraft } from "./daily-plan";
 import type { BoardProject, DailyLinkItem, DailyYesterdayTask } from "./delegation";
 

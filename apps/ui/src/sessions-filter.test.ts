@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { countsOf, EXTRA_FILTERS, isExtraFilter, matchesFilter, type Bucket } from "./sessions-filter";
 
 const BUCKETS: Bucket[] = ["archived", "empty", "ended", "stale", "waiting", "idle", "active", "hidden"];
