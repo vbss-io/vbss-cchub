@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { isAbsolute, resolve, sep } from "node:path";
 import type { TaskRecord } from "./delegation-types.js";
 import { isReadOnlyGit } from "./worktrees.js";
 
@@ -85,6 +85,16 @@ export interface DiffOptions {
   maxLines?: number;
 }
 
+const NETWORK_OR_DEVICE_PATH = /^[\\/]{2}/;
+
+export const UNSAFE_DIR_REASON = "the working directory is not an absolute local path";
+
+export function unsafeDirReason(dir: string | null | undefined): string | null {
+  if (typeof dir !== "string" || dir.length === 0) return UNSAFE_DIR_REASON;
+  if (dir.includes("\0") || NETWORK_OR_DEVICE_PATH.test(dir) || !isAbsolute(dir)) return UNSAFE_DIR_REASON;
+  return null;
+}
+
 class GitReadError extends Error {
   constructor(
     message: string,
@@ -106,6 +116,7 @@ const gitEnv = (): NodeJS.ProcessEnv => ({
 
 export function gitRead(dir: string, args: string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
   if (!isReadOnlyGit(args)) return Promise.reject(new GitReadError(`git ${args[0] ?? ""} is not a read-only command`, false));
+  if (unsafeDirReason(dir)) return Promise.reject(new GitReadError(UNSAFE_DIR_REASON, false));
   return new Promise((resolvePromise, reject) => {
     execFile("git", ["-C", dir, ...args], { encoding: "utf8", windowsHide: true, timeout: timeoutMs, maxBuffer: DIFF_MAX_BUFFER, env: gitEnv() }, (err, stdout) => {
       if (err) {
@@ -119,7 +130,7 @@ export function gitRead(dir: string, args: string[], timeoutMs = GIT_TIMEOUT_MS)
 }
 
 export function headCommit(dir: string | null): string | null {
-  if (!dir || !existsSync(dir)) return null;
+  if (!dir || unsafeDirReason(dir) || !existsSync(dir)) return null;
   try {
     const out = execFileSync("git", ["-C", dir, "rev-parse", "--verify", "HEAD"], {
       encoding: "utf8",
@@ -315,7 +326,9 @@ async function resolveBase(root: string, target: DiffTarget): Promise<DiffBase> 
 }
 
 export async function computeDiff(target: DiffTarget, options: DiffOptions = {}): Promise<DiffResult> {
-  if (!target.dir || !existsSync(target.dir)) return { available: false, reason: "the working directory no longer exists" };
+  const unsafe = unsafeDirReason(target.dir);
+  if (unsafe) return { available: false, reason: unsafe };
+  if (!existsSync(target.dir)) return { available: false, reason: "the working directory no longer exists" };
   let root: string;
   try {
     root = (await gitRead(target.dir, ["rev-parse", "--show-toplevel"])).trim();

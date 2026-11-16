@@ -75,12 +75,16 @@ describe("health panel", () => {
     assert.equal(stateOf(codexWarn, "codex-hooks"), "warn");
     assert.deepEqual(item(codexWarn, "codex-hooks").fixAction, { kind: "api", label: "Update hooks", method: "POST", path: "/delegation/connect/codex-hooks", body: { action: "install" } });
     assert.equal(stateOf({ ...base, codexHooks: { installed: false, updateAvailable: false, error: null, missing: [] } }, "codex-hooks"), "off");
-    assert.equal(stateOf({ ...base, codexHooks: { installed: false, updateAvailable: false, error: "bad json", missing: [] } }, "codex-hooks"), "error");
+    const codexError = { ...base, codexHooks: { installed: false, updateAvailable: false, error: "bad json", missing: [] } };
+    assert.equal(stateOf(codexError, "codex-hooks"), "error");
+    assert.deepEqual(item(codexError, "codex-hooks").fixAction, { kind: "api", label: "Install hooks", method: "POST", path: "/delegation/connect/codex-hooks", body: { action: "install" } });
     const mcpOff = { ...base, mcpCodex: { installed: false, updateAvailable: false, error: null } };
     assert.equal(stateOf(mcpOff, "mcp-codex"), "off");
     assert.deepEqual(item(mcpOff, "mcp-codex").fixAction, { kind: "api", label: "Register", method: "POST", path: "/delegation/connect/mcp", body: { client: "codex", action: "install" } });
     assert.equal(stateOf({ ...base, mcpClaude: { installed: true, updateAvailable: true, error: null } }, "mcp-claude-code"), "warn");
-    assert.equal(stateOf({ ...base, mcpClaude: { installed: false, updateAvailable: false, error: "not JSON" } }, "mcp-claude-code"), "error");
+    const mcpError = { ...base, mcpClaude: { installed: false, updateAvailable: false, error: "not JSON" } };
+    assert.equal(stateOf(mcpError, "mcp-claude-code"), "error");
+    assert.deepEqual(item(mcpError, "mcp-claude-code").fixAction, { kind: "api", label: "Register", method: "POST", path: "/delegation/connect/mcp", body: { client: "claude-code", action: "install" } });
   });
 
   it("maps the statusline and the Codex app-server", () => {
@@ -88,8 +92,12 @@ describe("health panel", () => {
     assert.equal(stateOf({ ...base, statusline: { state: "outdated", error: null } }, "claude-statusline"), "warn");
     assert.equal(stateOf({ ...base, statusline: { state: "not-installed", error: null } }, "claude-statusline"), "off");
     assert.equal(item({ ...base, statusline: { state: "not-installed", error: null } }, "claude-statusline").fixAction?.kind, "api");
-    assert.equal(stateOf({ ...base, statusline: { state: "not-installed", error: "bad settings" } }, "claude-statusline"), "error");
-    assert.equal(stateOf({ ...base, codexLive: { enabled: false, pid: null, source: null, error: null } }, "codex-app-server"), "off");
+    const statuslineError = { ...base, statusline: { state: "not-installed" as const, error: "bad settings" } };
+    assert.equal(stateOf(statuslineError, "claude-statusline"), "error");
+    assert.deepEqual(item(statuslineError, "claude-statusline").fixAction, { kind: "api", label: "Install statusline", method: "POST", path: "/delegation/limits/claude-source/install" });
+    const liveOff = { ...base, codexLive: { enabled: false, pid: null, source: null, error: null } };
+    assert.equal(stateOf(liveOff, "codex-app-server"), "off");
+    assert.deepEqual(item(liveOff, "codex-app-server").fixAction, { kind: "navigate", label: "Open Limits settings", hash: "#/settings/plugin-limits" });
     assert.equal(stateOf({ ...base, codexLive: { enabled: true, pid: 1, source: "rollout", error: "codex live limits unavailable" } }, "codex-app-server"), "warn");
     assert.equal(stateOf({ ...base, codexLive: { enabled: true, pid: null, source: "rollout", error: "codex live limits unavailable" } }, "codex-app-server"), "error");
   });
@@ -106,6 +114,7 @@ describe("health panel", () => {
     assert.equal(stateOf({ ...base, share: { enabled: true, tunnel: { ...tunnel, endpointError: "EADDRINUSE" } } }, "share-tunnel"), "error");
     const history = base.history;
     assert.equal(stateOf({ ...base, history: { ...history, enabled: false } }, "history-index"), "off");
+    assert.deepEqual(item({ ...base, history: { ...history, enabled: false } }, "history-index").fixAction, { kind: "navigate", label: "Open Memory settings", hash: "#/settings/memory" });
     assert.equal(stateOf({ ...base, history: { ...history, lastBuildAt: null, files: 0 } }, "history-index"), "warn");
     assert.equal(stateOf({ ...base, history: { ...history, lastError: "disk full" } }, "history-index"), "error");
     assert.match(item({ ...base, history: { ...history, running: true, progress: { done: 3, total: 9 } } }, "history-index").detail, /3\/9/);

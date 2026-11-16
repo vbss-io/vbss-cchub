@@ -28,11 +28,11 @@ describe("healthRows", () => {
 
 describe("fixPlan", () => {
   it("has no button when the server offers no fix", () => {
-    assert.equal(fixPlan("claude-hooks", null), null);
+    assert.equal(fixPlan(null), null);
   });
 
   it("keeps the route and body of an api fix", () => {
-    assert.deepEqual(fixPlan("codex-hooks", { kind: "api", label: "Install hooks", method: "POST", path: "/delegation/connect/codex-hooks", body: { action: "install" } }), {
+    assert.deepEqual(fixPlan({ kind: "api", label: "Install hooks", method: "POST", path: "/delegation/connect/codex-hooks", body: { action: "install" } }), {
       kind: "api",
       label: "Install hooks",
       method: "POST",
@@ -42,7 +42,7 @@ describe("fixPlan", () => {
   });
 
   it("uses a null body when the fix has none", () => {
-    assert.deepEqual(fixPlan("claude-hooks", { kind: "api", label: "Install hooks", method: "POST", path: "/api/hooks/install" }), {
+    assert.deepEqual(fixPlan({ kind: "api", label: "Install hooks", method: "POST", path: "/api/hooks/install" }), {
       kind: "api",
       label: "Install hooks",
       method: "POST",
@@ -51,13 +51,9 @@ describe("fixPlan", () => {
     });
   });
 
-  it("points a generic settings link at the right section", () => {
-    assert.deepEqual(fixPlan("history-index", { kind: "navigate", label: "Open Memory settings", hash: "#/settings" }), { kind: "navigate", label: "Open Memory settings", hash: "#/settings/memory" });
-    assert.deepEqual(fixPlan("codex-app-server", { kind: "navigate", label: "Open Limits settings", hash: "#/settings" }), { kind: "navigate", label: "Open Limits settings", hash: "#/settings/plugin-limits" });
-  });
-
-  it("leaves a specific link alone", () => {
-    assert.deepEqual(fixPlan("history-index", { kind: "navigate", label: "Open", hash: "#/settings/connections" }), { kind: "navigate", label: "Open", hash: "#/settings/connections" });
+  it("passes a navigate link through unchanged", () => {
+    assert.deepEqual(fixPlan({ kind: "navigate", label: "Open Memory settings", hash: "#/settings/memory" }), { kind: "navigate", label: "Open Memory settings", hash: "#/settings/memory" });
+    assert.deepEqual(fixPlan({ kind: "navigate", label: "Open Limits settings", hash: "#/settings/plugin-limits" }), { kind: "navigate", label: "Open Limits settings", hash: "#/settings/plugin-limits" });
   });
 });
 
@@ -89,7 +85,7 @@ describe("checkedLine and canRunFix", () => {
   });
 
   it("allows a fix only when there is one and nothing else is running", () => {
-    const plan = fixPlan("claude-hooks", { kind: "api", label: "Install", method: "POST", path: "/api/hooks/install" });
+    const plan = fixPlan({ kind: "api", label: "Install", method: "POST", path: "/api/hooks/install" });
     assert.equal(canRunFix(plan, null), true);
     assert.equal(canRunFix(plan, "codex-hooks"), false);
     assert.equal(canRunFix(null, null), false);

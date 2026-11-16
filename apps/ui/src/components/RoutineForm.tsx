@@ -116,7 +116,7 @@ export function RoutineForm({ initial, workspaces, editing, busy, onSubmit, onCa
           ) : (
             <label className="field rt__grow rt__wide">
               <span>Folder</span>
-              <input className="in" value={form.cwd} placeholder="Absolute path of a folder"onChange={(event) => patch({ cwd: event.target.value })} />
+              <input className="in" value={form.cwd} placeholder="Absolute path of a folder" onChange={(event) => patch({ cwd: event.target.value })} />
             </label>
           )}
         </div>

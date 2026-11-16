@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { gitRead } from "./review-diff.js";
+import { gitRead, unsafeDirReason } from "./review-diff.js";
 
 const GH_TIMEOUT_MS = 12_000;
 const GH_MAX_BUFFER = 4 * 1_048_576;
@@ -92,6 +92,7 @@ function ghCommand(): { bin: string; prefix: string[] } {
 
 export function runGh(args: string[], cwd: string | undefined = undefined): Promise<GhOutcome> {
   if (!isReadOnlyGh(args)) return Promise.reject(new Error(`gh ${args.join(" ")} is not a read-only command`));
+  if (cwd !== undefined && unsafeDirReason(cwd)) return Promise.resolve({ ok: false, stdout: "", stderr: "", missing: false });
   const command = ghCommand();
   return new Promise((resolvePromise) => {
     execFile(
@@ -200,7 +201,10 @@ async function currentBranch(dir: string): Promise<string | null> {
 }
 
 export async function ghStatus(dir: string | null, branchHint: string | null = null, now: number = Date.now()): Promise<GhStatus> {
-  if (!dir || !existsSync(dir)) return { available: false, reason: "no working directory" };
+  if (!dir) return { available: false, reason: "no working directory" };
+  const unsafe = unsafeDirReason(dir);
+  if (unsafe) return { available: false, reason: unsafe };
+  if (!existsSync(dir)) return { available: false, reason: "no working directory" };
   const missing = await ghReady(now);
   if (missing) return { available: false, reason: missing };
   const branch = branchHint ?? (await currentBranch(dir));

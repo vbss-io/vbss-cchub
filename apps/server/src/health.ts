@@ -51,7 +51,8 @@ export interface HealthInputs {
   history: Pick<HistoryIndexStatus, "enabled" | "running" | "progress" | "sessions" | "files" | "lastBuildAt" | "lastError">;
 }
 
-const SETTINGS_HASH = "#/settings";
+const MEMORY_SETTINGS_HASH = "#/settings/memory";
+const LIMITS_SETTINGS_HASH = "#/settings/plugin-limits";
 const STATUS_TIMEOUT_MS = 8_000;
 
 export function ago(at: number | null, now: number): string {
@@ -79,7 +80,7 @@ function codexHooksItem(input: HealthInputs): HealthItem {
   const base = { id: "codex-hooks", label: "Codex hooks" };
   const fix = (label: string): HealthFix => api(label, "/delegation/connect/codex-hooks", { action: "install" });
   const status = input.codexHooks;
-  if (status.error) return { ...base, state: "error", detail: status.error, fixAction: null };
+  if (status.error) return { ...base, state: "error", detail: status.error, fixAction: fix("Install hooks") };
   if (status.installed) return { ...base, state: "ok", detail: `Installed, ${ago(input.codexLastEventAt, input.now)}`, fixAction: null };
   if (status.updateAvailable) return { ...base, state: "warn", detail: `Update available (missing ${status.missing.join(", ")})`, fixAction: fix("Update hooks") };
   return { ...base, state: "off", detail: "Not installed", fixAction: fix("Install hooks") };
@@ -87,7 +88,7 @@ function codexHooksItem(input: HealthInputs): HealthItem {
 
 function mcpItem(id: string, label: string, client: string, status: HealthInputs["mcpClaude"]): HealthItem {
   const fix = (text: string): HealthFix => api(text, "/delegation/connect/mcp", { client, action: "install" });
-  if (status.error) return { id, label, state: "error", detail: status.error, fixAction: null };
+  if (status.error) return { id, label, state: "error", detail: status.error, fixAction: fix("Register") };
   if (status.installed && status.updateAvailable) return { id, label, state: "warn", detail: "Registered with an outdated entry", fixAction: fix("Update registration") };
   if (status.installed) return { id, label, state: "ok", detail: "Registered", fixAction: null };
   return { id, label, state: "off", detail: "Not registered", fixAction: fix("Register") };
@@ -96,7 +97,7 @@ function mcpItem(id: string, label: string, client: string, status: HealthInputs
 function statuslineItem(input: HealthInputs): HealthItem {
   const base = { id: "claude-statusline", label: "Claude statusline" };
   const fix = (label: string): HealthFix => api(label, "/delegation/limits/claude-source/install");
-  if (input.statusline.error) return { ...base, state: "error", detail: input.statusline.error, fixAction: null };
+  if (input.statusline.error) return { ...base, state: "error", detail: input.statusline.error, fixAction: fix("Install statusline") };
   if (input.statusline.state === "installed") return { ...base, state: "ok", detail: "Installed", fixAction: null };
   if (input.statusline.state === "outdated") return { ...base, state: "warn", detail: "An update is available", fixAction: fix("Update statusline") };
   return { ...base, state: "off", detail: "Not installed", fixAction: fix("Install statusline") };
@@ -105,7 +106,7 @@ function statuslineItem(input: HealthInputs): HealthItem {
 function codexLiveItem(input: HealthInputs): HealthItem {
   const base = { id: "codex-app-server", label: "Codex app-server (live limits)" };
   const live = input.codexLive;
-  if (!live.enabled) return { ...base, state: "off", detail: "Live Codex limits are off", fixAction: { kind: "navigate", label: "Open Limits settings", hash: SETTINGS_HASH } };
+  if (!live.enabled) return { ...base, state: "off", detail: "Live Codex limits are off", fixAction: { kind: "navigate", label: "Open Limits settings", hash: LIMITS_SETTINGS_HASH } };
   if (live.pid !== null && live.source === "live" && live.error === null) return { ...base, state: "ok", detail: `Running (pid ${live.pid})`, fixAction: null };
   if (live.pid !== null) return { ...base, state: "warn", detail: live.error ?? "Running, no live reading yet", fixAction: api("Refresh limits", "/delegation/limits/refresh") };
   return { ...base, state: "error", detail: live.error ?? "Not running", fixAction: api("Refresh limits", "/delegation/limits/refresh") };
@@ -126,7 +127,7 @@ function shareItem(input: HealthInputs): HealthItem {
 function historyItem(input: HealthInputs): HealthItem {
   const base = { id: "history-index", label: "History search index" };
   const status = input.history;
-  if (!status.enabled) return { ...base, state: "off", detail: "The history index is turned off", fixAction: { kind: "navigate", label: "Open Memory settings", hash: SETTINGS_HASH } };
+  if (!status.enabled) return { ...base, state: "off", detail: "The history index is turned off", fixAction: { kind: "navigate", label: "Open Memory settings", hash: MEMORY_SETTINGS_HASH } };
   if (status.lastError) return { ...base, state: "error", detail: status.lastError, fixAction: api("Rebuild index", "/delegation/memory/history/rebuild") };
   if (status.running) {
     const progress = status.progress ? ` (${status.progress.done}/${status.progress.total} files)` : "";

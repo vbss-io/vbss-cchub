@@ -8,13 +8,6 @@ export const HEALTH_STATE_LABEL: Readonly<Record<HealthState, string>> = {
   error: "Error",
 };
 
-const NAVIGATE_SECTION: Readonly<Record<string, string>> = {
-  "history-index": "memory",
-  "codex-app-server": "plugin-limits",
-};
-
-const GENERIC_SETTINGS_HASH = "#/settings";
-
 export type FixPlan =
   | { kind: "api"; label: string; method: "POST"; path: string; body: Record<string, string> | null }
   | { kind: "navigate"; label: string; hash: string };
@@ -28,12 +21,10 @@ export interface HealthRow {
   fix: FixPlan | null;
 }
 
-export function fixPlan(id: HealthItem["id"], fix: HealthFix | null): FixPlan | null {
+export function fixPlan(fix: HealthFix | null): FixPlan | null {
   if (fix === null) return null;
   if (fix.kind === "api") return { kind: "api", label: fix.label, method: fix.method, path: fix.path, body: fix.body ?? null };
-  const section = NAVIGATE_SECTION[id];
-  const hash = fix.hash === GENERIC_SETTINGS_HASH && section !== undefined ? `${GENERIC_SETTINGS_HASH}/${section}` : fix.hash;
-  return { kind: "navigate", label: fix.label, hash };
+  return { kind: "navigate", label: fix.label, hash: fix.hash };
 }
 
 export const healthRows = (report: HealthReport | null): HealthRow[] =>
@@ -43,7 +34,7 @@ export const healthRows = (report: HealthReport | null): HealthRow[] =>
     state: item.state,
     stateLabel: HEALTH_STATE_LABEL[item.state],
     detail: item.detail,
-    fix: fixPlan(item.id, item.fixAction),
+    fix: fixPlan(item.fixAction),
   }));
 
 export function healthSummary(report: HealthReport | null): string {

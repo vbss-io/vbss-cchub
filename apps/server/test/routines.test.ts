@@ -215,6 +215,20 @@ describe("routines", () => {
     assert.equal(delegation.getTask(done.taskId ?? "")?.cwd, box.repoB);
   });
 
+  it("skips a plain-cwd routine while another task is running in the same folder and refuses a manual fire", async () => {
+    const holder = makeRoutine({ name: "holder", workspace: null, cwd: box.repoB, prompt: "sleep:1500" });
+    const waiting = makeRoutine({ name: "waiting", workspace: null, cwd: box.repoB });
+    const first = routines.fireRoutine(holder, { trigger: "manual", dueAt: null });
+    assert.throws(() => routines.fireRoutine(waiting, { trigger: "manual", dueAt: null }), /folder is busy/);
+    const skipped = routines.fireRoutine(waiting, { trigger: "schedule", dueAt: Date.now() });
+    assert.equal(skipped.status, "skipped");
+    assert.equal(skipped.taskId, null);
+    assert.equal(skipped.note, "folder busy with another running task");
+    await finished(first.id);
+    const after = routines.fireRoutine(waiting, { trigger: "manual", dueAt: null });
+    assert.equal((await finished(after.id)).status, "completed");
+  });
+
   it("marks routine runs left running by a crash as interrupted", () => {
     const routine = makeRoutine();
     const stuck = store.insertRoutineRun({ routineId: routine.id, taskId: null, trigger: "schedule", status: "running", dueAt: null });

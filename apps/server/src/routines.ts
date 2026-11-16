@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { config } from "./config.js";
 import { createInternalTask, delegateTask, onRunFinished, startRun, type RunFinishedInfo } from "./delegation-launch.js";
-import { getSettings, listReports } from "./delegation-store.js";
+import { getSettings, listReports, listTasks } from "./delegation-store.js";
 import type { TaskRecord } from "./delegation-types.js";
 import { decideDue, detectClockJump } from "./routine-schedule.js";
 import {
@@ -20,7 +20,7 @@ import {
   type RoutineTrigger,
 } from "./routine-store.js";
 import { broadcast } from "./sse.js";
-import { isDirectory } from "./workspaces.js";
+import { isDirectory, samePath } from "./workspaces.js";
 
 export const ROUTINE_SOURCE_PREFIX = "routine:";
 const SUMMARY_MAX = 4000;
@@ -67,6 +67,14 @@ function failureToast(run: RoutineRunRecord, name: string): void {
   });
 }
 
+function folderBusy(routine: RoutineRecord): boolean {
+  if (routine.workspace || !routine.cwd) return false;
+  const cwd = routine.cwd;
+  return listTasks({ limit: 500, includeArchived: true }).some(
+    (task) => (task.status === "running" || task.status === "pending") && task.isolation === "shared" && samePath(task.cwd, cwd),
+  );
+}
+
 function launchRoutineTask(routine: RoutineRecord): TaskRecord {
   const source = routineSource(routine.id);
   if (routine.workspace) {
@@ -105,6 +113,12 @@ export function fireRoutine(routine: RoutineRecord, options: FireOptions): Routi
   if (busy) {
     if (options.trigger === "manual") throw new RoutineGateError("this routine is still running");
     const skipped = insertRoutineRun({ routineId: routine.id, taskId: null, trigger: options.trigger, status: "skipped", dueAt: options.dueAt, startedAt: now, note: "the previous run was still in progress", missedSlots: options.missedSlots ?? null });
+    broadcastInbox(skipped);
+    return skipped;
+  }
+  if (folderBusy(routine)) {
+    if (options.trigger === "manual") throw new RoutineGateError("the folder is busy with another running task");
+    const skipped = insertRoutineRun({ routineId: routine.id, taskId: null, trigger: options.trigger, status: "skipped", dueAt: options.dueAt, startedAt: now, note: "folder busy with another running task", missedSlots: options.missedSlots ?? null });
     broadcastInbox(skipped);
     return skipped;
   }

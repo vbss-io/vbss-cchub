@@ -7,7 +7,7 @@ import { createInternalTask, isTaskActive, repoPathOf, startRun } from "./delega
 import { getTask, getTaskDetail, resolveTaskId, TaskBusyError, taskCost, taskCosts } from "./delegation-store.js";
 import type { TaskRecord } from "./delegation-types.js";
 import { ghStatus } from "./gh.js";
-import { composeReview, computeDiff, parseReviewComments, taskGitDir, type DiffTarget, type ReviewComment } from "./review-diff.js";
+import { composeReview, computeDiff, parseReviewComments, taskGitDir, unsafeDirReason, type DiffTarget, type ReviewComment } from "./review-diff.js";
 import { asString, sendError, taskJson } from "./route-helpers.js";
 import { isDirectory } from "./workspaces.js";
 
@@ -162,6 +162,11 @@ export function reviewRouter(): Router {
       res.json({ available: false, reason: "the session has no working directory" });
       return;
     }
+    const unsafe = unsafeDirReason(cwd);
+    if (unsafe) {
+      res.json({ available: false, reason: unsafe });
+      return;
+    }
     computeDiff({ dir: cwd, baseRef: null, baseKind: "head", baseBranch: null }, { file: fileParam(req.query.file) })
       .then((diff) => res.json(diff))
       .catch((err: unknown) => sendError(res, err));
@@ -175,7 +180,7 @@ export function reviewRouter(): Router {
     const comments = commentsOr400((req.body as Record<string, unknown>).comments, res);
     if (!comments) return;
     const cwd = sessionCwd(req.params.id);
-    const diffPromise = cwd ? computeDiff({ dir: cwd, baseRef: null, baseKind: "head", baseBranch: null }, { maxLines: Number.MAX_SAFE_INTEGER }) : Promise.resolve(null);
+    const diffPromise = cwd && !unsafeDirReason(cwd) ? computeDiff({ dir: cwd, baseRef: null, baseKind: "head", baseBranch: null }, { maxLines: Number.MAX_SAFE_INTEGER }) : Promise.resolve(null);
     diffPromise
       .then((diff) => res.json({ mode: "copy", sessionId: req.params.id, text: composeReview(comments, diff?.available ? diff.files : []) }))
       .catch((err: unknown) => sendError(res, err));
@@ -186,7 +191,13 @@ export function reviewRouter(): Router {
       res.status(404).json({ error: "session not found" });
       return;
     }
-    ghStatus(sessionCwd(req.params.id))
+    const cwd = sessionCwd(req.params.id);
+    const unsafe = cwd ? unsafeDirReason(cwd) : null;
+    if (unsafe) {
+      res.json({ available: false, reason: unsafe });
+      return;
+    }
+    ghStatus(cwd)
       .then((status) => res.json(status))
       .catch((err: unknown) => sendError(res, err));
   });

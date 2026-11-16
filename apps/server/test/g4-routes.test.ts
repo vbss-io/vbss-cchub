@@ -265,6 +265,17 @@ describe("G4 review, cost, gh, health and forecast", () => {
     assert.equal((await http("POST", "/delegation/sessions/g4-session/review", { comments: [] })).status, 400);
   });
 
+  it("refuses a session cwd that is a UNC or relative path without running git or gh", async () => {
+    const reason = "the working directory is not an absolute local path";
+    for (const [id, cwd] of [["g4-unc", "\\\\server\\share\\repo"], ["g4-relative", "some/relative/dir"]] as const) {
+      await http("POST", "/hook", { kind: "session_start", sessionId: id, cwd });
+      assert.deepEqual((await http("GET", `/delegation/sessions/${id}/diff`)).json, { available: false, reason });
+      assert.deepEqual((await http("GET", `/delegation/sessions/${id}/gh`)).json, { available: false, reason });
+      const review = (await http("POST", `/delegation/sessions/${id}/review`, { comments: [{ file: "a.ts", line: 1, text: "x" }] })).json as { mode: string };
+      assert.equal(review.mode, "copy");
+    }
+  });
+
   it("aggregates the health of every integration", async () => {
     const report = (await http("GET", "/delegation/health")).json as { state: string; items: { id: string; state: string }[] };
     assert.equal(report.items.length, 8);
