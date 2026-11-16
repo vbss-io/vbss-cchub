@@ -214,3 +214,142 @@ export interface RunEventMessage {
   kind: "text" | "tool" | "status";
   text: string;
 }
+
+export interface MemorySettings {
+  historyIndex: boolean;
+  handoffWorkspaces: string[];
+  summaryHeading: string;
+}
+
+export type HistoryClient = "claude" | "codex";
+
+export type HistoryRole = "user" | "assistant";
+
+export type HistoryEngine = "fts" | "like";
+
+export interface HistoryHit {
+  messageId: number;
+  sessionId: string | null;
+  client: HistoryClient;
+  title: string | null;
+  cwd: string | null;
+  workspace: string | null;
+  role: HistoryRole;
+  at: number | null;
+  seq: number;
+  snippet: string;
+  highlights: [number, number][];
+  matches: number;
+}
+
+export interface HistorySearchResult {
+  enabled: boolean;
+  engine: HistoryEngine;
+  query: string;
+  tokens: string[];
+  hits: HistoryHit[];
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+}
+
+export interface HistoryRunSummary {
+  files: number;
+  indexed: number;
+  reset: number;
+  skipped: number;
+  removed: number;
+  rows: number;
+  bytes: number;
+  ms: number;
+  stopped: boolean;
+}
+
+export interface HistoryIndexStatus {
+  enabled: boolean;
+  engine: HistoryEngine;
+  running: boolean;
+  progress: { done: number; total: number } | null;
+  files: number;
+  sessions: number;
+  rows: number;
+  textBytes: number;
+  dbBytes: number;
+  lastBuildMs: number | null;
+  lastBuildAt: number | null;
+  lastRun: HistoryRunSummary | null;
+  lastError: string | null;
+  roots: { claude: string; codex: string };
+}
+
+export interface HandoffSession {
+  sessionId: string;
+  client: "claude" | "codex";
+  title: string;
+  updatedAt: number;
+  keyPoints: string[];
+}
+
+export interface HandoffOpenLoop {
+  project: string;
+  status: string;
+  title: string;
+}
+
+export interface HandoffPreview {
+  workspace: string | null;
+  enabled: boolean;
+  sessions: HandoffSession[];
+  openLoops: HandoffOpenLoop[];
+  text: string | null;
+  chars: number;
+}
+
+export interface DaySummarySession {
+  sessionId: string;
+  client: "claude" | "codex";
+  workspace: string | null;
+  time: string | null;
+  title: string;
+  keyPoints: string[];
+}
+
+export interface DaySummaryTask {
+  project: string | null;
+  title: string;
+  source: "project" | "daily";
+}
+
+export interface DaySummaryReport {
+  time: string;
+  workspace: string | null;
+  kind: string;
+  text: string;
+}
+
+export interface DaySummaryCommit {
+  workspace: string;
+  repo: string;
+  hash: string;
+  subject: string;
+}
+
+export interface DaySummary {
+  date: string;
+  heading: string;
+  sessions: DaySummarySession[];
+  tasks: DaySummaryTask[];
+  reports: DaySummaryReport[];
+  commits: DaySummaryCommit[];
+  empty: boolean;
+  block: string;
+  markdown: string;
+}
+
+export interface DaySummaryWriteResult {
+  date: string;
+  path: string;
+  updatedAt: number;
+  changed: boolean;
+  summary: DaySummary;
+}

@@ -406,6 +406,34 @@ export function settingsRouter(): Router {
       }
       patch.approvals = approvalsPatch;
     }
+    const memoryBody = body.memory as Record<string, unknown> | undefined;
+    if (memoryBody && typeof memoryBody === "object") {
+      const memoryPatch: NonNullable<UpdateSettingsInput["memory"]> = {};
+      if ("historyIndex" in memoryBody) {
+        if (typeof memoryBody.historyIndex !== "boolean") {
+          res.status(400).json({ error: "memory.historyIndex must be a boolean" });
+          return;
+        }
+        memoryPatch.historyIndex = memoryBody.historyIndex;
+      }
+      if ("handoffWorkspaces" in memoryBody) {
+        const names = memoryBody.handoffWorkspaces;
+        if (!Array.isArray(names) || !names.every((name) => typeof name === "string" && name.trim() !== "" && !/[\r\n]/.test(name))) {
+          res.status(400).json({ error: "memory.handoffWorkspaces must be an array of workspace names" });
+          return;
+        }
+        memoryPatch.handoffWorkspaces = [...new Set(names.map((name: string) => name.trim()))];
+      }
+      if ("summaryHeading" in memoryBody) {
+        const heading = typeof memoryBody.summaryHeading === "string" ? memoryBody.summaryHeading.trim().replace(/^#+\s*/, "") : "";
+        if (heading === "" || heading.length > 80 || /[\r\n]/.test(heading)) {
+          res.status(400).json({ error: "memory.summaryHeading must be a single line of 1-80 characters" });
+          return;
+        }
+        memoryPatch.summaryHeading = heading;
+      }
+      patch.memory = memoryPatch;
+    }
     const updated = updateSettings(patch);
     watchDaily(updated);
     watchTasksBoard(updated);

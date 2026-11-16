@@ -29,6 +29,7 @@ import type {
   LimitsSettings,
   UsageSettings,
   ApprovalsSettings,
+  MemorySettings,
   UiLayoutPrefs,
   UiPrefs,
   UiPrefsPatch,
@@ -45,6 +46,7 @@ import {
   LIMITS_REFRESH_DEFAULT,
   LIMITS_REFRESH_MAX,
   LIMITS_REFRESH_MIN,
+  MEMORY_DEFAULT_SUMMARY_HEADING,
   RUN_TIMEOUT_DEFAULT,
   RUN_TIMEOUT_MAX,
   RUN_TIMEOUT_MIN,
@@ -462,6 +464,11 @@ export function getSettings(): DelegationSettings {
       claudeWindowSec: storedInt(stored, "approvals.claudeWindowSec", APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CLAUDE_APPROVAL_WINDOW_DEFAULT),
       codexWindowSec: storedInt(stored, "approvals.codexWindowSec", APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CODEX_APPROVAL_WINDOW_DEFAULT),
     },
+    memory: {
+      historyIndex: storedFlag(stored, "memory.historyIndex", true),
+      handoffWorkspaces: storedStringArray(stored, "memory.handoffWorkspaces", []),
+      summaryHeading: storedText(stored, "memory.summaryHeading") ?? MEMORY_DEFAULT_SUMMARY_HEADING,
+    },
   };
 }
 
@@ -622,6 +629,7 @@ export interface UpdateSettingsInput {
   limits?: Partial<LimitsSettings>;
   usage?: Partial<UsageSettings>;
   approvals?: Partial<ApprovalsSettings>;
+  memory?: Partial<MemorySettings>;
 }
 
 export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
@@ -696,6 +704,9 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     if (patch.approvals?.codexWindowSec !== undefined) {
       upsertSettingStmt.run("approvals.codexWindowSec", String(clampInt(patch.approvals.codexWindowSec, APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CODEX_APPROVAL_WINDOW_DEFAULT)));
     }
+    if (patch.memory?.historyIndex !== undefined) upsertSettingStmt.run("memory.historyIndex", patch.memory.historyIndex ? "1" : "0");
+    if (patch.memory?.handoffWorkspaces !== undefined) upsertSettingStmt.run("memory.handoffWorkspaces", JSON.stringify(patch.memory.handoffWorkspaces));
+    if (patch.memory?.summaryHeading !== undefined) upsertSettingStmt.run("memory.summaryHeading", patch.memory.summaryHeading);
   });
   apply();
   return getSettings();

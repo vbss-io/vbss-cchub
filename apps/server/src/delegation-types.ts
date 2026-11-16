@@ -237,6 +237,14 @@ export const TASKS_PRIORITY_TAG_RE = /^[A-Za-z0-9_-]+$/;
 export const TASKS_DATE_TOKEN = "{{date}}";
 export const TASKS_SEPARATOR_RE = /^\s*[-:–]\s+$/;
 
+export interface MemorySettings {
+  historyIndex: boolean;
+  handoffWorkspaces: string[];
+  summaryHeading: string;
+}
+
+export const MEMORY_DEFAULT_SUMMARY_HEADING = "Day summary";
+
 export interface DelegationSettings {
   workspacesRoot: string | null;
   editorCommand: string;
@@ -252,6 +260,7 @@ export interface DelegationSettings {
   limits: LimitsSettings;
   usage: UsageSettings;
   approvals: ApprovalsSettings;
+  memory: MemorySettings;
 }
 
 export const RUN_TIMEOUT_MIN = 5;
