@@ -475,9 +475,9 @@ function measureIndexSize(counts: { files: number; rows: number; textBytes: numb
   }
 }
 
-function indexSize(counts: { files: number; rows: number; textBytes: number }, fresh: boolean): IndexSize {
+function indexSize(counts: { files: number; rows: number; textBytes: number }): IndexSize {
   const now = Date.now();
-  if (!fresh && indexSizeCache && now - indexSizeCache.at < INDEX_SIZE_TTL_MS) return indexSizeCache.size;
+  if (indexSizeCache && now - indexSizeCache.at < INDEX_SIZE_TTL_MS) return indexSizeCache.size;
   const size = measureIndexSize(counts);
   indexSizeCache = { at: now, size };
   return size;
@@ -487,7 +487,7 @@ export function historyStatus(roots: HistoryRoots = defaultRoots()): HistoryInde
   const counts = db
     .prepare(`SELECT (SELECT COUNT(*) FROM history_files) AS files, (SELECT COUNT(DISTINCT session_id) FROM history_files) AS sessions, (SELECT COUNT(*) FROM history_messages) AS rows, (SELECT COALESCE(SUM(LENGTH(text)), 0) FROM history_messages) AS textBytes`)
     .get() as { files: number; sessions: number; rows: number; textBytes: number };
-  const size = indexSize(counts, running === null);
+  const size = indexSize(counts);
   return {
     enabled: getSettings().memory.historyIndex,
     engine: ftsAvailable ? "fts" : "like",

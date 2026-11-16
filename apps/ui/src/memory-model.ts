@@ -300,5 +300,5 @@ export const summaryPreviewView = (summary: DaySummary, dailyExists: boolean): S
 export const summaryWriteDisabled = (view: SummaryPreviewView | null, state: { loading: boolean; writing: boolean }): boolean =>
   state.loading || state.writing || view === null || !view.canWrite;
 
-export const writeOutcomeText =(result: Pick<DaySummaryWriteResult, "changed">, heading: string): string =>
+export const writeOutcomeText = (result: Pick<DaySummaryWriteResult, "changed">, heading: string): string =>
   result.changed ? `Written to the daily under "${heading}".` : "The daily already has this summary.";
