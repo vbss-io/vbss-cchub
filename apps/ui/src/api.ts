@@ -39,7 +39,7 @@ export const hubBase = base;
 export type { HooksStatus, WslHookStatus } from "./types";
 import type { DelegationSettings, ShareRequestRecord, TunnelStatus, UiPrefs } from "./delegation";
 import { normalizeUiPrefs } from "./plugins/ui-prefs";
-import type { NotifEventKind } from "./notifications";
+import type { NativeSubject, NotifEventKind } from "./notifications";
 
 export type ShareRequestEvent = ShareRequestRecord;
 
@@ -188,8 +188,8 @@ export interface DesktopNotifyResult {
 
 export const getDesktopNotifyStatus = (force = false): Promise<DesktopNotifyStatus> => send("GET", `/api/notify/status${force ? "?force=1" : ""}`);
 
-export const sendDesktopNotification = async (title: string, body: string): Promise<DesktopNotifyResult> => {
-  const res = await fetch(`${base}/api/notify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ title, body }) });
+export const sendDesktopNotification = async (title: string, body: string, subject: NativeSubject | null = null): Promise<DesktopNotifyResult> => {
+  const res = await fetch(`${base}/api/notify`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(subject ? { title, body, subject } : { title, body }) });
   return (await res.json()) as DesktopNotifyResult;
 };
 

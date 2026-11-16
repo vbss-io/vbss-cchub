@@ -171,3 +171,10 @@ export function gaugeResetText(resetsAt: number | null, now: number, window: Lim
 export const tokenLine = (read: number, output: number): string => `Read ${formatTokens(read)} · Output ${formatTokens(output)}`;
 
 export const periodLabel = (days: number): string => `Last ${days} days`;
+
+export interface PanelInputs {
+  focusedText: boolean;
+  otherDrafts: readonly string[];
+}
+
+export const panelHoldsOpen = ({ focusedText, otherDrafts }: PanelInputs): boolean => focusedText || otherDrafts.some((value) => value.trim().length > 0);

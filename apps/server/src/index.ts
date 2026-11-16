@@ -31,7 +31,7 @@ import {
   applyMeta,
 } from "./db.js";
 import { focusWindow } from "./focus.js";
-import { desktopNotifier } from "./desktop-notify.js";
+import { desktopNotifier, parseNativeSubject } from "./desktop-notify.js";
 import { codexLiveEntries, findCodexRollout } from "./codex-sessions.js";
 import {
   archiveCodexThread,
@@ -53,7 +53,7 @@ import { limitsSnapshot, startLimitsPolling, stopLimitsPolling } from "./limits.
 import { recordLimitsPayload } from "./limits-forecast.js";
 import { startRoutineScheduler, stopRoutineScheduler } from "./routines.js";
 import { abortActiveRuns, resolveWorkspaceTarget } from "./delegation-launch.js";
-import { getSettings, listCodexRunLinks, markRunningAsInterrupted, migratePluginFlags } from "./delegation-store.js";
+import { getSettings, getTask, listCodexRunLinks, markRunningAsInterrupted, migratePluginFlags } from "./delegation-store.js";
 import { markCodexRolloutAfterRun } from "./codex-rollout-mark.js";
 import { watchDaily } from "./daily.js";
 import { watchTasksBoard } from "./tasks-board.js";
@@ -333,7 +333,11 @@ app.post("/api/notify", (req, res) => {
   const body = req.body as Record<string, unknown>;
   const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "VBSS CCHUB";
   const text = typeof body.body === "string" ? body.body : "";
-  void desktopNotifier.show(title, text).then((result) => res.status(result.ok ? 200 : 501).json(result));
+  void desktopNotifier.show(title, text, parseNativeSubject(body.subject)).then((result) => res.status(result.ok ? 200 : 501).json(result));
+});
+
+onBroadcast((event, data) => {
+  void desktopNotifier.observe(event, data, getTask).catch(() => undefined);
 });
 
 const uiErrorLog = join(config.dataDir, "ui-errors.log");
