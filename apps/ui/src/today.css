@@ -703,28 +703,30 @@
 
 .backlog__body {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 4px 6px;
+  gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .backlog__main {
   display: flex;
-  flex: 1 1 6rem;
+  flex: 1 1 0;
   align-items: center;
   gap: 6px;
-  min-width: 0;
+  min-width: 2.5rem;
 }
 
 .backlog__meta {
   display: inline-flex;
   flex: none;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
   margin-left: auto;
+  white-space: nowrap;
 }
 
 .backlog__status {
@@ -746,14 +748,16 @@
   font-size: 13.5px;
   line-height: 1.4;
   text-align: left;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 
 .backlog__chips {
   display: inline-flex;
   flex: none;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
 }
