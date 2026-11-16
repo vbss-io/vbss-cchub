@@ -37,6 +37,7 @@ import {
   dailySyncBaseline,
   docLine,
   effectiveProjectOrder,
+  entersDayWith,
   flattenTasks,
   focusRange,
   anyFold,
@@ -954,10 +955,6 @@ interface TreeLine {
   depth: number;
 }
 
-function entersWith(task: BoardTask, date: string): boolean {
-  return isOpenTask(task) && (task.scheduled === date || task.subtasks.some((subtask) => entersWith(subtask, date)));
-}
-
 function treeLines(task: BoardTask, depth: number, prefix: (depth: number) => string, skip: (task: BoardTask) => boolean): TreeLine[] {
   return [
     { text: `${prefix(depth)}- [${markOf(task)}] ${task.title}`, taskId: task.id, depth },
@@ -1102,7 +1099,7 @@ function insertMissing(
     result.renamed.push(task);
     return true;
   };
-  const planned = (task: BoardTask): boolean => carried.has(task.id) || entersWith(task, date);
+  const planned = (task: BoardTask): boolean => carried.has(task.id) || entersDayWith(task, date);
   const skip = (task: BoardTask): boolean => !planned(task) || isPresent(presence, task) || presence.unclear.has(task.id) || known(task);
   const settle = (lines: TreeLine[], check: (lines: TreeLine[]) => number[]): TreeLine[] | null => {
     let current = lines;
@@ -4001,7 +3998,7 @@ function linkTick(settings: DelegationSettings, date: string, input: LinkTickInp
 
 function withVisibleSubtasks(settings: DelegationSettings, date: string, content: string | null, data: BoardData, focus: TodayEntry[]): TodayEntry[] {
   const lines = content === null ? new Map<string, number[]>() : presenceOf(scanDaily(settings, date, content, data.projects, data.tasks)).lines;
-  const visible = (task: BoardTask): boolean => lines.has(task.id) || entersWith(task, date) || task.subtasks.some(visible);
+  const visible = (task: BoardTask): boolean => lines.has(task.id) || entersDayWith(task, date) || task.subtasks.some(visible);
   return focus.map((entry) => ({ ...entry, visibleSubtasks: flattenTasks(entry.task.subtasks).filter(visible).map((task) => task.id) }));
 }
 

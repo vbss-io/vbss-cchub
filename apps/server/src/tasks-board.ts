@@ -3078,11 +3078,19 @@ export function dailyTaskLinks(settings: DelegationSettings, date: string): Dail
   return computeDailyLinks(settings, date, loaded.projects, tasks);
 }
 
-function subtaskDailyLines(subtasks: BoardTask[], level: number): string[] {
-  return subtasks.flatMap((subtask) => [
-    `${DAILY_SUBTASK_INDENT.repeat(level)}- [${CHECKBOX_MARK[checkboxForStatus(subtask.status)]}] ${subtask.title}`,
-    ...subtaskDailyLines(subtask.subtasks, level + 1),
-  ]);
+const DAY_OPEN_STATUSES: ReadonlySet<BoardStatus> = new Set<BoardStatus>(["todo", "doing", "blocked", "hold"]);
+
+export function entersDayWith(task: BoardTask, date: string): boolean {
+  return DAY_OPEN_STATUSES.has(task.status) && (task.scheduled === date || task.subtasks.some((subtask) => entersDayWith(subtask, date)));
+}
+
+function subtaskDailyLines(subtasks: BoardTask[], level: number, date: string): string[] {
+  return subtasks
+    .filter((subtask) => entersDayWith(subtask, date))
+    .flatMap((subtask) => [
+      `${DAILY_SUBTASK_INDENT.repeat(level)}- [${CHECKBOX_MARK[checkboxForStatus(subtask.status)]}] ${subtask.title}`,
+      ...subtaskDailyLines(subtask.subtasks, level + 1, date),
+    ]);
 }
 
 interface FocusItem {
@@ -3178,7 +3186,7 @@ export function addTaskToDaily(settings: DelegationSettings, input: AddToDailyIn
   if (listed.items.some((item) => item.taskId === task.id || item.candidates.includes(task.id))) throw new AlreadyInDailyError();
   const label = settings.daily.wikilinks ? `[[${project.name}|${project.title}]]` : project.title;
   const line = `- [${CHECKBOX_MARK[checkboxForStatus(task.status)]}] ${label} - ${task.title}`;
-  const children = topLevel ? subtaskDailyLines(task.subtasks, 1) : [];
+  const children = topLevel ? subtaskDailyLines(task.subtasks, 1, date) : [];
   const doc = openDoc(daily.content);
   const at = placeInFocus(doc, settings, [line, ...children].map(docLine), project.id, loaded.projects, mirrorsFocus(settings) && date >= localDate());
   writeDaily(settings, date, renderDoc(doc), daily.updatedAt ?? undefined);

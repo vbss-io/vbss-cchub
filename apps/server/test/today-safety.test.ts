@@ -1621,7 +1621,7 @@ describe("fix wave 4, finding 1: a moved line keeps its identity", () => {
 
 describe("fix wave 4, finding 2: add to daily schedules the task in scheduled mode", () => {
   it("writes the scheduled date on the task so a later tick on the line syncs", () => {
-    const root = lab({ alpha: project("Alpha Project", ["- [ ] Ship release", "  - [ ] Write notes", "- [ ] Other task"]) }, { [TODAY]: dailyWith(["- [ ] free"]) });
+    const root = lab({ alpha: project("Alpha Project", ["- [ ] Ship release", `  - [ ] Write notes ${SCHEDULED} ${TODAY}`, "  - [ ] Undated step", "- [ ] Other task"]) }, { [TODAY]: dailyWith(["- [ ] free"]) });
     const settings = useVault(root);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     const ship = taskIn(settings, "alpha", "Ship release");
@@ -1633,6 +1633,7 @@ describe("fix wave 4, finding 2: add to daily schedules the task in scheduled mo
     const added = readFileSync(dailyPath(root), "utf8");
     assert.equal(added.split("\n").filter((line) => line === "- [ ] [[alpha|Alpha Project]] - Ship release").length, 1);
     assert.equal(added.split("\n").filter((line) => line === "  - [ ] Write notes").length, 1);
+    assert.equal(added.includes("Undated step"), false);
     editDaily(root, (content) => content.replace("- [ ] [[alpha|Alpha Project]] - Ship release", "- [x] [[alpha|Alpha Project]] - Ship release"));
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Ship release").status, "done");

@@ -276,23 +276,32 @@ describe("daily and tasks sync", () => {
   });
 
   describe("subtasks", () => {
-    it("writes a top-level task with its nested subtasks and adds a subtask alone even when its parent is listed", async () => {
+    it("writes a top-level task with only its open subtasks dated for the day", async () => {
+      writeDailyFile(ADD_DATE, "## Foco de hoje\n\n- [ ]\n\n## Reuniões\n");
+      const res = await addToDaily(await find("acme", "Renew contract"));
+      assert.equal(res.status, 201);
+      assert.equal(res.json.subtasks, 0);
+      assert.equal(readDailyFile(ADD_DATE), "## Foco de hoje\n\n- [ ] [[acme|Acme Corp]] - Renew contract\n\n## Reuniões\n");
+    });
+
+    it("writes a top-level task with its dated subtasks and adds a subtask alone even when its parent is listed", async () => {
+      writeFileSync(join(vault, "acme.md"), ACME.replace("  - [-] Legal sign-off", `  - [-] Legal sign-off \u23F3 ${ADD_DATE}`).replace("  - [x] Draft terms", `  - [x] Draft terms \u23F3 ${ADD_DATE}`));
       writeDailyFile(ADD_DATE, "## Foco de hoje\n\n- [ ]\n\n## Reuniões\n");
       const renew = await find("acme", "Renew contract");
       const res = await addToDaily(renew);
       assert.equal(res.status, 201);
       assert.equal(res.json.line, 2);
       assert.equal(res.json.raw, "- [ ] [[acme|Acme Corp]] - Renew contract");
-      assert.equal(res.json.subtasks, 3);
-      const withTree = "## Foco de hoje\n\n- [ ] [[acme|Acme Corp]] - Renew contract\n  - [x] Draft terms\n  - [-] Legal sign-off\n    - [ ] Counsel review\n\n## Reuniões\n";
+      assert.equal(res.json.subtasks, 1);
+      const withTree = "## Foco de hoje\n\n- [ ] [[acme|Acme Corp]] - Renew contract\n  - [-] Legal sign-off\n\n## Reuniões\n";
       assert.equal(readDailyFile(ADD_DATE), withTree);
 
       const legal = await addToDaily(await find("acme", "Legal sign-off"));
       assert.equal(legal.status, 201);
       assert.equal(legal.json.raw, "- [-] [[acme|Acme Corp]] - Legal sign-off");
-      assert.equal(legal.json.line, 6);
+      assert.equal(legal.json.line, 4);
       assert.equal(legal.json.subtasks, 0);
-      const withLegal = withTree.replace("Counsel review\n", "Counsel review\n- [-] [[acme|Acme Corp]] - Legal sign-off\n");
+      const withLegal = withTree.replace("  - [-] Legal sign-off\n", "  - [-] Legal sign-off\n- [-] [[acme|Acme Corp]] - Legal sign-off\n");
       assert.equal(readDailyFile(ADD_DATE), withLegal);
 
       const again = await addToDaily(await find("acme", "Legal sign-off"));
