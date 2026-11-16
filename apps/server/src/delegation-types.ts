@@ -329,6 +329,18 @@ export interface RunRecord {
   exitCode: number | null;
   startedAt: number;
   finishedAt: number | null;
+  costUsd: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  startCommit: string | null;
+}
+
+export interface CostTotals {
+  costUsd: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  runs: number;
+  pricedRuns: number;
 }
 
 export interface ReportRecord {

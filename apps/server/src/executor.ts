@@ -54,6 +54,9 @@ export interface ExecutorResult {
   sessionId: string | null;
   exitCode: number | null;
   error: string | null;
+  costUsd: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
 }
 
 type Json = Record<string, unknown>;
@@ -95,6 +98,9 @@ interface StreamState {
   errors: string[];
   deniedTools: string[];
   guard: StartupGuard | null;
+  costUsd: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
   emit: (event: RunEvent) => void;
 }
 
@@ -276,6 +282,30 @@ function toolSummary(input: unknown): string {
   return "";
 }
 
+const finiteNumber = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null);
+
+const addTokens = (total: number | null, value: number | null): number | null => (value === null ? total : (total ?? 0) + value);
+
+function claudeUsage(event: Json, state: StreamState): void {
+  const cost = finiteNumber(event.total_cost_usd);
+  if (cost !== null) state.costUsd = cost;
+  const usage = asObject(event.usage);
+  if (!usage) return;
+  const parts = [usage.input_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens].map(finiteNumber).filter((value): value is number => value !== null);
+  if (parts.length > 0) state.tokensIn = parts.reduce((sum, value) => sum + value, 0);
+  const output = finiteNumber(usage.output_tokens);
+  if (output !== null) state.tokensOut = output;
+}
+
+function codexUsage(event: Json, state: StreamState): void {
+  const usage = asObject(event.usage);
+  if (!usage) return;
+  state.tokensIn = addTokens(state.tokensIn, finiteNumber(usage.input_tokens));
+  state.tokensOut = addTokens(state.tokensOut, finiteNumber(usage.output_tokens));
+  const cost = finiteNumber(usage.total_cost_usd) ?? finiteNumber(event.total_cost_usd);
+  if (cost !== null) state.costUsd = (state.costUsd ?? 0) + cost;
+}
+
 function ingestClaude(event: Json, state: StreamState): void {
   if (state.guard && observeStartup(state.guard, event) !== null) return;
   if (isString(event.session_id)) state.sessionId = event.session_id;
@@ -307,6 +337,7 @@ function ingestClaude(event: Json, state: StreamState): void {
   state.errors = Array.isArray(event.errors) ? event.errors.filter(isString) : [];
   state.deniedTools = deniedToolNames(event.permission_denials);
   state.failed = state.subtype !== "success" || state.errors.length > 0;
+  claudeUsage(event, state);
   if (isString(event.result)) state.result = event.result.slice(0, MAX_RESULT_CHARS);
   state.emit({ kind: "status", text: state.failed ? `finished: ${state.subtype ?? "error"}` : "finished" });
 }
@@ -331,6 +362,7 @@ function ingestCodex(event: Json, state: StreamState): void {
     }
   }
   if (type === "turn.completed") {
+    codexUsage(event, state);
     state.sawResult = true;
     state.subtype = "success";
     state.emit({ kind: "status", text: "finished" });
@@ -456,6 +488,9 @@ function execute(spec: ProcessSpec, req: RunRequest): Promise<ExecutorResult> {
       errors: [],
       deniedTools: [],
       guard: spec.guard,
+      costUsd: null,
+      tokensIn: null,
+      tokensOut: null,
       emit: (event) => {
         try {
           req.onEvent?.(event);
@@ -562,6 +597,9 @@ function execute(spec: ProcessSpec, req: RunRequest): Promise<ExecutorResult> {
         sessionId: state.sessionId,
         exitCode,
         error,
+        costUsd: state.costUsd,
+        tokensIn: state.tokensIn,
+        tokensOut: state.tokensOut,
       });
     };
 

@@ -16,6 +16,7 @@ import { RunChip } from "./RunChips";
 import { Toggletip } from "./Toggletip";
 import { ClampScope } from "./ShowMore";
 import { ApprovalList } from "./ApprovalRequest";
+import { ReviewPanel } from "./ReviewPanel";
 
 interface Props {
   thread: CodexSessionRecord;
@@ -30,7 +31,7 @@ interface Props {
   onUnarchive: (id: string) => void;
 }
 
-type Tab = "activity" | "details";
+type Tab = "activity" | "review" | "details";
 
 const THREAD_SOURCE: Record<string, string> = {
   voice_chat: "voice chat",
@@ -249,6 +250,11 @@ export function CodexDrawer({ thread, workspace, delegatedEnabled, codexAppRunni
           <button role="tab" aria-selected={tab === "activity"} className={`pill ${tab === "activity" ? "pill--on" : ""}`} onClick={() => setTab("activity")}>
             Activity
           </button>
+          {thread.cwd && (
+            <button role="tab" aria-selected={tab === "review"} className={`pill ${tab === "review" ? "pill--on" : ""}`} onClick={() => setTab("review")}>
+              Review
+            </button>
+          )}
           <button role="tab" aria-selected={tab === "details"} className={`pill ${tab === "details" ? "pill--on" : ""}`} onClick={() => setTab("details")}>
             Details
           </button>
@@ -280,6 +286,9 @@ export function CodexDrawer({ thread, workspace, delegatedEnabled, codexAppRunni
                 />
                 {canReply && <CodexReply threadId={thread.id} onOpenSession={onOpenSession} />}
               </>
+            )}
+            {tab === "review" && (
+              <ReviewPanel subject={{ kind: "session", id: thread.id }} running={false} refreshKey={thread.status} onOpenSession={onOpenSession} onError={setError} />
             )}
             {tab === "details" && (
               <dl className="details">

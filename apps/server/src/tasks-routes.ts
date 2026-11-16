@@ -2,7 +2,7 @@ import { Router } from "express";
 import { getSession, sessionByPid } from "./db.js";
 import { broadcast } from "./sse.js";
 import { runtimeSnapshot } from "./runtimes.js";
-import { listCodexRunLinks, archiveTask, clearTaskWorktreePath, getTask, getTaskDetail, listTaskEvents, listTasks, markTaskMerged, TaskBusyError, unarchiveTask, setTaskOrigin, listTasksByOrigin, resolveTaskId } from "./delegation-store.js";
+import { taskCost, listCodexRunLinks, archiveTask, clearTaskWorktreePath, getTask, getTaskDetail, listTaskEvents, listTasks, markTaskMerged, TaskBusyError, unarchiveTask, setTaskOrigin, listTasksByOrigin, resolveTaskId } from "./delegation-store.js";
 import { abortRun, delegateTask, startRun, repoPathOf } from "./delegation-launch.js";
 import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus } from "./worktrees.js";
 import { CODEX_SANDBOXES, ISOLATION_MODES, ORIGIN_CLIENTS, PERMISSION_MODES, RUNNERS, TASK_STATUSES, type CodexSandbox, type Isolation, type OriginClient, type PermissionMode, type RunKind, type Runner, type TaskStatus } from "./delegation-types.js";
@@ -68,7 +68,7 @@ export function tasksRouter(): Router {
       }
       try {
         const worktree = detail.task.isolation === "worktree" ? await worktreeStatus(detail.task) : null;
-        res.json({ ...detail, task: taskJson(detail.task), worktree });
+        res.json({ ...detail, task: taskJson(detail.task), worktree, cost: taskCost(detail.task.id) });
       } catch (err) {
         sendError(res, err);
       }

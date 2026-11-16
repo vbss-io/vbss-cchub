@@ -190,6 +190,7 @@ async function main() {
     result: mode === "big" ? "x".repeat(300_000) : text,
     permission_denials: mode === "denied" ? [{ tool_name: "Edit", tool_use_id: "t1", tool_input: {} }] : [],
     duration_ms: delay,
+    ...(process.env.FAKE_CLAUDE_COST ? { total_cost_usd: Number(process.env.FAKE_CLAUDE_COST), usage: { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 40 } } : {}),
   });
 }
 

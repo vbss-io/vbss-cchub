@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { db } from "./db.js";
 import type {
   CodexSandbox,
+  CostTotals,
   DailyHeadings,
   DelegationSettings,
   FocusSource,
@@ -157,6 +158,18 @@ for (const [name, type] of [
   if (!hubTaskColumns.has(name)) db.exec(`ALTER TABLE hub_tasks ADD COLUMN ${name} ${type}`);
 }
 
+const hubRunColumns = new Set(
+  (db.prepare(`PRAGMA table_info(hub_runs)`).all() as { name: string }[]).map((column) => column.name),
+);
+for (const [name, type] of [
+  ["cost_usd", "REAL"],
+  ["tokens_in", "INTEGER"],
+  ["tokens_out", "INTEGER"],
+  ["start_commit", "TEXT"],
+] as const) {
+  if (!hubRunColumns.has(name)) db.exec(`ALTER TABLE hub_runs ADD COLUMN ${name} ${type}`);
+}
+
 const MAX_EVENTS_PER_RUN = 2_000;
 const MAX_EVENT_TEXT = 20_000;
 
@@ -209,6 +222,10 @@ interface RunRow {
   exit_code: number | null;
   started_at: number;
   finished_at: number | null;
+  cost_usd: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  start_commit: string | null;
 }
 
 interface ReportRow {
@@ -289,6 +306,10 @@ const toRun = (row: RunRow): RunRecord => ({
   exitCode: row.exit_code,
   startedAt: row.started_at,
   finishedAt: row.finished_at,
+  costUsd: row.cost_usd ?? null,
+  tokensIn: row.tokens_in ?? null,
+  tokensOut: row.tokens_out ?? null,
+  startCommit: row.start_commit ?? null,
 });
 
 const toReport = (row: ReportRow): ReportRecord => ({
@@ -752,9 +773,9 @@ const runningRunStmt = db.prepare(`SELECT id FROM hub_runs WHERE task_id = ? AND
 const nextSeqStmt = db.prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM hub_runs WHERE task_id = ?`);
 const insertRunStmt = db.prepare(`
   INSERT INTO hub_runs
-    (id, task_id, seq, kind, runner, prompt, requested_model, permission_mode, status, session_id, started_at)
+    (id, task_id, seq, kind, runner, prompt, requested_model, permission_mode, status, session_id, start_commit, started_at)
   VALUES
-    (@id, @taskId, @seq, @kind, @runner, @prompt, @requestedModel, @permissionMode, @status, @sessionId, @now)
+    (@id, @taskId, @seq, @kind, @runner, @prompt, @requestedModel, @permissionMode, @status, @sessionId, @startCommit, @now)
 `);
 const finishRunStmt = db.prepare(`
   UPDATE hub_runs SET
@@ -764,6 +785,9 @@ const finishRunStmt = db.prepare(`
     result = @result,
     error = @error,
     exit_code = @exitCode,
+    cost_usd = @costUsd,
+    tokens_in = @tokensIn,
+    tokens_out = @tokensOut,
     finished_at = @finishedAt
   WHERE id = @id
 `);
@@ -935,6 +959,7 @@ export function beginRun(input: {
   model: string | null;
   permissionMode: PermissionMode | null;
   sessionId: string | null;
+  startCommit?: string | null;
 }): RunRecord {
   const id = randomUUID();
   const now = Date.now();
@@ -952,6 +977,7 @@ export function beginRun(input: {
       permissionMode: input.permissionMode,
       status: "running",
       sessionId: input.sessionId,
+      startCommit: input.startCommit ?? null,
       now,
     });
     touchTaskStmt.run({ id: input.taskId, status: "running", sessionId: null, now });
@@ -969,6 +995,9 @@ export function finishRun(input: {
   result: string | null;
   error: string | null;
   exitCode: number | null;
+  costUsd?: number | null;
+  tokensIn?: number | null;
+  tokensOut?: number | null;
 }): RunRecord {
   const now = Date.now();
   const commit = db.transaction(() => {
@@ -980,6 +1009,9 @@ export function finishRun(input: {
       result: input.result,
       error: input.error,
       exitCode: input.exitCode,
+      costUsd: input.costUsd ?? null,
+      tokensIn: input.tokensIn ?? null,
+      tokensOut: input.tokensOut ?? null,
       finishedAt: now,
     });
     touchTaskStmt.run({ id: input.taskId, status: input.status, sessionId: input.sessionId, now });
@@ -1037,6 +1069,44 @@ export function appendRunEvent(input: { runId: string; taskId: string; kind: Run
   if (count >= MAX_EVENTS_PER_RUN) return false;
   insertEventStmt.run({ runId: input.runId, taskId: input.taskId, kind: input.kind, text: input.text, now });
   return true;
+}
+
+interface CostRow {
+  task_id: string;
+  cost_usd: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  runs: number;
+  priced_runs: number;
+}
+
+const COST_COLUMNS = `SUM(cost_usd) AS cost_usd, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out, COUNT(*) AS runs, COUNT(cost_usd) AS priced_runs`;
+const taskCostStmt = db.prepare(`SELECT task_id, ${COST_COLUMNS} FROM hub_runs WHERE task_id = ? GROUP BY task_id`);
+
+export const EMPTY_COST: CostTotals = { costUsd: null, tokensIn: null, tokensOut: null, runs: 0, pricedRuns: 0 };
+
+const toCost = (row: CostRow | undefined): CostTotals =>
+  row ? { costUsd: row.cost_usd, tokensIn: row.tokens_in, tokensOut: row.tokens_out, runs: row.runs, pricedRuns: row.priced_runs } : { ...EMPTY_COST };
+
+export function addCosts(totals: readonly CostTotals[]): CostTotals {
+  const sum = (values: (number | null)[]): number | null => (values.every((value) => value === null) ? null : values.reduce<number>((acc, value) => acc + (value ?? 0), 0));
+  return {
+    costUsd: sum(totals.map((item) => item.costUsd)),
+    tokensIn: sum(totals.map((item) => item.tokensIn)),
+    tokensOut: sum(totals.map((item) => item.tokensOut)),
+    runs: totals.reduce((acc, item) => acc + item.runs, 0),
+    pricedRuns: totals.reduce((acc, item) => acc + item.pricedRuns, 0),
+  };
+}
+
+export function taskCost(taskId: string): CostTotals {
+  return toCost(taskCostStmt.get(taskId) as CostRow | undefined);
+}
+
+export function taskCosts(taskIds: readonly string[]): Record<string, CostTotals> {
+  const out: Record<string, CostTotals> = {};
+  for (const id of [...new Set(taskIds)].slice(0, 500)) out[id] = taskCost(id);
+  return out;
 }
 
 export function listRunEvents(runId: string): RunEventRecord[] {

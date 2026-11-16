@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { RunRecord } from "../delegation";
 import type { WorktreeStatus } from "../delegation-actions";
+import { costLabel } from "../cost-model";
 import { Markdown } from "../markdown";
 import { runStatusTone } from "../runs-model";
 import { relativeTime } from "../time";
@@ -56,6 +57,7 @@ export function LiveLog({ lines, running, resetKey = "log" }: { lines: LogLine[]
 }
 
 export function RunCard({ run }: { run: RunRecord }) {
+  const cost = costLabel(run);
   return (
     <article className="run">
       <header className="run__head">
@@ -66,6 +68,7 @@ export function RunCard({ run }: { run: RunRecord }) {
         <span className="chip">{run.runner}</span>
         {run.effectiveModel && <span className="chip">{run.effectiveModel}</span>}
         {run.permissionMode && <span className="chip">{run.permissionMode}</span>}
+        {cost !== null && <span className="muted small">{cost}</span>}
         <time className="muted run__time">{relativeTime(run.finishedAt ?? run.startedAt)}</time>
       </header>
       <ClampText className="run__prompt" lines={4} scopeKey={`run-prompt:${run.id}`}>

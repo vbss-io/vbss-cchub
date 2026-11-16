@@ -18,8 +18,10 @@ import {
 } from "../delegation";
 import { BoardActionsMenu, type BoardMenuItem } from "../components/BoardActionsMenu";
 import { Toggletip } from "../components/Toggletip";
+import { claudeForecastLine, codexForecastLine } from "../forecast-model";
 import { IconClaude, IconOpenAI } from "../icons";
-import type { SessionRecord } from "../types";
+import type { LimitsForecast, SessionRecord } from "../types";
+import { useLimitsForecast } from "../use-ops";
 import {
   CONTEXT_WARN,
   USAGE_TABS,
@@ -184,7 +186,7 @@ function NoData({ message }: { message: string | null | undefined }) {
   return <p className="usage__warn">{message ?? ""}</p>;
 }
 
-function ClaudeCard({ data, now }: { data: ClaudeLimits; now: number }) {
+function ClaudeCard({ data, now, forecastLine }: { data: ClaudeLimits; now: number; forecastLine: string | null }) {
   const none = data.source === "none";
   return (
     <section className="usage__card">
@@ -220,13 +222,14 @@ function ClaudeCard({ data, now }: { data: ClaudeLimits; now: number }) {
               {data.extra.utilization != null && Number.isFinite(data.extra.utilization) ? `: ${Math.round(clampPercent(data.extra.utilization))}% used` : ""}
             </div>
           )}
+          {forecastLine !== null && <div className="usage__note">{forecastLine}</div>}
         </>
       )}
     </section>
   );
 }
 
-function CodexCard({ data, now }: { data: CodexLimits; now: number }) {
+function CodexCard({ data, now, forecastLine }: { data: CodexLimits; now: number; forecastLine: string | null }) {
   const none = data.source === "none";
   return (
     <section className="usage__card">
@@ -241,6 +244,7 @@ function CodexCard({ data, now }: { data: CodexLimits; now: number }) {
         <>
           <Gauge label="5 h" percent={data.primary.usedPercent} resetsAt={data.primary.resetsAt} window="fiveHour" requireReset reset={data.primary.reset} now={now} />
           <Gauge label="7 d" percent={data.secondary.usedPercent} resetsAt={data.secondary.resetsAt} window="sevenDay" requireReset reset={data.secondary.reset} now={now} />
+          {forecastLine !== null && <div className="usage__note">{forecastLine}</div>}
         </>
       )}
     </section>
@@ -253,9 +257,10 @@ interface LimitsPanelProps {
   error: string | null;
   now: number;
   refreshedAt: number | null;
+  forecast: LimitsForecast | null;
 }
 
-function LimitsPanel({ enabled, limits, error, now, refreshedAt }: LimitsPanelProps) {
+function LimitsPanel({ enabled, limits, error, now, refreshedAt, forecast }: LimitsPanelProps) {
   if (!enabled) {
     return (
       <section className="panel">
@@ -282,8 +287,8 @@ function LimitsPanel({ enabled, limits, error, now, refreshedAt }: LimitsPanelPr
         <p className="hint">No plan limits available yet. Run a Claude Code or Codex session, then refresh.</p>
       ) : (
         <div className="usage__cards">
-          {limits.claude && <ClaudeCard data={limits.claude} now={now} />}
-          {limits.codex && <CodexCard data={limits.codex} now={now} />}
+          {limits.claude && <ClaudeCard data={limits.claude} now={now} forecastLine={claudeForecastLine(forecast, now)} />}
+          {limits.codex && <CodexCard data={limits.codex} now={now} forecastLine={codexForecastLine(forecast, now)} />}
         </div>
       )}
     </section>
@@ -652,6 +657,7 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
   const [refreshedAt, setRefreshedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const requestId = useRef(0);
+  const forecast = useLimitsForecast(limitsEnabled, (limits?.updatedAt ?? 0) + (refreshedAt ?? 0));
 
   const loadReport = useCallback(async (): Promise<void> => {
     const id = ++requestId.current;
@@ -786,7 +792,7 @@ export function UsageView({ settings, sessions, onOpenSession, subscribeUsage }:
         <BoardActionsMenu label="Usage actions" items={menuItems} />
       </div>
 
-      <LimitsPanel enabled={limitsEnabled} limits={limits} error={limitsError} now={now} refreshedAt={refreshedAt} />
+      <LimitsPanel enabled={limitsEnabled} limits={limits} error={limitsError} now={now} refreshedAt={refreshedAt} forecast={forecast} />
 
       {reportError && <p className="error">{missingHub ? "Usage needs a newer hub." : `Could not load usage: ${reportError}`}</p>}
       {scanning && (

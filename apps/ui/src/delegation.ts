@@ -2,7 +2,7 @@ import { hubBase } from "./api";
 import type { HubPluginInfo } from "./agent-tools";
 import { usageResponseState } from "./usage-format";
 import { emptyUiPrefs, normalizeUiPrefs } from "./plugins/ui-prefs";
-import type { ApprovalsSettings, CodexHooksStatus, MemorySettings } from "./types";
+import type { ApprovalsSettings, CodexHooksStatus, CostTotals, MemorySettings, RunCostFields } from "./types";
 
 const base = `${hubBase}/delegation`;
 
@@ -194,7 +194,7 @@ export interface TaskRecord {
   updatedAt: number;
 }
 
-export interface RunRecord {
+export interface RunRecord extends RunCostFields {
   id: string;
   taskId: string;
   seq: number;
@@ -238,6 +238,7 @@ export interface TaskDetail {
   runs: RunRecord[];
   reports: ReportRecord[];
   worktree?: WorktreeInfo | null;
+  cost?: CostTotals;
 }
 
 export type ShellKind = "bash" | "powershell";

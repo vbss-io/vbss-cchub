@@ -1,6 +1,6 @@
 import { normalizeOrigin, type Origin } from "./runs-model";
 
-export type SessionsMode = "list" | "map" | "search";
+export type SessionsMode = "list" | "map" | "search" | "routines";
 
 export const SESSIONS_MODE_KEY = "hub.sessions.mode";
 
@@ -10,11 +10,22 @@ export const SESSIONS_MODES: readonly { key: SessionsMode; label: string }[] = [
   { key: "search", label: "Search" },
 ];
 
-export const sessionsModeOptions = (flowOn: boolean): readonly { key: SessionsMode; label: string }[] => SESSIONS_MODES.filter((item) => item.key !== "map" || flowOn);
+export const ROUTINES_MODE: { key: SessionsMode; label: string } = { key: "routines", label: "Routines" };
+
+export const sessionsModeOptions = (flowOn: boolean, delegatedOn = false): readonly { key: SessionsMode; label: string }[] => [
+  ...SESSIONS_MODES.filter((item) => item.key !== "map" || flowOn),
+  ...(delegatedOn ? [ROUTINES_MODE] : []),
+];
 
 export const parseSessionsMode = (value: string | null | undefined): SessionsMode => (value === "map" || value === "search" ? value : "list");
 
-export const resolveSessionsMode = (requested: SessionsMode, flowOn: boolean): SessionsMode => (requested === "map" && !flowOn ? "list" : requested);
+export const resolveSessionsMode = (requested: SessionsMode, flowOn: boolean, delegatedOn = true): SessionsMode => {
+  if (requested === "map" && !flowOn) return "list";
+  if (requested === "routines" && !delegatedOn) return "list";
+  return requested;
+};
+
+export const isTransientMode = (mode: SessionsMode): boolean => mode === "search" || mode === "routines";
 
 export const sessionsModeRouteOf = (view: string, flowOn: boolean): SessionsMode | null => (view === "flow" && flowOn ? "map" : null);
 

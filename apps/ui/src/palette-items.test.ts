@@ -90,7 +90,7 @@ describe("buildViewItems", () => {
     assert.deepEqual(ids(items).slice(0, 2), ["view:sessions", "view:settings"]);
     assert.deepEqual(
       ids(items).filter((id) => id.startsWith("settings:")),
-      ["settings:general", "settings:appearance", "settings:plugins", "settings:plugin-sessions", "settings:plugin-today", "settings:memory", "settings:connections", "settings:notifications", "settings:groups", "settings:about"],
+      ["settings:general", "settings:appearance", "settings:plugins", "settings:plugin-sessions", "settings:plugin-today", "settings:memory", "settings:connections", "settings:health", "settings:notifications", "settings:groups", "settings:about"],
     );
     assert.equal(items.every((entry) => entry.kind === "view"), true);
   });

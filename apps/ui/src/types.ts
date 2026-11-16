@@ -355,3 +355,234 @@ export interface DaySummaryWriteResult {
   changed: boolean;
   summary: DaySummary;
 }
+
+export interface CostTotals {
+  costUsd: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  runs: number;
+  pricedRuns: number;
+}
+
+export interface RunCostFields {
+  costUsd: number | null;
+  tokensIn: number | null;
+  tokensOut: number | null;
+  startCommit: string | null;
+}
+
+export type RoutineSchedule =
+  | { kind: "daily"; time: string }
+  | { kind: "weekdays"; days: number[]; time: string }
+  | { kind: "interval"; everyHours: number };
+
+export type RoutineTrigger = "schedule" | "catch-up" | "manual";
+
+export type RoutineRunStatus = "running" | "completed" | "attention" | "failed" | "cancelled" | "interrupted" | "missed" | "skipped";
+
+export interface RoutineRunRecord {
+  id: string;
+  routineId: string;
+  routineName: string | null;
+  taskId: string | null;
+  trigger: RoutineTrigger;
+  status: RoutineRunStatus;
+  dueAt: number | null;
+  startedAt: number;
+  finishedAt: number | null;
+  summary: string | null;
+  error: string | null;
+  note: string | null;
+  missedSlots: number | null;
+  read: boolean;
+  readAt: number | null;
+  cost: CostTotals;
+}
+
+export interface RoutineRecord {
+  id: string;
+  name: string;
+  prompt: string;
+  workspace: string | null;
+  repo: string | null;
+  cwd: string | null;
+  runner: "claude" | "codex";
+  model: string | null;
+  schedule: RoutineSchedule;
+  enabled: boolean;
+  anchorAt: number;
+  nextFireAt: number | null;
+  lastFiredAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  running: boolean;
+  lastRun: RoutineRunRecord | null;
+  cost: CostTotals;
+}
+
+export interface RoutineDetail extends RoutineRecord {
+  runs: RoutineRunRecord[];
+}
+
+export interface RoutinesList {
+  routines: RoutineRecord[];
+  gate: string | null;
+  schedulerGate: string | null;
+  unread: number;
+}
+
+export interface RoutineInput {
+  name: string;
+  prompt: string;
+  workspace?: string | null;
+  repo?: string | null;
+  cwd?: string | null;
+  runner?: "claude" | "codex";
+  model?: string | null;
+  schedule: RoutineSchedule;
+  enabled?: boolean;
+}
+
+export interface RoutineSettings {
+  catchUpHours: number;
+}
+
+export interface RoutinesInbox {
+  unread: number;
+  items: RoutineRunRecord[];
+}
+
+export interface RoutineRunEvent {
+  routineId: string;
+  runId: string;
+  taskId: string | null;
+  status: RoutineRunStatus;
+  read: boolean;
+  routineName: string | null;
+  error: string | null;
+}
+
+export type DiffLineKind = "add" | "del" | "ctx";
+
+export interface DiffLine {
+  kind: DiffLineKind;
+  oldLine: number | null;
+  newLine: number | null;
+  text: string;
+}
+
+export interface DiffHunk {
+  header: string;
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: DiffLine[];
+}
+
+export type DiffFileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked";
+
+export interface DiffFile {
+  path: string;
+  oldPath: string | null;
+  status: DiffFileStatus;
+  binary: boolean;
+  tooLarge: boolean;
+  additions: number;
+  deletions: number;
+  totalLines: number;
+  shownLines: number;
+  truncated: boolean;
+  hunks: DiffHunk[];
+}
+
+export type DiffResult =
+  | {
+      available: true;
+      root: string;
+      base: { kind: "worktree" | "start-commit" | "head"; ref: string; label: string };
+      files: DiffFile[];
+      filesTruncated: boolean;
+      totals: { files: number; additions: number; deletions: number };
+    }
+  | { available: false; reason: string };
+
+export interface ReviewComment {
+  file: string;
+  line: number;
+  side?: "new" | "old";
+  text: string;
+}
+
+export type ReviewSendResult =
+  | { mode: "continue" | "new-task"; taskId: string; text: string; task: unknown }
+  | { mode: "preview"; taskId: string; text: string }
+  | { mode: "copy"; sessionId: string; text: string };
+
+export interface GhChecks {
+  total: number;
+  passing: number;
+  failing: number;
+  pending: number;
+  state: "passing" | "failing" | "pending" | "none";
+}
+
+export interface GhPullRequest {
+  number: number;
+  title: string;
+  state: string;
+  url: string;
+  headRefName: string;
+  isDraft: boolean;
+  checks: GhChecks;
+}
+
+export interface GhRun {
+  id: number | null;
+  title: string;
+  workflow: string | null;
+  status: string | null;
+  conclusion: string | null;
+  url: string | null;
+  createdAt: string | null;
+  branch: string | null;
+  event: string | null;
+}
+
+export type GhStatus = { available: true; branch: string; pr: GhPullRequest | null; runs: GhRun[]; fetchedAt: number } | { available: false; reason: string };
+
+export interface WindowForecast {
+  series: "claude.fiveHour" | "claude.sevenDay" | "codex.primary" | "codex.secondary";
+  usedPercent: number;
+  ratePerHour: number;
+  exhaustsAt: number;
+  resetsAt: number | null;
+  exhaustsBeforeReset: boolean;
+  samples: number;
+  spanMinutes: number;
+}
+
+export interface LimitsForecast {
+  claude: { fiveHour: WindowForecast | null; sevenDay: WindowForecast | null };
+  codex: { primary: WindowForecast | null; secondary: WindowForecast | null };
+}
+
+export type HealthState = "ok" | "warn" | "off" | "error";
+
+export type HealthFix =
+  | { kind: "api"; label: string; method: "POST"; path: string; body?: Record<string, string> }
+  | { kind: "navigate"; label: string; hash: string };
+
+export interface HealthItem {
+  id: "claude-hooks" | "codex-hooks" | "mcp-claude-code" | "mcp-codex" | "claude-statusline" | "codex-app-server" | "share-tunnel" | "history-index";
+  label: string;
+  state: HealthState;
+  detail: string;
+  fixAction: HealthFix | null;
+}
+
+export interface HealthReport {
+  checkedAt: number;
+  state: HealthState;
+  items: HealthItem[];
+}

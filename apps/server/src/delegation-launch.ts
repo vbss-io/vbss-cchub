@@ -6,7 +6,8 @@ import { broadcast } from "./sse.js";
 import { appendHubSource } from "./second-brain.js";
 import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail, listTasks } from "./delegation-store.js";
 import { allocatePortBase, portRangeOf } from "./task-ports.js";
-import type { Autonomy, CodexSandbox, Isolation, IsolationReason, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord } from "./delegation-types.js";
+import type { Autonomy, CodexSandbox, Isolation, IsolationReason, OriginClient, PermissionMode, RunKind, Runner, TaskDetail, TaskRecord, TaskStatus } from "./delegation-types.js";
+import { headCommit, taskGitDir } from "./review-diff.js";
 import { createTaskWorktree, PreviewWriteError, worktreeMainRepo, WorktreeError } from "./worktrees.js";
 import { finishShareRequestByTask, getShare } from "./share-store.js";
 import { endSession, getSession, listClaims, releaseClaimsOfSession } from "./db.js";
@@ -15,6 +16,38 @@ import { discoverWorkspaces, findRepo, findWorkspace, isDirectory, samePath } fr
 
 const activeRuns = new Map<string, AbortController>();
 const FLUSH_MS = 400;
+
+export interface RunFinishedInfo {
+  task: TaskRecord;
+  runId: string;
+  kind: RunKind;
+  status: TaskStatus;
+  result: string | null;
+  error: string | null;
+  costUsd: number | null;
+}
+
+type RunFinishedListener = (info: RunFinishedInfo) => void;
+const runFinishedListeners = new Set<RunFinishedListener>();
+
+export function onRunFinished(listener: RunFinishedListener): () => void {
+  runFinishedListeners.add(listener);
+  return () => runFinishedListeners.delete(listener);
+}
+
+function notifyRunFinished(info: RunFinishedInfo): void {
+  for (const listener of runFinishedListeners) {
+    try {
+      listener(info);
+    } catch (err) {
+      console.error(`run finished listener failed: ${String(err)}`);
+    }
+  }
+}
+
+export function isTaskActive(taskId: string): boolean {
+  return activeRuns.has(taskId);
+}
 
 export class BadRequestError extends Error {}
 export class NotFoundError extends Error {}
@@ -218,6 +251,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
     model,
     permissionMode: effectiveMode,
     sessionId: resumeSessionId ?? plannedSession,
+    startCommit: headCommit(taskGitDir(task, repoPathOf(task))),
   });
   const controller = new AbortController();
   activeRuns.set(task.id, controller);
@@ -271,6 +305,9 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
         result: outcome.result,
         error: outcome.error,
         exitCode: outcome.exitCode,
+        costUsd: outcome.costUsd,
+        tokensIn: outcome.tokensIn,
+        tokensOut: outcome.tokensOut,
       });
       if (task.runner === "codex") markCodexRolloutAfterRun(outcome.sessionId ?? run.sessionId);
       const summary = outcome.status === "completed" ? (outcome.result ?? "").slice(0, 160) : (outcome.error ?? "");
@@ -282,6 +319,8 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
         finishShareRequestByTask({ taskId: task.id, status: ok ? "completed" : "failed", error: ok ? null : outcome.error, sessionId: outcome.sessionId });
         broadcast("share-request", { taskId: task.id, status: ok ? "completed" : "failed" });
       }
+      if (activeRuns.get(task.id) === controller) activeRuns.delete(task.id);
+      notifyRunFinished({ task, runId: run.id, kind, status: outcome.status, result: outcome.result, error: outcome.error, costUsd: outcome.costUsd });
     })
     .catch((err: unknown) => {
       log.flush();
@@ -304,11 +343,13 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
       if (task.dailyDate) broadcast("daily", { date: task.dailyDate, updatedAt: Date.now(), source: "hub", writeId: null });
       endRunSession(run.sessionId, "run failed");
       if (fromShare) finishShareRequestByTask({ taskId: task.id, status: "failed", error: message, sessionId: null });
+      if (activeRuns.get(task.id) === controller) activeRuns.delete(task.id);
+      notifyRunFinished({ task, runId: run.id, kind, status: "failed", result: null, error: message, costUsd: null });
     })
     .finally(() => {
       if (timer) clearTimeout(timer);
       if (warningTimer) clearTimeout(warningTimer);
-      activeRuns.delete(task.id);
+      if (activeRuns.get(task.id) === controller) activeRuns.delete(task.id);
       broadcast("delegation", { taskId: task.id });
     });
 }

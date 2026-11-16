@@ -10,6 +10,7 @@ import type {
   PermissionRequestSummary,
   PermissionResolved,
   RunEventMessage,
+  RoutineRunEvent,
   RuntimeSnapshot,
   SessionLive,
   SessionLiveSummary,
@@ -238,6 +239,9 @@ export interface HubEvents {
   onLimits?: () => void;
   onUsage?: () => void;
   onHistory?: (status: HistoryIndexStatus) => void;
+  onRoutines?: () => void;
+  onRoutineRun?: (event: RoutineRunEvent) => void;
+  onRoutinesInbox?: (unread: number) => void;
   onUiPrefs?: (prefs: UiPrefs) => void;
 }
 
@@ -310,6 +314,9 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("limits", () => handlers.onLimits?.());
   source.addEventListener("usage", () => handlers.onUsage?.());
   source.addEventListener("history", (event) => handlers.onHistory?.(data<HistoryIndexStatus>(event)));
+  source.addEventListener("routines", () => handlers.onRoutines?.());
+  source.addEventListener("routine-run", (event) => handlers.onRoutineRun?.(data<RoutineRunEvent>(event)));
+  source.addEventListener("routines-inbox", (event) => handlers.onRoutinesInbox?.(data<{ unread: number }>(event).unread));
   source.addEventListener("ui-prefs", (event) => handlers.onUiPrefs?.(normalizeUiPrefs(data<unknown>(event))));
   return () => source.close();
 }
