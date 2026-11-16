@@ -23,6 +23,7 @@ import { shortFolder } from "../wsmatch";
 import { LIST_WINDOW } from "../show-more";
 import { ClampScope, ClampText, ShowMoreList } from "./ShowMore";
 import { ApprovalList } from "./ApprovalRequest";
+import { ReviewPanel } from "./ReviewPanel";
 
 interface Props {
   session: SessionRecord;
@@ -116,6 +117,7 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
     forks: session.forks ?? 0,
     delegated: session.delegatedTasks ?? 0,
     delegatedOn: delegatedEnabled,
+    review: Boolean(session.cwd),
   });
   const tab = visibleTab(pickedTab, tabs, "activity");
   const menu = useCardMenu();
@@ -495,6 +497,9 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
                 )}
               />
             </>
+          )}
+          {tab === "review" && (
+            <ReviewPanel subject={{ kind: "session", id: session.sessionId }} running={false} refreshKey={current.status} onOpenSession={onOpenSession} onError={setError} />
           )}
           {tab === "details" && (
             <dl className="details">

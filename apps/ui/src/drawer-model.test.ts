@@ -32,6 +32,12 @@ describe("sessionTabs", () => {
     assert.equal(sessionTabs({ ...empty, agentsTotal: 2 }).find((tab) => tab.key === "agents")?.count, "2");
   });
 
+  it("adds Review before Details only when the session has a working directory", () => {
+    assert.deepEqual(keys({ ...empty, review: true }), ["activity", "review", "details"]);
+    assert.deepEqual(keys({ ...empty, review: false }), ["activity", "details"]);
+    assert.deepEqual(keys({ ...empty, delegated: 2, review: true }), ["activity", "delegated", "review", "details"]);
+  });
+
   it("shows Asks when the session has asks or forks", () => {
     assert.deepEqual(keys({ ...empty, asks: 2 }), ["activity", "asks", "details"]);
     assert.deepEqual(keys({ ...empty, forks: 1 }), ["activity", "asks", "details"]);

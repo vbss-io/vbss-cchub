@@ -3,6 +3,7 @@ import type { TaskRecord } from "../delegation";
 import { taskArchivedAt, taskIsolation } from "../delegation-actions";
 import { IconClose, IconCode, IconCodex, IconExpand } from "../icons";
 import { Markdown } from "../markdown";
+import { costLabel, costTitle, sumCosts } from "../cost-model";
 import { taskInFlight, taskNeedsYou, taskPrimaryAction, taskStatusTone, taskTiming, worktreeMergeable } from "../runs-model";
 import { relativeTime } from "../time";
 import type { CodexSessionRecord, RunEventMessage, SessionRecord } from "../types";
@@ -12,10 +13,11 @@ import { ReportRow } from "../views/ReportsView";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 import { ResizableDrawerEdge } from "./ResizableDrawerEdge";
 import { LiveLog, RunCard, WorktreePanel } from "./TaskDetailParts";
+import { ReviewPanel } from "./ReviewPanel";
 import { ClampScope, ClampText, ShowMoreList } from "./ShowMore";
 import { taskOrigin, taskStatusLabel, whyOf, worktreeLabel } from "./TaskCard";
 
-type Tab = "live" | "asked" | "runs" | "worktree" | "reports" | "details";
+type Tab = "live" | "asked" | "runs" | "worktree" | "review" | "reports" | "details";
 
 const ASKED_LINES = 12;
 
@@ -32,9 +34,10 @@ interface Props {
   onClose: () => void;
   onOpenSession: (sessionId: string) => void;
   onOpenCodex: (threadId: string) => void;
+  onOpenTask?: (taskId: string) => void;
 }
 
-export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, tick, subscribeRunEvents, onRefresh, onError, onClose, onOpenSession, onOpenCodex }: Props) {
+export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, tick, subscribeRunEvents, onRefresh, onError, onClose, onOpenSession, onOpenCodex, onOpenTask }: Props) {
   const state = useTaskDetail(taskId, tick, subscribeRunEvents, onRefresh, onError);
   const [tab, setTab] = useState<Tab>("live");
   const [composing, setComposing] = useState(false);
@@ -90,6 +93,8 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
   const name = task?.title ?? "Task";
   const tone = task ? taskStatusTone(task) : "muted";
   const timing = task ? taskTiming(task, Date.now()) : null;
+  const totals = state.detail ? (state.detail.cost ?? sumCosts(runs)) : null;
+  const totalCost = costLabel(totals);
 
   const startContinue = () => {
     setComposing(true);
@@ -133,6 +138,7 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
     { key: "asked", label: "What was asked" },
     { key: "runs", label: "Runs", count: runs.length },
     ...(isolated ? [{ key: "worktree" as const, label: "Worktree" }] : []),
+    { key: "review" as const, label: "Review" },
     ...(reports.length > 0 ? [{ key: "reports" as const, label: "Reports", count: reports.length }] : []),
     { key: "details", label: "Details" },
   ];
@@ -163,6 +169,7 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
             {timing && (
               <p className="muted small task-timing">
                 started {relativeTime(timing.startedAt)} · {timing.duration} · {timing.runs}
+                {totalCost !== null && <span title={costTitle(totals)}> · {totalCost}</span>}
               </p>
             )}
           </div>
@@ -257,6 +264,15 @@ export function TaskDrawer({ taskId, tasks, sessions, codexSessions, workspace, 
                 onConfirmDiscard={setConfirmDiscard}
                 onDiscard={state.discard}
                 onMerge={mergeNow}
+              />
+            )}
+            {state.detail && tab === "review" && (
+              <ReviewPanel
+                subject={{ kind: "task", id: taskId }}
+                running={running}
+                refreshKey={`${task?.status ?? ""}:${runs.length}`}
+                onOpenTask={onOpenTask}
+                onError={onError}
               />
             )}
             {state.detail && tab === "reports" && (

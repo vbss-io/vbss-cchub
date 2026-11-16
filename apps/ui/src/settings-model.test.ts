@@ -46,6 +46,7 @@ describe("buildSettingsTabs", () => {
       "plugin-widget",
       "memory",
       "connections",
+      "health",
       "notifications",
       "groups",
       "about",
@@ -53,8 +54,8 @@ describe("buildSettingsTabs", () => {
   });
 
   it("has only the core tabs and the core Sessions page at the top level", () => {
-    assert.deepEqual(keys(coreSettingsTabs()), ["general", "appearance", "plugins", "memory", "connections", "notifications", "groups", "about"]);
-    assert.deepEqual(keys(buildSettingsTabs(pluginSettingsPages(coreOnly))), ["general", "appearance", "plugins", "plugin-sessions", "memory", "connections", "notifications", "groups", "about"]);
+    assert.deepEqual(keys(coreSettingsTabs()), ["general", "appearance", "plugins", "memory", "connections", "health", "notifications", "groups", "about"]);
+    assert.deepEqual(keys(buildSettingsTabs(pluginSettingsPages(coreOnly))), ["general", "appearance", "plugins", "plugin-sessions", "memory", "connections", "health", "notifications", "groups", "about"]);
   });
 
   it("merges usage and limits into one Usage page", () => {

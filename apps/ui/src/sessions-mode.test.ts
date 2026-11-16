@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { SESSIONS_MODES, sessionsModeOptions, mapScope, mapSummaryLine, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, sessionsModeRouteOf, sessionsSubtitle } from "./sessions-mode";
+import { isTransientMode, SESSIONS_MODES, sessionsModeOptions, mapScope, mapSummaryLine, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, sessionsModeRouteOf, sessionsSubtitle } from "./sessions-mode";
 
 describe("parseSessionsMode", () => {
   it("reads map and search and falls back to list for anything else", () => {
@@ -136,5 +136,27 @@ describe("SESSIONS_MODES", () => {
   it("hides Flow from the switch while the Flow plugin is off but keeps Search", () => {
     assert.deepEqual(sessionsModeOptions(false).map((mode) => mode.key), ["list", "search"]);
     assert.deepEqual(sessionsModeOptions(true).map((mode) => mode.key), ["list", "map", "search"]);
+  });
+
+  it("adds Routines last only while the Delegated plugin is on", () => {
+    assert.deepEqual(sessionsModeOptions(true, true).map((mode) => mode.label), ["List", "Flow", "Search", "Routines"]);
+    assert.deepEqual(sessionsModeOptions(false, true).map((mode) => mode.key), ["list", "search", "routines"]);
+    assert.deepEqual(sessionsModeOptions(true, false).map((mode) => mode.key), ["list", "map", "search"]);
+  });
+});
+
+describe("routines mode", () => {
+  it("falls back to the list when Delegated is off and stays otherwise", () => {
+    assert.equal(resolveSessionsMode("routines", true, false), "list");
+    assert.equal(resolveSessionsMode("routines", false, true), "routines");
+    assert.equal(resolveSessionsMode("routines", true), "routines");
+  });
+
+  it("is never restored from storage and is not remembered like search", () => {
+    assert.equal(parseSessionsMode("routines"), "list");
+    assert.equal(isTransientMode("routines"), true);
+    assert.equal(isTransientMode("search"), true);
+    assert.equal(isTransientMode("map"), false);
+    assert.equal(isTransientMode("list"), false);
   });
 });

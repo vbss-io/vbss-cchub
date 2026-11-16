@@ -1,6 +1,7 @@
 import type { TaskRecord, TaskStatus } from "../delegation";
 import { taskArchivedAt, taskBranch, taskIsolation, taskMergedAt } from "../delegation-actions";
 import { IconCode, IconCodex } from "../icons";
+import { creatorLabel } from "../routine-model";
 import { humanizeDuration, taskInFlight, taskNeedsYou, taskReadyToMerge, taskStatusTone } from "../runs-model";
 import { relativeTime } from "../time";
 import type { SessionRecord } from "../types";
@@ -37,7 +38,7 @@ export function taskOrigin(task: TaskRecord, sessions: Record<string, SessionRec
     return { label: `delegated by ${name}`, sessionId: session ? task.originSessionId : null };
   }
   if (task.originClient === "share") return { label: "via share", sessionId: null };
-  return { label: `via ${task.createdBy ?? task.originClient ?? "mcp"}`, sessionId: null };
+  return { label: `via ${creatorLabel(task.createdBy, task.originClient ?? "mcp")}`, sessionId: null };
 }
 
 export interface TaskWhy {
@@ -74,6 +75,8 @@ interface Props {
   origin: TaskOrigin;
   runSession: SessionRecord | null;
   selected: boolean;
+  cost?: string | null;
+  costTitle?: string;
   archiveSupported: boolean;
   busy: boolean;
   onSelect: (id: string) => void;
@@ -84,7 +87,7 @@ interface Props {
   peers?: number;
 }
 
-export function TaskCard({ task, origin, runSession, selected, archiveSupported, busy, peers = 0, onSelect, onOpenSession, onCancel, onArchive, onRetry }: Props) {
+export function TaskCard({ task, origin, runSession, selected, cost = null, costTitle, archiveSupported, busy, peers = 0, onSelect, onOpenSession, onCancel, onArchive, onRetry }: Props) {
   const menu = useCardMenu();
   const isolated = taskIsolation(task) === "worktree";
   const running = inFlight(task.status);
@@ -145,6 +148,7 @@ export function TaskCard({ task, origin, runSession, selected, archiveSupported,
       <RunFoot>
         <span className="rc__dur">
           {durationLabel(task)} · {runs}
+          {cost !== null && <span title={costTitle}> · {cost}</span>}
         </span>
         {pct !== null && <CtxMeter pct={pct} title={`hub session context ${context?.toLocaleString("en-US") ?? ""} tokens`} />}
         <time className="rc__time">{relativeTime(task.updatedAt)}</time>

@@ -11,6 +11,7 @@ import { AppearanceTab, type ThemeName } from "./settings/AppearanceTab";
 import { ConnectionsTab } from "./settings/ConnectionsTab";
 import { GeneralTab } from "./settings/GeneralTab";
 import { GroupsTab } from "./settings/GroupsTab";
+import { HealthTab } from "./settings/HealthTab";
 import { MemoryTab } from "./settings/MemoryTab";
 import { NotificationsTab, type NotifSettings } from "./settings/NotificationsTab";
 import { PluginPage } from "./settings/PluginPage";
@@ -107,6 +108,7 @@ export function SettingsView(props: Props) {
             onCodexHooks={props.onCodexHooks}
           />
         )}
+        {active === "health" && <HealthTab {...tabProps} />}
         {active === "notifications" && <NotificationsTab notif={props.notif} onNotif={props.onNotif} />}
         {active === "groups" && (
           <GroupsTab groups={props.groups} onCreateGroup={props.onCreateGroup} onUpdateGroup={props.onUpdateGroup} onDeleteGroup={props.onDeleteGroup} onMoveGroup={props.onMoveGroup} />

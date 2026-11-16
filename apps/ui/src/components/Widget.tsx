@@ -21,10 +21,12 @@ import {
 import { taskBranch, taskIsolation } from "../delegation-actions";
 import { IconChevron, IconClaude, IconCode, IconCodex, IconOpenAI, IconStar } from "../icons";
 import { isMock, MOCK_SESSIONS } from "../mock";
+import { providerForecastLine } from "../forecast-model";
 import { folderPeers } from "../peers";
 import { isPluginEnabled } from "../plugins/registry";
 import { isEmpty, isStale } from "../stale";
-import type { SessionRecord } from "../types";
+import type { LimitsForecast, SessionRecord } from "../types";
+import { useLimitsForecast } from "../use-ops";
 import { turnOnOptimistically } from "../widget-turn-on";
 import { clampPercent, compactRect, dockRect, offsetFromPosition, ringTone, type Rect } from "../widget-layout";
 import {
@@ -323,6 +325,7 @@ interface ProviderCardProps {
   usageScanning: boolean;
   limitsEnabled: boolean;
   limits: LimitsSnapshot | null | undefined;
+  forecast: LimitsForecast | null;
   now: number;
 }
 
@@ -344,7 +347,8 @@ function UsageLines({ data, days }: { data: ProviderUsage | null; days: number }
   );
 }
 
-function ProviderCard({ provider, usageEnabled, usage, usageScanning, limitsEnabled, limits, now }: ProviderCardProps) {
+function ProviderCard({ provider, usageEnabled, usage, usageScanning, limitsEnabled, limits, forecast, now }: ProviderCardProps) {
+  const forecastLine = providerForecastLine(provider, forecast, now);
   const providerUsage = usage?.providers ? usage.providers[provider] : null;
   const claude = provider === "claude" ? limits?.claude ?? null : null;
   const codex = provider === "codex" ? limits?.codex ?? null : null;
@@ -380,6 +384,7 @@ function ProviderCard({ provider, usageEnabled, usage, usageScanning, limitsEnab
         <>
           <Gauge label="5 h" percent={claude.fiveHour.utilization} resetsAt={claude.fiveHour.resetsAt} window="fiveHour" reset={claude.fiveHour.reset} now={now} />
           <Gauge label="7 d" percent={claude.sevenDay.utilization} resetsAt={claude.sevenDay.resetsAt} window="sevenDay" reset={claude.sevenDay.reset} now={now} />
+          {forecastLine !== null && <div className="wgd-note">{forecastLine}</div>}
           {claude.models.length > 0 && (
             <div className="wgd-models">
               {claude.models.map((model, index) => (
@@ -395,6 +400,7 @@ function ProviderCard({ provider, usageEnabled, usage, usageScanning, limitsEnab
         <>
           <Gauge label="5 h" percent={codex.primary.usedPercent} resetsAt={codex.primary.resetsAt} window="fiveHour" requireReset reset={codex.primary.reset} now={now} />
           <Gauge label="7 d" percent={codex.secondary.usedPercent} resetsAt={codex.secondary.resetsAt} window="sevenDay" requireReset reset={codex.secondary.reset} now={now} />
+          {forecastLine !== null && <div className="wgd-note">{forecastLine}</div>}
         </>
       ) : (
         <div className="wgd-note">Limits are not tracked for {PROVIDER_NAME[provider]}.</div>
@@ -678,6 +684,7 @@ function WidgetView({ approvalsStore }: { approvalsStore: ApprovalsStore }) {
 
   const wantLimits = config.limitsFeature && (config.rings.claude || config.rings.codex || (open && tab === "usage"));
   const refreshMs = config.refreshMinutes * 60_000;
+  const forecast = useLimitsForecast(wantLimits && open && tab === "usage", limitsTick + (limits?.updatedAt ?? 0));
 
   useEffect(() => {
     if (!wantLimits) {
@@ -941,6 +948,7 @@ function WidgetView({ approvalsStore }: { approvalsStore: ApprovalsStore }) {
         usageScanning={usageScanning}
         limitsEnabled={config.limitsFeature}
         limits={limits}
+        forecast={forecast}
         now={now}
       />
       <ProviderCard
@@ -950,6 +958,7 @@ function WidgetView({ approvalsStore }: { approvalsStore: ApprovalsStore }) {
         usageScanning={usageScanning}
         limitsEnabled={config.limitsFeature}
         limits={limits}
+        forecast={forecast}
         now={now}
       />
     </>

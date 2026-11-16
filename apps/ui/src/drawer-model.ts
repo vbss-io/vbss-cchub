@@ -1,6 +1,6 @@
 import type { CodexSessionRecord, SessionStatus } from "./types";
 
-export type SessionTab = "activity" | "agents" | "asks" | "delegated" | "details";
+export type SessionTab = "activity" | "agents" | "asks" | "delegated" | "review" | "details";
 
 export interface DrawerTab<K extends string> {
   key: K;
@@ -19,13 +19,15 @@ export interface SessionTabInput {
   forks: number;
   delegated: number;
   delegatedOn: boolean;
+  review?: boolean;
 }
 
-export function sessionTabs({ agentsTotal, agentsRunning, asks, forks, delegated, delegatedOn }: SessionTabInput): DrawerTab<SessionTab>[] {
+export function sessionTabs({ agentsTotal, agentsRunning, asks, forks, delegated, delegatedOn, review = false }: SessionTabInput): DrawerTab<SessionTab>[] {
   const tabs: DrawerTab<SessionTab>[] = [{ key: "activity", label: "Activity" }];
   if (agentsTotal > 0) tabs.push({ key: "agents", label: "Subagents", count: agentsRunning > 0 ? `${agentsRunning}/${agentsTotal}` : String(agentsTotal) });
   if (asks > 0 || forks > 0) tabs.push(asks > 0 ? { key: "asks", label: "Asks", count: String(asks) } : { key: "asks", label: "Asks" });
   if (delegatedOn && delegated > 0) tabs.push({ key: "delegated", label: "Delegated", count: String(delegated) });
+  if (review) tabs.push({ key: "review", label: "Review" });
   tabs.push({ key: "details", label: "Details" });
   return tabs;
 }

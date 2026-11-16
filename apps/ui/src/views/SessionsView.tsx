@@ -6,6 +6,8 @@ import { CodexCard } from "../components/CodexCard";
 import { RunsFilters, type RunsFilterOption } from "../components/RunsFilters";
 import { SessionCard } from "../components/SessionCard";
 import { TaskCard, taskOrigin, type RetryMode } from "../components/TaskCard";
+import { costLabel, costTitle } from "../cost-model";
+import { useTaskCosts } from "../use-ops";
 import { Toggletip } from "../components/Toggletip";
 import { cancelTask, type TaskRecord, type WorkspaceRecord } from "../delegation";
 import { archiveTask, listArchivedTasks, retryTask, taskArchivedAt } from "../delegation-actions";
@@ -159,6 +161,7 @@ interface Props {
   modeSwitch?: ReactNode;
   renderMap?: (controls: MapControls) => ReactNode;
   renderSearch?: () => ReactNode;
+  renderRoutines?: () => ReactNode;
   tick: number;
   onOrigin: (origin: Origin) => void;
   onOpen: (sessionId: string) => void;
@@ -198,6 +201,7 @@ export function SessionsView({
   modeSwitch,
   renderMap,
   renderSearch,
+  renderRoutines,
   tick,
   onOrigin,
   onOpen,
@@ -359,6 +363,8 @@ export function SessionsView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessions, codexSessions, liveTasks, archivedTasks, workspaces, filter, origin, effectiveClient, showTasks, fold, sort, query, tick]);
 
+  const taskIds = useMemo(() => (showTasks ? list.flatMap((item) => (item.kind === "task" ? [item.task.id] : [])) : []), [showTasks, list]);
+  const taskCosts = useTaskCosts(taskIds, hubTick, delegatedEnabled);
   const sessionValues = useMemo(() => Object.values(sessions), [sessions]);
   const claimsBySession = useMemo(() => {
     const map = new Map<string, number>();
@@ -449,6 +455,8 @@ export function SessionsView({
           origin={taskOrigin(task, sessions)}
           runSession={runSessionId ? (sessions[runSessionId] ?? null) : null}
           selected={selectedTaskId === task.id}
+          cost={costLabel(taskCosts[task.id])}
+          costTitle={costTitle(taskCosts[task.id])}
           archiveSupported={archiveSupported}
           busy={taskBusy}
           peers={folderPeers(task.cwd, sessionValues, liveTasks, { taskId: task.id })}
@@ -519,11 +527,13 @@ export function SessionsView({
 
   const mapMode = mode === "map" && renderMap !== undefined;
   const searchMode = mode === "search" && renderSearch !== undefined;
+  const routinesMode = mode === "routines" && renderRoutines !== undefined;
+  const overlayMode = searchMode || routinesMode;
 
   return (
     <div className={`view view--runs ${mapMode ? "view--runs-map" : ""}`}>
       <div className="runs-head">
-        {!searchMode && (
+        {!overlayMode && (
         <div className="runs-origin" role="group" aria-label="Origin">
           {originOptions(delegatedEnabled).map((key) => (
             <button
@@ -542,7 +552,7 @@ export function SessionsView({
         </div>
         )}
         <div className="runs-head__right">
-          {!mapMode && !searchMode && (
+          {!mapMode && !overlayMode && (
             <Toggletip label="About this view" align="end">
               {help}
             </Toggletip>
@@ -555,7 +565,9 @@ export function SessionsView({
 
       {searchMode && renderSearch()}
 
-      {!mapMode && !searchMode && (
+      {routinesMode && renderRoutines()}
+
+      {!mapMode && !overlayMode && (
       <>
       <div className="toolbar runs-toolbar">
         <div className="filters">

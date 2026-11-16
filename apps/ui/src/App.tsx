@@ -13,7 +13,11 @@ import { SessionDrawer } from "./components/SessionDrawer";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { needsYouOnTop, parseOrigin, runsRouteOf, type Origin } from "./runs-model";
 import { SessionsModeSwitch } from "./components/SessionsModeSwitch";
-import { mapScope, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, SESSIONS_MODE_KEY, sessionsModeRouteOf, sessionsSubtitle, type SessionsMode } from "./sessions-mode";
+import { isTransientMode, mapScope, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, SESSIONS_MODE_KEY, sessionsModeRouteOf, sessionsSubtitle, type SessionsMode } from "./sessions-mode";
+import { RoutinesView } from "./views/RoutinesView";
+import { sessionsBadgeWithRoutines, shouldNotifyTask } from "./routine-model";
+import { useRoutineUnread } from "./use-routines";
+import type { RoutineStreamEvent } from "./routines-api";
 import { StatusBar } from "./components/StatusBar";
 import { WhatsNew } from "./components/WhatsNew";
 import { addCapture, configureCodexHooks, configureMcp, configureShell, createBackup, DelegationDisabledError, getConnect, getSettings, getUiPrefs, putUiPrefs, UiPrefsUnavailableError, type UiPrefs, type UiPrefsPatch, getTask, getTasksBoard, listReports, listTasks, listWorkspaces, openWorkspace, updateSettings, type BoardPayload, type ConnectStatus, type DelegationSettings, type McpClient, type ReportRecord, type SettingsPatch, type ShellKind, type TaskRecord, type TaskStatus, type WorkspaceRecord, getTunnel, updateTunnelSettings, type TunnelStatus, getAutostart, setAutostart, type AutostartStatus, fetchLimits, type LimitsSnapshot } from "./delegation";
@@ -351,6 +355,7 @@ export function App() {
   const boardListeners = useRef(new Set<(event: TasksBoardStreamEvent) => void>());
   const usageListeners = useRef(new Set<(event: UsageEvent) => void>());
   const historyListeners = useRef(new Set<(status: HistoryIndexStatus) => void>());
+  const routineListeners = useRef(new Set<(event: RoutineStreamEvent) => void>());
   const taskStatusRef = useRef(new Map<string, TaskStatus>());
 
   const goToHash = useCallback((hash: string) => {
@@ -379,7 +384,7 @@ export function App() {
 
   const setSessionsMode = useCallback((mode: SessionsMode) => {
     setSessionsModeState(mode);
-    if (mode !== "search") saveSessionsMode(mode);
+    if (!isTransientMode(mode)) saveSessionsMode(mode);
   }, []);
 
   const openTask = useCallback((id: string) => {
@@ -504,6 +509,7 @@ export function App() {
       const before = seen.get(task.id);
       seen.set(task.id, task.status);
       if (before === undefined || before === task.status) continue;
+      if (!shouldNotifyTask(task)) continue;
       if (task.status === "completed") {
         void getTask(task.id)
           .then((detail) => {
@@ -591,6 +597,7 @@ export function App() {
         void loadHub();
         loadUiPrefs();
         void loadConnect();
+        for (const listener of routineListeners.current) listener({ kind: "routines" });
         void getHooks()
           .then((next) => {
             if (mounted) setHooksState(next);
@@ -692,6 +699,15 @@ export function App() {
       onHistory: (status) => {
         for (const listener of historyListeners.current) listener(status);
       },
+      onRoutines: () => {
+        for (const listener of routineListeners.current) listener({ kind: "routines" });
+      },
+      onRoutineRun: (run) => {
+        for (const listener of routineListeners.current) listener({ kind: "routine-run", run });
+      },
+      onRoutinesInbox: (unread) => {
+        for (const listener of routineListeners.current) listener({ kind: "routines-inbox", unread });
+      },
       onUiPrefs: (next) => {
         if (!mounted || uiPrefsPending.current !== 0) return;
         setUiPrefs(next);
@@ -750,6 +766,13 @@ export function App() {
     historyListeners.current.add(listener);
     return () => {
       historyListeners.current.delete(listener);
+    };
+  }, []);
+
+  const subscribeRoutines = useCallback((listener: (event: RoutineStreamEvent) => void) => {
+    routineListeners.current.add(listener);
+    return () => {
+      routineListeners.current.delete(listener);
     };
   }, []);
 
@@ -924,7 +947,8 @@ export function App() {
   const boardEnabled = isPluginEnabled("tasks", features);
   const delegatedEnabled = isPluginEnabled("delegated", features);
   const flowEnabled = isPluginEnabled("flow", features);
-  const runsMode = resolveSessionsMode(sessionsMode, flowEnabled);
+  const runsMode = resolveSessionsMode(sessionsMode, flowEnabled, delegatedEnabled);
+  const routineUnread = useRoutineUnread(subscribeRoutines, delegatedEnabled && hubEnabled && !isMock);
   const announceDelegated = (taskId: string, title: string) =>
     pushToast("ok", `Delegated "${title}".`, delegatedEnabled ? { label: "Open task", run: () => navigate("tasks", taskId) } : undefined);
   const routedView: View = (route.view === "tasks" && delegatedEnabled) || (route.view === "flow" && flowEnabled) ? "sessions" : route.view;
@@ -1000,8 +1024,9 @@ export function App() {
     saveSidebarHint(sidebarCollapsed);
   }, [sidebarCollapsed]);
   const sessionsNavBadge = sessionsBadge(liveSessions, tasks, delegatedEnabled, codexWaiting);
-  const badgeOf = (key: View): number => (key === "sessions" ? sessionsNavBadge.count : 0);
-  const navTitle = (key: View, label: string): string => (key === "sessions" ? sessionsBadgeTitle(label, sessionsNavBadge) : railItemTitle(label, badgeOf(key)));
+  const sessionsBadgeOf = (label: string) => sessionsBadgeWithRoutines(sessionsBadgeTitle(label, sessionsNavBadge), sessionsNavBadge.count, routineUnread);
+  const badgeOf = (key: View): number => (key === "sessions" ? sessionsBadgeOf("Sessions").count : 0);
+  const navTitle = (key: View, label: string): string => (key === "sessions" ? sessionsBadgeOf(label).title : railItemTitle(label, badgeOf(key)));
   const navCurrent = navCurrentKey(effectiveView, runsMode, flowEnabled);
   const railTip = (tip: string, title: string = tip): { title?: string; "data-tip"?: string } => (rail ? { "data-tip": tip } : { title });
   const pickNav = (key: View): void => {
@@ -1228,7 +1253,7 @@ export function App() {
                   >
                     <span className="nav__icon">{item.icon}</span>
                     <span className="nav__label">{item.label}</span>
-                    {badge > 0 && <span className={item.key === "sessions" ? "nav__badge nav__badge--attn" : "nav__badge"}>{badge}</span>}
+                    {badge > 0 && <span className={item.key === "sessions" && sessionsNavBadge.count > 0 ? "nav__badge nav__badge--attn" : "nav__badge"}>{badge}</span>}
                   </a>
                 </li>
               );
@@ -1319,7 +1344,8 @@ export function App() {
                 onOrigin={setSessionsOrigin}
                 needsYouTop={needsYouTop}
                 mode={runsMode}
-                modeSwitch={<SessionsModeSwitch mode={runsMode} flowOn={flowEnabled} onMode={setSessionsMode} />}
+                modeSwitch={<SessionsModeSwitch mode={runsMode} flowOn={flowEnabled} delegatedOn={delegatedEnabled} routineUnread={routineUnread} onMode={setSessionsMode} />}
+                renderRoutines={() => <RoutinesView workspaces={workspaces} subscribe={subscribeRoutines} enabled={delegatedEnabled && hubEnabled} onOpenTask={openTask} onError={fail} />}
                 renderSearch={() => <HistorySearchView workspaces={workspaces} subscribeHistory={subscribeHistory} onOpenHit={openHistoryHit} onOpenSettings={() => navigate("settings", "memory")} />}
                 renderMap={
                   flowEnabled
@@ -1534,6 +1560,7 @@ export function App() {
             onClose={() => setTaskDrawer(null)}
             onOpenSession={openSession}
             onOpenCodex={openCodex}
+            onOpenTask={openTask}
           />
         )}
         {showWhatsNew && <WhatsNew onClose={() => setShowWhatsNew(false)} />}

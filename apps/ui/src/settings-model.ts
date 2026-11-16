@@ -28,6 +28,7 @@ const TABS_BEFORE_PLUGIN_PAGES: SettingsTabEntry[] = [
 const TABS_AFTER_PLUGIN_PAGES: SettingsTabEntry[] = [
   { key: "memory", label: "Memory" },
   { key: "connections", label: "Connections" },
+  { key: "health", label: "Health" },
   { key: "notifications", label: "Notifications" },
   { key: "groups", label: "Groups" },
   { key: "about", label: "About" },
@@ -75,6 +76,7 @@ export const SETTINGS_TAB_KEYWORDS: Readonly<Record<string, string[]>> = {
   memory: ["history", "search", "index", "rebuild", "clear", "day summary", "heading", "handoff", "context", "new sessions"],
   connections: ["hooks", "mcp", "shell", "alias", "wk", "claude code", "codex", "approvals", "permission", "allow", "deny", "codex hooks"],
   notifications: ["alerts", "toast", "sound"],
+  health: ["hooks", "mcp", "statusline", "tunnel", "app-server", "index", "check", "fix", "status"],
   groups: ["sessions", "workspace"],
   about: ["support", "version", "backups", "data", "whats new", "sponsor"],
 };
