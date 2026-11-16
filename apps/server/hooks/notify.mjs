@@ -290,9 +290,19 @@ async function askHub() {
   }
 }
 
+const INPUT_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"]);
+const isPlainObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+
+function allowDecision(updatedInput) {
+  if (!INPUT_TOOLS.has(input.tool_name)) return { behavior: "allow" };
+  if (!isPlainObject(updatedInput)) return null;
+  if (input.tool_name === "AskUserQuestion" && !isPlainObject(updatedInput.answers)) return null;
+  return { behavior: "allow", updatedInput };
+}
+
 function officialDecision(decision) {
   if (!decision) return null;
-  if (decision.behavior === "allow") return { behavior: "allow" };
+  if (decision.behavior === "allow") return allowDecision(decision.updatedInput);
   if (decision.behavior !== "deny") return null;
   return typeof decision.message === "string" && decision.message.length > 0 ? { behavior: "deny", message: decision.message } : { behavior: "deny" };
 }

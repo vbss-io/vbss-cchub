@@ -1,6 +1,7 @@
-import type { Isolation, Runner } from "./delegation";
+import type { Isolation, Runner, TaskStatus } from "./delegation";
 import type { NotifEventKind } from "./notifications";
 import type { TaskTone } from "./runs-model";
+import type { SessionStatus } from "./types";
 import { shortFolder } from "./wsmatch";
 
 export type ToastSource = "session" | "task" | "share";
@@ -39,10 +40,60 @@ const SOURCE_NAME: Readonly<Record<ToastSource, string>> = { session: "Session",
 const RUNNER_NAME: Readonly<Record<Runner, string>> = { claude: "Claude", codex: "Codex" };
 
 export const TOAST_AUTO_MS = 6_000;
-export const TOAST_ATTENTION_MS = 10_000;
 export const TOAST_MAX_VISIBLE = 4;
 
-export const toastLifetime = (kind: NotifEventKind): number => (TOAST_LOOK[kind].attention ? TOAST_ATTENTION_MS : TOAST_AUTO_MS);
+export const toastLifetime = (kind: NotifEventKind): number | null => (TOAST_LOOK[kind].attention ? null : TOAST_AUTO_MS);
+
+export interface ToastSubject {
+  kind: NotifEventKind;
+  id: string;
+}
+
+export interface TimedToast extends ToastSubject {
+  lifetime: number | null;
+  elapsed: number;
+}
+
+export function ageToasts<T extends TimedToast>(cards: readonly T[], delta: number, paused: boolean): readonly T[] {
+  if (paused || !cards.some((card) => card.lifetime !== null)) return cards;
+  const aged: T[] = [];
+  for (const card of cards) {
+    if (card.lifetime === null) {
+      aged.push(card);
+      continue;
+    }
+    const elapsed = card.elapsed + delta;
+    if (elapsed < card.lifetime) aged.push({ ...card, elapsed });
+  }
+  return aged;
+}
+
+export type ToastFact = { type: "session"; id: string; status: SessionStatus | null } | { type: "task"; id: string; status: TaskStatus | null; archived: boolean };
+
+export function toastReasonGone(card: ToastSubject, fact: ToastFact): boolean {
+  if (card.id !== fact.id) return false;
+  if (fact.type === "session") return card.kind === "sessionNeedsYou" && fact.status !== "waiting";
+  if (card.kind === "taskNeedsYou") return fact.archived || fact.status !== "attention";
+  if (card.kind === "taskFailed") return fact.archived || fact.status !== "failed";
+  return false;
+}
+
+export function pruneToasts<T extends ToastSubject>(cards: readonly T[], fact: ToastFact): readonly T[] {
+  const kept = cards.filter((card) => !toastReasonGone(card, fact));
+  return kept.length === cards.length ? cards : kept;
+}
+
+export const toastWaitsOnReason = (card: ToastSubject): boolean => TOAST_LOOK[card.kind].attention;
+
+export function upsertToast<T extends ToastSubject>(cards: readonly T[], card: T): T[] {
+  return [...cards.filter((item) => item.kind !== card.kind || item.id !== card.id), card];
+}
+
+export function hideBehindApprovals<T extends ToastSubject>(cards: readonly T[], approvalSessions: ReadonlySet<string>): readonly T[] {
+  if (approvalSessions.size === 0) return cards;
+  const kept = cards.filter((card) => card.kind !== "sessionNeedsYou" || !approvalSessions.has(card.id));
+  return kept.length === cards.length ? cards : kept;
+}
 
 export interface ToastTarget {
   hash: string;

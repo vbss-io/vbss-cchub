@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { buildNotification, NOTIF_EVENT_META, type NotifEventKind, type NotifEventPayload } from "./notifications";
 import {
+  ageToasts,
+  hideBehindApprovals,
+  pruneToasts,
   sessionToastContext,
   taskToastContext,
-  TOAST_ATTENTION_MS,
   TOAST_AUTO_MS,
   TOAST_LOOK,
   toastLifetime,
+  toastReasonGone,
+  upsertToast,
   toastStack,
   toastTarget,
   toastTime,
@@ -48,12 +52,82 @@ describe("TOAST_LOOK", () => {
 });
 
 describe("toastLifetime", () => {
-  it("keeps Needs you and Failed on screen for 10 s and the rest for 6 s", () => {
+  it("keeps Needs you and Failed until acted on and lets the informative kinds go after 6 s", () => {
     assert.equal(TOAST_AUTO_MS, 6_000);
-    assert.equal(TOAST_ATTENTION_MS, 10_000);
-    const long = ALL_KINDS.filter((kind) => toastLifetime(kind) === TOAST_ATTENTION_MS);
-    assert.deepEqual(long, ["sessionNeedsYou", "taskFailed", "taskNeedsYou"]);
-    for (const kind of ALL_KINDS.filter((item) => !long.includes(item))) assert.equal(toastLifetime(kind), TOAST_AUTO_MS);
+    const kept = ALL_KINDS.filter((kind) => toastLifetime(kind) === null);
+    assert.deepEqual(kept, ["sessionNeedsYou", "taskFailed", "taskNeedsYou"]);
+    for (const kind of ALL_KINDS.filter((item) => !kept.includes(item))) assert.equal(toastLifetime(kind), TOAST_AUTO_MS);
+  });
+});
+
+const timed = (kind: NotifEventKind, id: string, elapsed = 0) => ({ kind, id, lifetime: toastLifetime(kind), elapsed });
+
+describe("ageToasts", () => {
+  it("drops every informative kind once its 6 s ran out and never ages the kept kinds", () => {
+    const cards = ALL_KINDS.map((kind) => timed(kind, `id-${kind}`));
+    const almost = ageToasts(cards, TOAST_AUTO_MS - 1, false);
+    assert.equal(almost.length, ALL_KINDS.length);
+    const after = ageToasts(almost, 1, false);
+    assert.deepEqual(after.map((card) => card.kind), ["sessionNeedsYou", "taskFailed", "taskNeedsYou"]);
+    const much = ageToasts(after, 24 * 60 * 60 * 1000, false);
+    assert.deepEqual(much.map((card) => card.elapsed), [0, 0, 0]);
+  });
+
+  it("pauses while hovered and keeps the same list when nothing changes", () => {
+    const cards = [timed("sessionIdle", "a", TOAST_AUTO_MS - 1)];
+    assert.equal(ageToasts(cards, 5_000, true), cards);
+    const kept = [timed("taskFailed", "t")];
+    assert.equal(ageToasts(kept, 5_000, false), kept);
+    assert.deepEqual(ageToasts([], 5_000, false), []);
+  });
+});
+
+describe("toastReasonGone", () => {
+  it("drops a session Needs you once the session moved on or disappeared, not while it waits", () => {
+    const card = timed("sessionNeedsYou", "s1");
+    assert.equal(toastReasonGone(card, { type: "session", id: "s1", status: "waiting" }), false);
+    for (const status of ["active", "idle", "ended", null] as const) assert.equal(toastReasonGone(card, { type: "session", id: "s1", status }), true, String(status));
+    assert.equal(toastReasonGone(card, { type: "session", id: "other", status: "active" }), false);
+  });
+
+  it("drops a task Needs you or Failed once the task left that state or was archived", () => {
+    const needs = timed("taskNeedsYou", "t1");
+    const failed = timed("taskFailed", "t1");
+    assert.equal(toastReasonGone(needs, { type: "task", id: "t1", status: "attention", archived: false }), false);
+    assert.equal(toastReasonGone(needs, { type: "task", id: "t1", status: "running", archived: false }), true);
+    assert.equal(toastReasonGone(needs, { type: "task", id: "t1", status: "attention", archived: true }), true);
+    assert.equal(toastReasonGone(failed, { type: "task", id: "t1", status: "failed", archived: false }), false);
+    assert.equal(toastReasonGone(failed, { type: "task", id: "t1", status: "running", archived: false }), true);
+    assert.equal(toastReasonGone(failed, { type: "task", id: "t1", status: null, archived: false }), true);
+    assert.equal(toastReasonGone(failed, { type: "session", id: "t1", status: null }), false);
+  });
+
+  it("leaves the informative kinds to their timer", () => {
+    for (const kind of ["sessionIdle", "sessionFinished", "taskCompleted", "shareAsk", "shareImplement"] as const) {
+      assert.equal(toastReasonGone(timed(kind, "x"), { type: "session", id: "x", status: null }), false, kind);
+      assert.equal(toastReasonGone(timed(kind, "x"), { type: "task", id: "x", status: null, archived: true }), false, kind);
+    }
+  });
+
+  it("prunes only the cards whose reason ended", () => {
+    const cards = [timed("sessionNeedsYou", "s1"), timed("sessionNeedsYou", "s2"), timed("sessionIdle", "s1")];
+    assert.deepEqual(pruneToasts(cards, { type: "session", id: "s1", status: "active" }).map((card) => `${card.kind}:${card.id}`), ["sessionNeedsYou:s2", "sessionIdle:s1"]);
+    assert.equal(pruneToasts(cards, { type: "session", id: "s2", status: "waiting" }), cards);
+  });
+});
+
+describe("upsertToast and hideBehindApprovals", () => {
+  it("keeps one card per event and subject, the newest", () => {
+    const first = { ...timed("sessionNeedsYou", "s1"), key: 1 };
+    const other = { ...timed("sessionIdle", "s1"), key: 2 };
+    const again = { ...timed("sessionNeedsYou", "s1"), key: 3 };
+    assert.deepEqual(upsertToast(upsertToast([first], other), again).map((card) => card.key), [2, 3]);
+  });
+
+  it("hides a session Needs you while that session has an approval card", () => {
+    const cards = [timed("sessionNeedsYou", "s1"), timed("sessionNeedsYou", "s2"), timed("sessionIdle", "s1")];
+    assert.deepEqual(hideBehindApprovals(cards, new Set(["s1"])).map((card) => `${card.kind}:${card.id}`), ["sessionNeedsYou:s2", "sessionIdle:s1"]);
+    assert.equal(hideBehindApprovals(cards, new Set()), cards);
   });
 });
 

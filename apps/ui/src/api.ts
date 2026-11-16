@@ -150,16 +150,25 @@ export const fetchPermissions = (): Promise<PermissionRequestRecord[]> => getJso
 
 export type DecisionOutcome = "done" | "gone";
 
-export async function decidePermission(id: string, body: { behavior: "allow" | "deny"; message?: string }): Promise<DecisionOutcome> {
+export async function decidePermission(id: string, body: { behavior: "allow" | "deny"; message?: string; answers?: Record<string, string> }): Promise<DecisionOutcome> {
   const res = await fetch(`${base}/api/permissions/${encodeURIComponent(id)}/decision`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+  return decisionOutcome(res, "decision");
+}
+
+export async function releasePermission(id: string): Promise<DecisionOutcome> {
+  const res = await fetch(`${base}/api/permissions/${encodeURIComponent(id)}/release`, { method: "POST" });
+  return decisionOutcome(res, "release");
+}
+
+async function decisionOutcome(res: Response, step: string): Promise<DecisionOutcome> {
   if (res.status === 404) return "gone";
   if (res.ok) return "done";
   const json = safeJson(await res.text()) as { error?: string } | null;
-  throw new Error(json?.error ?? `decision failed (${res.status})`);
+  throw new Error(json?.error ?? `${step} failed (${res.status})`);
 }
 
 export interface DesktopNotifyStatus {
