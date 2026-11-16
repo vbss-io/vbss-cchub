@@ -323,6 +323,26 @@ describe("H1 item 2: subtasks with the same title are never swapped", () => {
     assert.equal(read(root, dailyRel), dailyOf(TODAY, [alphaLine("Parent"), "  - [ ] Same", "  - [ ] Other"]));
   });
 
+  it("keeps showing a present subtask line whose title repeats, and counts only the others as hidden", () => {
+    const focus = [alphaLine("Parent"), "  - [ ] Same"];
+    const root = lab({ alpha: project("Alpha", [`- [ ] Parent ${SCHEDULED} ${TODAY}`, "  - [ ] Same", "  - [ ] Same", "  - [ ] Other"]) }, { [TODAY]: dailyOf(TODAY, focus) });
+    const settings = useVault(root);
+    settle(settings);
+    const before = read(root, dailyRel);
+    const same = tasksIn(settings, "Same").map((task) => task.id);
+    const entry = today.readToday(settings, TODAY).focus[0];
+    assert.deepEqual([...(entry?.visibleSubtasks ?? [])].sort(), [...same].sort());
+    assert.ok(!(entry?.visibleSubtasks ?? []).includes(taskIn(settings, "Other").id));
+    assert.equal(read(root, dailyRel), before);
+  });
+
+  it("hides a repeated title again once its line is not in the daily", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Parent ${SCHEDULED} ${TODAY}`, "  - [ ] Same", "  - [ ] Same"]) }, { [TODAY]: dailyOf(TODAY, [alphaLine("Parent")]) });
+    const settings = useVault(root);
+    settle(settings);
+    assert.deepEqual(today.readToday(settings, TODAY).focus[0]?.visibleSubtasks, []);
+  });
+
   it("a dated subtask whose title repeats under the same parent never enters as the wrong line", () => {
     const root = lab(
       { alpha: project("Alpha", [`- [ ] Parent ${SCHEDULED} ${TODAY}`, `  - [ ] Same ${SCHEDULED} ${TODAY}`, "  - [ ] Same"]) },

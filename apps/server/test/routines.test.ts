@@ -48,6 +48,13 @@ beforeEach(() => {
 
 const HOUR = 3_600_000;
 
+const clockOf = (at: number): string => {
+  const date = new Date(at);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+};
+
+const staleDaily = (now: number): import("../src/routine-store.js").RoutineInput["schedule"] => ({ kind: "daily", time: clockOf(now - 14 * HOUR) });
+
 function makeRoutine(over: Partial<import("../src/routine-store.js").RoutineInput> = {}) {
   return store.createRoutine({
     name: "nightly check",
@@ -136,8 +143,8 @@ describe("routines", () => {
   });
 
   it("records a missed entry, without running, when the slot is older than the window", () => {
-    const routine = makeRoutine();
     const now = Date.now();
+    const routine = makeRoutine({ schedule: staleDaily(now) });
     store.advanceRoutine(routine.id, now - 20 * HOUR, null);
     const [outcome] = routines.runSchedulerTick(now);
     assert.equal(outcome?.action, "missed");
@@ -157,8 +164,8 @@ describe("routines", () => {
   });
 
   it("marks inbox items read and unread", async () => {
-    const routine = makeRoutine();
     const now = Date.now();
+    const routine = makeRoutine({ schedule: staleDaily(now) });
     store.advanceRoutine(routine.id, now - 20 * HOUR, null);
     routines.runSchedulerTick(now);
     const manual = routines.fireRoutine(routine, { trigger: "manual", dueAt: null });

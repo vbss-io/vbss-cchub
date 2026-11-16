@@ -60,6 +60,10 @@ describe("updatedInputFor", () => {
   it("echoes the ExitPlanMode input and ignores answers everywhere else", () => {
     assert.deepEqual(updatedInputFor({ agent: "claude", toolName: "ExitPlanMode", toolInput: planInput }, "allow", { x: "y" }), { ok: true, updatedInput: planInput });
     assert.deepEqual(updatedInputFor({ agent: "claude", toolName: "Bash", toolInput: { command: "ls" } }, "allow", { x: "y" }), { ok: true, updatedInput: null });
+    for (const toolInput of [null, undefined, "plan", 7, ["plan"]]) {
+      assert.equal(updatedInputFor({ agent: "claude", toolName: "ExitPlanMode", toolInput }, "allow", undefined).ok, false);
+      assert.deepEqual(updatedInputFor({ agent: "claude", toolName: "ExitPlanMode", toolInput }, "deny", undefined), { ok: true, updatedInput: null });
+    }
     assert.deepEqual(updatedInputFor({ agent: "codex", toolName: "AskUserQuestion", toolInput: askInput }, "allow", undefined), { ok: true, updatedInput: null });
     assert.deepEqual(updatedInputFor(ask, "deny", undefined), { ok: true, updatedInput: null });
   });

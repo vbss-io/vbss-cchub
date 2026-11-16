@@ -68,6 +68,10 @@ export function ageToasts<T extends TimedToast>(cards: readonly T[], delta: numb
   return aged;
 }
 
+export type HoverSignal = "enter" | "move" | "leave" | "blur" | "hidden" | "removed";
+
+export const hoverAfter = (signal: HoverSignal): boolean => signal === "enter" || signal === "move";
+
 export type ToastFact = { type: "session"; id: string; status: SessionStatus | null } | { type: "task"; id: string; status: TaskStatus | null; archived: boolean };
 
 export function toastReasonGone(card: ToastSubject, fact: ToastFact): boolean {

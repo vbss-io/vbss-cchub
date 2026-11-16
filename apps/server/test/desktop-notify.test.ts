@@ -121,6 +121,59 @@ describe("native toast tags", () => {
     assert.deepEqual(calls.slice(2).map((args) => `${arg(args, "-Group")}:${arg(args, "-Tag")}`), ["taskNeedsYou:t1", "taskFailed:t2"]);
   });
 
+  it("removes a toast whose reason ended while the show spawn was still running", async () => {
+    const calls: string[][] = [];
+    let releaseShow: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseShow = resolve;
+    });
+    const notifier = createDesktopNotifier(async (args) => {
+      calls.push(args);
+      if (!args.includes("-Remove")) await gate;
+      return "ok";
+    }, "win32");
+    const showing = notifier.show("t", "b", { kind: "sessionNeedsYou", id: "s1" });
+    assert.deepEqual(notifier.tracked(), [{ kind: "sessionNeedsYou", id: "s1" }]);
+    assert.equal(await notifier.observe("session", { sessionId: "s1", status: "active" }, () => null), 1);
+    assert.equal(calls.length, 1);
+    assert.ok(!calls[0]?.includes("-Remove"));
+    releaseShow();
+    assert.equal((await showing).ok, true);
+    assert.equal(calls.length, 2);
+    assert.ok(calls[1]?.includes("-Remove"));
+    assert.equal(arg(calls[1], "-Tag"), "s1");
+    assert.equal(arg(calls[1], "-Group"), "sessionNeedsYou");
+    assert.deepEqual(notifier.tracked(), []);
+  });
+
+  it("keeps a toast tracked and removes nothing when the reason has not ended while it spawns", async () => {
+    const calls: string[][] = [];
+    let releaseShow: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseShow = resolve;
+    });
+    const notifier = createDesktopNotifier(async (args) => {
+      calls.push(args);
+      await gate;
+      return "ok";
+    }, "win32");
+    const showing = notifier.show("t", "b", { kind: "sessionNeedsYou", id: "s1" });
+    assert.equal(await notifier.observe("session", { sessionId: "s1", status: "waiting" }, () => null), 0);
+    releaseShow();
+    await showing;
+    assert.equal(calls.length, 1);
+    assert.deepEqual(notifier.tracked(), [{ kind: "sessionNeedsYou", id: "s1" }]);
+  });
+
+  it("forgets a subject whose show spawn failed", async () => {
+    const notifier = createDesktopNotifier(async () => {
+      throw new Error("spawn failed");
+    }, "win32");
+    const result = await notifier.show("t", "b", { kind: "taskFailed", id: "t1" });
+    assert.equal(result.ok, false);
+    assert.deepEqual(notifier.tracked(), []);
+  });
+
   it("spawns nothing while no tagged toast is shown and accepts only known subjects", async () => {
     const { calls, notifier } = recorder();
     assert.equal(await notifier.observe("session", { sessionId: "s1", status: "active" }, () => null), 0);

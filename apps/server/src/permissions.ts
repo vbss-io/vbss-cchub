@@ -84,7 +84,10 @@ function answersFor(texts: readonly string[], answers: unknown): { ok: true; ans
 
 export function updatedInputFor(record: Pick<PermissionRequestRecord, "agent" | "toolName" | "toolInput">, behavior: PermissionBehavior, answers: unknown): UpdatedInputResult {
   if (behavior !== "allow" || record.agent !== "claude") return { ok: true, updatedInput: null };
-  if (record.toolName === EXIT_PLAN_MODE_TOOL) return { ok: true, updatedInput: isRecord(record.toolInput) ? { ...record.toolInput } : {} };
+  if (record.toolName === EXIT_PLAN_MODE_TOOL) {
+    if (!isRecord(record.toolInput)) return { ok: false, error: "this request carries no plan input to approve; answer it in the session" };
+    return { ok: true, updatedInput: { ...record.toolInput } };
+  }
   if (record.toolName !== ASK_USER_QUESTION_TOOL) return { ok: true, updatedInput: null };
   const texts = questionTexts(record.toolInput);
   if (!texts || !isRecord(record.toolInput)) return { ok: false, error: "this request carries no questions to answer; answer it in the session" };

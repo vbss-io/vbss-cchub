@@ -2916,6 +2916,7 @@ export interface FocusChild {
   checkbox: BoardCheckbox;
   text: string;
   task: BoardTask | null;
+  candidates: string[];
 }
 
 export interface FocusEntry {
@@ -2975,9 +2976,10 @@ function focusEntries(settings: DelegationSettings, date: string, content: strin
     while (stack.length > 1 && (stack[stack.length - 1] as { depth: number }).depth >= entry.depth) stack.pop();
     const parent = stack[stack.length - 1]?.task ?? null;
     const text = entry.text.trim();
-    const task = parent && text !== "" ? matchTask(text, null, parent.subtasks, settings.tasks).task : null;
+    const match: TaskMatch = parent && text !== "" ? matchTask(text, null, parent.subtasks, settings.tasks) : { task: null, candidates: [] };
+    const task = match.task;
     stack.push({ depth: entry.depth, task });
-    if (text !== "") current.children.push({ line: entry.line, depth: entry.depth, raw: entry.raw, checkbox: entry.state, text, task });
+    if (text !== "") current.children.push({ line: entry.line, depth: entry.depth, raw: entry.raw, checkbox: entry.state, text, task, candidates: match.candidates });
   }
   return entries;
 }

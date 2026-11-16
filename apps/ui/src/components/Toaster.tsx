@@ -9,6 +9,7 @@ import { loadNotifEventConfig, type NotifEventKind } from "../notifications";
 import {
   ageToasts,
   hideBehindApprovals,
+  hoverAfter,
   pruneToasts,
   sessionToastContext,
   taskToastContext,
@@ -177,6 +178,7 @@ function ToasterStack({ approvalsStore }: { approvalsStore: ApprovalsStore }): R
   const approvalHandlers = approvalsStore.handlers;
   const [now, setNow] = useState(() => Date.now());
   const hoveringRef = useRef(false);
+  const shownCountRef = useRef(0);
   const keyboardRef = useRef(false);
   const cardsRef = useRef<readonly Card[]>([]);
   cardsRef.current = cards;
@@ -297,13 +299,26 @@ function ToasterStack({ approvalsStore }: { approvalsStore: ApprovalsStore }): R
       setCards((prev) => ageToasts(prev, delta, hoveringRef.current));
     };
     const id = setInterval(tick, TICK_MS);
-    const onVisible = () => tick();
+    const onVisible = () => {
+      if (document.visibilityState === "hidden") hoveringRef.current = hoverAfter("hidden");
+      tick();
+    };
+    const onBlur = () => {
+      hoveringRef.current = hoverAfter("blur");
+    };
+    const onLeave = () => {
+      hoveringRef.current = hoverAfter("leave");
+    };
     document.addEventListener("visibilitychange", onVisible);
+    document.documentElement.addEventListener("mouseleave", onLeave);
     window.addEventListener("focus", onVisible);
+    window.addEventListener("blur", onBlur);
     return () => {
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
+      document.documentElement.removeEventListener("mouseleave", onLeave);
       window.removeEventListener("focus", onVisible);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
@@ -312,7 +327,8 @@ function ToasterStack({ approvalsStore }: { approvalsStore: ApprovalsStore }): R
   useLayoutEffect(() => {
     const height = (stackRef.current?.offsetHeight ?? 0) + MARGIN;
     const count = shownCards.length + approvalCards.length;
-    if (count === 0) hoveringRef.current = false;
+    if (count === 0 || shownCards.length < shownCountRef.current) hoveringRef.current = hoverAfter("removed");
+    shownCountRef.current = shownCards.length;
     if (!typing) keyboardRef.current = false;
     if (applied.current.count === count && applied.current.height === height) return;
     applied.current = { count, height };
@@ -335,10 +351,13 @@ function ToasterStack({ approvalsStore }: { approvalsStore: ApprovalsStore }): R
         className="toaster__stack"
         ref={stackRef}
         onMouseEnter={() => {
-          hoveringRef.current = true;
+          hoveringRef.current = hoverAfter("enter");
+        }}
+        onMouseMove={() => {
+          hoveringRef.current = hoverAfter("move");
         }}
         onMouseLeave={() => {
-          hoveringRef.current = false;
+          hoveringRef.current = hoverAfter("leave");
         }}
       >
         {hidden > 0 && <div className="toaster__more">+{hidden} more</div>}

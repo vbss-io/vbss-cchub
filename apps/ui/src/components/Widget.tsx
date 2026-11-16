@@ -49,6 +49,10 @@ import {
   type SectionPlan,
   type WidgetTone,
 } from "../widget-model";
+import { ApprovalList } from "./ApprovalRequest";
+import { BrandMark } from "./BrandMark";
+import { inFlight, needsYou } from "./TaskCard";
+import "../widget.css";
 
 const HOLD_RECHECK_MS = 1500;
 const TEXT_INPUT = 'input:not([type]), input[type="text"], input[type="search"], textarea';
@@ -60,10 +64,6 @@ function panelInputs(): PanelInputs {
     otherDrafts: [...document.querySelectorAll<HTMLInputElement>(".ask__other")].map((input) => input.value),
   };
 }
-import { ApprovalList } from "./ApprovalRequest";
-import { BrandMark } from "./BrandMark";
-import { inFlight, needsYou } from "./TaskCard";
-import "../widget.css";
 
 const inTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 

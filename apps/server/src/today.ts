@@ -915,10 +915,11 @@ interface Presence {
   lines: Map<string, number[]>;
   unclear: Set<string>;
   recurred: Set<string>;
+  listed: Set<string>;
 }
 
 function presenceOf(scan: FocusScan): Presence {
-  const presence: Presence = { lines: new Map(), unclear: new Set(), recurred: new Set() };
+  const presence: Presence = { lines: new Map(), unclear: new Set(), recurred: new Set(), listed: new Set() };
   const add = (id: string, line: number): void => {
     presence.lines.set(id, [...(presence.lines.get(id) ?? []), line]);
   };
@@ -930,7 +931,10 @@ function presenceOf(scan: FocusScan): Presence {
     } else {
       for (const candidate of entry.match.candidates) presence.unclear.add(candidate);
     }
-    for (const child of entry.children) if (child.task) add(child.task.id, child.line);
+    for (const child of entry.children) {
+      if (child.task) add(child.task.id, child.line);
+      else for (const candidate of child.candidates) presence.listed.add(candidate);
+    }
   }
   return presence;
 }
@@ -3997,8 +4001,8 @@ function linkTick(settings: DelegationSettings, date: string, input: LinkTickInp
 }
 
 function withVisibleSubtasks(settings: DelegationSettings, date: string, content: string | null, data: BoardData, focus: TodayEntry[]): TodayEntry[] {
-  const lines = content === null ? new Map<string, number[]>() : presenceOf(scanDaily(settings, date, content, data.projects, data.tasks)).lines;
-  const visible = (task: BoardTask): boolean => lines.has(task.id) || entersDayWith(task, date) || task.subtasks.some(visible);
+  const presence = content === null ? null : presenceOf(scanDaily(settings, date, content, data.projects, data.tasks));
+  const visible = (task: BoardTask): boolean => presence?.lines.has(task.id) === true || presence?.listed.has(task.id) === true || entersDayWith(task, date) || task.subtasks.some(visible);
   return focus.map((entry) => ({ ...entry, visibleSubtasks: flattenTasks(entry.task.subtasks).filter(visible).map((task) => task.id) }));
 }
 

@@ -104,31 +104,51 @@ export function createDesktopNotifier(runner: PowerShellRunner = defaultRunner, 
   };
 
   const shown = new Map<string, NativeSubject>();
+  const pendingShows = new Map<string, { ended: boolean }>();
   const script = join(scriptsDir, "toast.ps1");
+
+  const removeToast = async (subject: NativeSubject): Promise<void> => {
+    const { tag, group } = nativeTag(subject);
+    try {
+      await runner(["-File", script, "-AppId", DESKTOP_APP_ID, "-Tag", tag, "-Group", group, "-Remove"]);
+    } catch {
+      return;
+    }
+  };
 
   const show = async (title: string, body: string, subject: NativeSubject | null = null): Promise<DesktopNotifyResult> => {
     if (platform !== "win32") return { ok: false, via: null, reason: "desktop toasts are only implemented on Windows" };
     const tagged = subject ? nativeTag(subject) : null;
     const tagArgs = tagged ? ["-Tag", tagged.tag, "-Group", tagged.group] : [];
+    const key = subject ? subjectKey(subject) : null;
+    const token = { ended: false };
+    if (subject && key) {
+      shown.set(key, subject);
+      pendingShows.set(key, token);
+    }
+    const release = (): void => {
+      if (key && pendingShows.get(key) === token) pendingShows.delete(key);
+    };
     try {
       await runner(["-File", script, "-AppId", DESKTOP_APP_ID, "-Title", clip(title, TITLE_MAX), "-Body", clip(body, BODY_MAX), ...tagArgs]);
-      if (subject) shown.set(subjectKey(subject), subject);
-      return { ok: true, via: "windows-toast", reason: null };
     } catch (err) {
+      release();
+      if (key && !token.ended) shown.delete(key);
       return { ok: false, via: null, reason: err instanceof Error ? err.message : "toast failed" };
     }
+    release();
+    if (subject && token.ended) await removeToast(subject);
+    return { ok: true, via: "windows-toast", reason: null };
   };
 
   const settle = async (fact: NativeFact): Promise<number> => {
     const gone = [...shown.values()].filter((subject) => nativeReasonGone(subject, fact));
     for (const subject of gone) {
-      shown.delete(subjectKey(subject));
-      const { tag, group } = nativeTag(subject);
-      try {
-        await runner(["-File", script, "-AppId", DESKTOP_APP_ID, "-Tag", tag, "-Group", group, "-Remove"]);
-      } catch {
-        continue;
-      }
+      const key = subjectKey(subject);
+      shown.delete(key);
+      const inFlight = pendingShows.get(key);
+      if (inFlight) inFlight.ended = true;
+      else await removeToast(subject);
     }
     return gone.length;
   };

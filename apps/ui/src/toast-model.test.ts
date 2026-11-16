@@ -4,6 +4,7 @@ import { buildNotification, NOTIF_EVENT_META, type NotifEventKind, type NotifEve
 import {
   ageToasts,
   hideBehindApprovals,
+  hoverAfter,
   pruneToasts,
   sessionToastContext,
   taskToastContext,
@@ -61,6 +62,21 @@ describe("toastLifetime", () => {
 });
 
 const timed = (kind: NotifEventKind, id: string, elapsed = 0) => ({ kind, id, lifetime: toastLifetime(kind), elapsed });
+
+describe("hoverAfter", () => {
+  it("holds only while the pointer enters or moves over the stack and releases on every other signal", () => {
+    assert.equal(hoverAfter("enter"), true);
+    assert.equal(hoverAfter("move"), true);
+    for (const signal of ["leave", "blur", "hidden", "removed"] as const) assert.equal(hoverAfter(signal), false);
+  });
+
+  it("lets informational toasts expire again after the hold is released", () => {
+    const cards = [{ lifetime: TOAST_AUTO_MS, elapsed: 0 }];
+    assert.equal(ageToasts(cards, TOAST_AUTO_MS, hoverAfter("enter")).length, 1);
+    assert.equal(ageToasts(cards, TOAST_AUTO_MS, hoverAfter("blur")).length, 0);
+    assert.equal(ageToasts(cards, TOAST_AUTO_MS, hoverAfter("removed")).length, 0);
+  });
+});
 
 describe("ageToasts", () => {
   it("drops every informative kind once its 6 s ran out and never ages the kept kinds", () => {
