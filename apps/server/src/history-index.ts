@@ -429,7 +429,8 @@ export interface HistoryIndexStatus {
   sessions: number;
   rows: number;
   textBytes: number;
-  dbBytes: number;
+  indexBytes: number;
+  indexBytesEstimated: boolean;
   lastBuildMs: number | null;
   lastBuildAt: number | null;
   lastRun: HistoryRunSummary | null;
@@ -451,18 +452,42 @@ let lastBuildAt: number | null = null;
 let lastError: string | null = null;
 let lastBroadcastAt = 0;
 
-function fileSize(path: string): number {
+const INDEX_SIZE_TTL_MS = 10_000;
+const ESTIMATE_ROW_BYTES = 48;
+const ESTIMATE_FILE_BYTES = 512;
+const INDEX_OBJECTS_SQL = `SELECT name FROM sqlite_schema WHERE rootpage > 0 AND (name LIKE 'history%' OR name LIKE 'idx_history%' OR name LIKE 'sqlite_autoindex_history%')`;
+
+export interface IndexSize {
+  bytes: number;
+  estimated: boolean;
+}
+
+let indexSizeCache: { at: number; size: IndexSize } | null = null;
+
+function measureIndexSize(counts: { files: number; rows: number; textBytes: number }): IndexSize {
   try {
-    return statSync(path).size;
+    const pageBytes = db.prepare(`SELECT COALESCE(SUM(pgsize), 0) AS bytes FROM dbstat WHERE name = ? AND aggregate = TRUE`);
+    const names = (db.prepare(INDEX_OBJECTS_SQL).all() as { name: string }[]).map((row) => row.name);
+    const bytes = names.reduce((sum, name) => sum + (pageBytes.get(name) as { bytes: number }).bytes, 0);
+    return { bytes, estimated: false };
   } catch {
-    return 0;
+    return { bytes: counts.textBytes * 2 + counts.rows * ESTIMATE_ROW_BYTES + counts.files * ESTIMATE_FILE_BYTES, estimated: true };
   }
+}
+
+function indexSize(counts: { files: number; rows: number; textBytes: number }, fresh: boolean): IndexSize {
+  const now = Date.now();
+  if (!fresh && indexSizeCache && now - indexSizeCache.at < INDEX_SIZE_TTL_MS) return indexSizeCache.size;
+  const size = measureIndexSize(counts);
+  indexSizeCache = { at: now, size };
+  return size;
 }
 
 export function historyStatus(roots: HistoryRoots = defaultRoots()): HistoryIndexStatus {
   const counts = db
     .prepare(`SELECT (SELECT COUNT(*) FROM history_files) AS files, (SELECT COUNT(DISTINCT session_id) FROM history_files) AS sessions, (SELECT COUNT(*) FROM history_messages) AS rows, (SELECT COALESCE(SUM(LENGTH(text)), 0) FROM history_messages) AS textBytes`)
     .get() as { files: number; sessions: number; rows: number; textBytes: number };
+  const size = indexSize(counts, running === null);
   return {
     enabled: getSettings().memory.historyIndex,
     engine: ftsAvailable ? "fts" : "like",
@@ -472,7 +497,8 @@ export function historyStatus(roots: HistoryRoots = defaultRoots()): HistoryInde
     sessions: counts.sessions,
     rows: counts.rows,
     textBytes: counts.textBytes,
-    dbBytes: fileSize(config.dbPath) + fileSize(`${config.dbPath}-wal`),
+    indexBytes: size.bytes,
+    indexBytesEstimated: size.estimated,
     lastBuildMs: lastRun?.ms ?? null,
     lastBuildAt,
     lastRun,

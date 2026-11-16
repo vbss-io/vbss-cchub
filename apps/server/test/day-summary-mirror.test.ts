@@ -69,7 +69,7 @@ describe("day summary and the Today mirror", () => {
   it("writing the summary keeps the focus, the scheduled dates and the project pages untouched", async () => {
     const settings = store.getSettings();
     assert.equal(read(`daily/${TODAY}.md`), DAILY);
-    const result = await summary.writeDaySummary(settings, TODAY);
+    const result = await summary.writeDaySummary(settings, TODAY, { digest: (await summary.composeDaySummary(settings, TODAY)).digest });
     assert.equal(result.changed, true);
     assert.match(result.summary.block, /^- Alpha: Task zero$/m);
     const written = read(`daily/${TODAY}.md`);

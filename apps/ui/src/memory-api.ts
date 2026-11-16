@@ -55,5 +55,5 @@ export const setHandoffWorkspace = (workspace: string, enabled: boolean): Promis
 
 export const fetchDaySummary = (date: string): Promise<DaySummary> => request("GET", `/day-summary?date=${encodeURIComponent(date)}`);
 
-export const writeDaySummary = (date: string, baseUpdatedAt: number | null, writeId: string): Promise<DaySummaryWriteResult> =>
-  request("POST", "/day-summary/write", { date, writeId, ...(baseUpdatedAt === null ? {} : { baseUpdatedAt }) });
+export const writeDaySummary = (date: string, digest: string, baseUpdatedAt: number | null, writeId: string): Promise<DaySummaryWriteResult> =>
+  request("POST", "/day-summary/write", { date, digest, writeId, ...(baseUpdatedAt === null ? {} : { baseUpdatedAt }) });

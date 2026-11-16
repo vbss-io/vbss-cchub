@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { generateWriteId } from "../daily-sync";
 import { getDailyEntry } from "../delegation";
 import { fetchDaySummary, MemoryApiError, writeDaySummary } from "../memory-api";
-import { conflictUpdatedAt, summaryFailure, summaryPreviewView, writeOutcomeText, type SummaryFailure } from "../memory-model";
+import { changedSummaryOf, conflictUpdatedAt, errorCodeOf, summaryFailure, summaryPreviewView, summaryWriteDisabled, writeOutcomeText, type SummaryFailure } from "../memory-model";
 import { Markdown } from "../markdown";
 import type { DaySummary } from "../types";
 import "../history.css";
@@ -19,20 +19,24 @@ interface Loaded {
   baseUpdatedAt: number | null;
 }
 
-const failureOf = (err: unknown): SummaryFailure => (err instanceof MemoryApiError ? summaryFailure(err.status, err.message) : { kind: "other", text: err instanceof Error ? err.message : "Something went wrong." });
+const failureOf = (err: unknown): SummaryFailure => (err instanceof MemoryApiError ? summaryFailure(err.status, err.message, errorCodeOf(err.body)) : { kind: "other", text: err instanceof Error ? err.message : "Something went wrong." });
 
 export function DaySummaryDialog({ date, onClose, onNotice }: Props) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [failure, setFailure] = useState<SummaryFailure | null>(null);
   const [writing, setWriting] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async (keepFailure: boolean) => {
     if (!keepFailure) setFailure(null);
+    setLoading(true);
     try {
       const [summary, entry] = await Promise.all([fetchDaySummary(date), getDailyEntry(date).catch(() => null)]);
       setLoaded({ summary, dailyExists: entry?.exists ?? true, baseUpdatedAt: entry?.updatedAt ?? null });
     } catch (err) {
       setFailure(failureOf(err));
+    } finally {
+      setLoading(false);
     }
   }, [date]);
 
@@ -49,11 +53,11 @@ export function DaySummaryDialog({ date, onClose, onNotice }: Props) {
   }, [onClose]);
 
   const write = async () => {
-    if (loaded === null) return;
+    if (loaded === null || loading) return;
     setWriting(true);
     setFailure(null);
     try {
-      const result = await writeDaySummary(date, loaded.baseUpdatedAt, generateWriteId());
+      const result = await writeDaySummary(date, loaded.summary.digest, loaded.baseUpdatedAt, generateWriteId());
       onNotice(writeOutcomeText(result, result.summary.heading));
       onClose();
     } catch (err) {
@@ -63,6 +67,11 @@ export function DaySummaryDialog({ date, onClose, onNotice }: Props) {
         const updatedAt = conflictUpdatedAt(err.body);
         setLoaded((current) => (current === null ? current : { ...current, baseUpdatedAt: updatedAt ?? current.baseUpdatedAt }));
         await load(true);
+      }
+      if (next.kind === "changed" && err instanceof MemoryApiError) {
+        const fresh = changedSummaryOf(err.body);
+        if (fresh) setLoaded((current) => (current === null ? current : { ...current, summary: fresh }));
+        else await load(true);
       }
     } finally {
       setWriting(false);
@@ -97,7 +106,7 @@ export function DaySummaryDialog({ date, onClose, onNotice }: Props) {
           <button type="button" className="act act--ghost" onClick={onClose}>
             Close
           </button>
-          <button type="button" className="act act--focus" disabled={writing || view === null || !view.canWrite} onClick={() => void write()}>
+          <button type="button" className="act act--focus" disabled={summaryWriteDisabled(view, { loading, writing })} onClick={() => void write()}>
             {writing ? "Writing..." : "Write to daily"}
           </button>
         </footer>

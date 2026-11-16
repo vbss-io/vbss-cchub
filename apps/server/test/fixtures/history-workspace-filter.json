@@ -1,0 +1,9 @@
+{
+  "workspaces": [
+    { "name": "pilot", "contextPath": "{root}/pilot", "repos": [{ "name": "repo-a", "path": "{tmp}/repo-a" }] },
+    { "name": "spare", "contextPath": "{root}/spare", "repos": [] }
+  ],
+  "selected": "pilot",
+  "param": "workspace",
+  "value": "pilot"
+}

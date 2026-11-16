@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import express from "express";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
+import { fixtures } from "./helpers.js";
 
 const tmp = mkdtempSync(join(tmpdir(), "cch-g3-history-"));
 const home = join(tmp, "home");
@@ -252,7 +256,7 @@ describe("history index", () => {
     assert.equal(status.files, 3);
     assert.equal(status.rows > 0, true);
     assert.equal(status.textBytes > 0, true);
-    assert.equal(status.dbBytes > 0, true);
+    assert.equal(status.indexBytes > 0, true);
     assert.equal(typeof status.lastBuildMs, "number");
   });
 
@@ -269,5 +273,60 @@ describe("history index", () => {
     const rebuilt = await history.rebuildHistoryIndex();
     assert.equal(rebuilt.rows > 0, true);
     assert.equal(history.searchHistory({ q: "faturas" }).hits.length, 2);
+  });
+});
+
+describe("history workspace names", () => {
+  const contextSession = "44444444-dddd-4ddd-8ddd-000000000004";
+  const contextDir = join(workspacesRoot, "pilot");
+  let server: Server;
+  let base = "";
+
+  before(async () => {
+    const app = express();
+    app.use(express.json());
+    app.use("/delegation/memory", (await import("../src/memory-routes.js")).memoryRouter());
+    server = await new Promise<Server>((resolve) => {
+      const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
+    });
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/delegation/memory`;
+    writeFileSync(
+      join(projectDir, `${contextSession}.jsonl`),
+      line({ type: "user", cwd: contextDir, sessionId: contextSession, timestamp: at("2026-11-14T18:00:00"), message: { role: "user", content: "pergunta no contexto do workspace sobre zeppelin" } }),
+    );
+    await history.runHistoryIndex();
+  });
+
+  after(() => {
+    server.close();
+  });
+
+  it("names the workspace of a session started in the workspace context folder", () => {
+    const hit = history.searchHistory({ q: "zeppelin" }).hits[0];
+    assert.equal(hit?.cwd, contextDir);
+    assert.equal(hit?.workspace, "pilot");
+    assert.equal(history.searchHistory({ q: "zeppelin", workspace: "pilot" }).hits.length, 1);
+  });
+
+  it("filters by the workspace value the UI sends, as written in the shared contract", async () => {
+    const contract = JSON.parse(readFileSync(join(fixtures, "history-workspace-filter.json"), "utf8")) as { selected: string; param: string; value: string };
+    const params = new URLSearchParams({ q: "zeppelin", [contract.param]: contract.value });
+    const res = await fetch(`${base}/history/search?${params.toString()}`);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { hits: { workspace: string | null; cwd: string | null }[] };
+    assert.equal(body.hits.length, 1);
+    assert.deepEqual(body.hits.map((hit) => hit.workspace), [contract.selected]);
+    const repoQuery = new URLSearchParams({ q: "Atlas", [contract.param]: contract.value });
+    const repoHits = (await (await fetch(`${base}/history/search?${repoQuery.toString()}`)).json()) as { hits: { workspace: string | null }[] };
+    assert.equal(repoHits.hits.length > 0, true);
+    assert.equal(repoHits.hits.every((hit) => hit.workspace === contract.selected), true);
+  });
+
+  it("reports the size of the index tables alone, measured by SQLite", () => {
+    const status = history.historyStatus();
+    assert.equal(status.indexBytesEstimated, false);
+    assert.equal(status.indexBytes > 0, true);
+    const whole = statSync(cfg.config.dbPath).size + (existsSync(`${cfg.config.dbPath}-wal`) ? statSync(`${cfg.config.dbPath}-wal`).size : 0);
+    assert.equal(status.indexBytes < whole, true);
   });
 });

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { DailyConflictError, isValidDailyDate } from "./daily.js";
-import { composeDaySummary, writeDaySummary } from "./day-summary.js";
+import { composeDaySummary, DaySummaryError, writeDaySummary } from "./day-summary.js";
 import { isLoopbackAddress } from "./delegation-security.js";
 import { getSettings, updateSettings } from "./delegation-store.js";
 import { handoffForCwd, handoffPreview } from "./handoff.js";
@@ -150,10 +150,14 @@ export function memoryRouter(): Router {
     }
     const baseUpdatedAt = typeof body.baseUpdatedAt === "number" && Number.isFinite(body.baseUpdatedAt) ? body.baseUpdatedAt : undefined;
     try {
-      res.json(await writeDaySummary(getSettings(), date, baseUpdatedAt, asString(body.writeId)));
+      res.json(await writeDaySummary(getSettings(), date, { digest: asString(body.digest), baseUpdatedAt, writeId: asString(body.writeId) }));
     } catch (err) {
       if (err instanceof DailyConflictError) {
-        res.status(409).json({ error: err.message, content: err.content, updatedAt: err.updatedAt });
+        res.status(409).json({ error: err.message, code: "daily-changed", content: err.content, updatedAt: err.updatedAt });
+        return;
+      }
+      if (err instanceof DaySummaryError) {
+        res.status(err.status).json({ error: err.message, code: err.code, ...(err.summary ? { summary: err.summary } : {}) });
         return;
       }
       sendError(res, err);

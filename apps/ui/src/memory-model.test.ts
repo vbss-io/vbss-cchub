@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
   buildSearchQuery,
   canSearch,
+  changedSummaryOf,
   conflictUpdatedAt,
   DEFAULT_HISTORY_FILTERS,
   formatBuildTime,
@@ -21,6 +23,8 @@ import {
   splitHighlights,
   summaryFailure,
   summaryPreviewView,
+  summaryWriteDisabled,
+  workspaceFilterOptions,
   writeOutcomeText,
   type HistoryFilters,
   type HistoryState,
@@ -64,7 +68,8 @@ const status = (patch: Partial<HistoryIndexStatus> = {}): HistoryIndexStatus => 
   sessions: 3,
   rows: 1200,
   textBytes: 2048,
-  dbBytes: 5 * 1024 * 1024,
+  indexBytes: 5 * 1024 * 1024,
+  indexBytesEstimated: false,
   lastBuildMs: 2500,
   lastBuildAt: null,
   lastRun: null,
@@ -91,13 +96,28 @@ describe("search query building", () => {
   });
 
   it("adds client, workspace, period start and session grouping when set", () => {
-    const params = new URLSearchParams(buildSearchQuery(filters({ q: "x", client: "codex", workspace: "C:\\w\\a", period: "week", sort: "recent", group: true }), 40, 20, now));
+    const params = new URLSearchParams(buildSearchQuery(filters({ q: "x", client: "codex", workspace: "vbss", period: "week", sort: "recent", group: true }), 40, 20, now));
     assert.equal(params.get("client"), "codex");
-    assert.equal(params.get("workspace"), "C:\\w\\a");
+    assert.equal(params.get("workspace"), "vbss");
     assert.equal(params.get("from"), "2026-11-09");
     assert.equal(params.get("sort"), "recent");
     assert.equal(params.get("group"), "session");
     assert.equal(params.get("offset"), "40");
+  });
+
+  it("sends the workspace name the server filters on, as written in the shared contract", () => {
+    const contract = JSON.parse(readFileSync(new URL("../../server/test/fixtures/history-workspace-filter.json", import.meta.url), "utf8")) as {
+      workspaces: { name: string; contextPath: string | null; repos: { name: string; path: string }[] }[];
+      selected: string;
+      param: string;
+      value: string;
+    };
+    const options = workspaceFilterOptions(contract.workspaces);
+    const option = options.find((item) => item.label === contract.selected);
+    assert.ok(option);
+    const params = new URLSearchParams(buildSearchQuery(filters({ q: "x", workspace: option.value }), 0, 20, now));
+    assert.equal(params.get(contract.param), contract.value);
+    assert.deepEqual(options.map((item) => item.value), contract.workspaces.map((workspace) => workspace.name));
   });
 
   it("computes the period start in local days", () => {
@@ -285,6 +305,10 @@ describe("index stats", () => {
     ]);
   });
 
+  it("labels an estimated index size as an estimate", () => {
+    assert.deepEqual(historyStats(status({ indexBytesEstimated: true }))[2], { label: "Index size", value: "about 5 MB (estimate)" });
+  });
+
   it("describes the index state in plain words", () => {
     assert.equal(indexStateLine(null), "Checking...");
     assert.equal(indexStateLine(status({ enabled: false })), "Off");
@@ -324,12 +348,37 @@ describe("day summary states", () => {
     commits: [],
     empty: false,
     block: "b",
+    digest: "d1",
     markdown: "## Day summary\n\nb",
     ...patch,
   });
 
   it("maps a conflict to the reload message", () => {
     assert.deepEqual(summaryFailure(409, "changed"), { kind: "conflict", text: "The daily changed, reload" });
+    assert.deepEqual(summaryFailure(409, "changed on disk", "daily-changed"), { kind: "conflict", text: "The daily changed, reload" });
+  });
+
+  it("asks to review again when the summary changed after the preview", () => {
+    assert.deepEqual(summaryFailure(409, "The summary changed, review it again", "summary-changed"), { kind: "changed", text: "The summary changed, review it again" });
+    const fresh = summary({ block: "b2", digest: "d2", markdown: "## Day summary\n\nb2" });
+    assert.deepEqual(changedSummaryOf({ error: "x", code: "summary-changed", summary: fresh }), fresh);
+    assert.equal(changedSummaryOf({ error: "x", code: "daily-changed", summary: fresh }), null);
+    assert.equal(changedSummaryOf({ code: "summary-changed", summary: { block: "b" } }), null);
+    assert.equal(changedSummaryOf(null), null);
+  });
+
+  it("shows the server message when the summary markers in the daily are damaged", () => {
+    const message = "The day summary markers in this daily note are damaged. Fix or remove the cchub:day-summary markers in the daily, then write again.";
+    assert.deepEqual(summaryFailure(422, message, "summary-markers-damaged"), { kind: "markers", text: message });
+  });
+
+  it("keeps Write to daily off while the preview loads or a write runs", () => {
+    const ready = summaryPreviewView(summary(), true);
+    assert.equal(summaryWriteDisabled(ready, { loading: false, writing: false }), false);
+    assert.equal(summaryWriteDisabled(ready, { loading: true, writing: false }), true);
+    assert.equal(summaryWriteDisabled(ready, { loading: false, writing: true }), true);
+    assert.equal(summaryWriteDisabled(null, { loading: false, writing: false }), true);
+    assert.equal(summaryWriteDisabled(summaryPreviewView(summary({ empty: true }), true), { loading: false, writing: false }), true);
   });
 
   it("explains a missing daily, a disabled feature and a missing vault", () => {

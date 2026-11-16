@@ -11,6 +11,7 @@ import {
   hitHeadline,
   historyEmptyText,
   indexStateLine,
+  workspaceFilterOptions,
   type HistoryFilters,
   type HistoryPeriod,
   type HistorySort,
@@ -57,7 +58,7 @@ export function HistorySearchView({ workspaces, subscribeHistory, onOpenHit, onO
   };
   const empty = historyEmptyText({ state, query: filters.q, status });
   const off = state.enabled === false || (state.enabled === null && status !== null && !status.enabled);
-  const scopes = workspaces.filter((workspace) => workspace.contextPath);
+  const scopes = workspaceFilterOptions(workspaces);
 
   const open = async (hit: HistoryHit) => {
     const result = await onOpenHit(hit);
@@ -83,9 +84,9 @@ export function HistorySearchView({ workspaces, subscribeHistory, onOpenHit, onO
         </select>
         <select className="select" aria-label="Workspace" value={filters.workspace} onChange={(event) => patch({ workspace: event.target.value })}>
           <option value="">All workspaces</option>
-          {scopes.map((workspace) => (
-            <option key={workspace.name} value={workspace.contextPath ?? ""}>
-              {workspace.name}
+          {scopes.map((scope) => (
+            <option key={scope.value} value={scope.value}>
+              {scope.label}
             </option>
           ))}
         </select>

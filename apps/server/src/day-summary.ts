@@ -1,8 +1,10 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { listCodexSessions } from "./codex-store.js";
-import { readDaily, writeDaily, type DailyWriteResult } from "./daily.js";
+import { readDaily, writeDaily, type DailyReadResult, type DailyWriteResult } from "./daily.js";
 import { listSessions } from "./db.js";
 import { BadRequestError, NotFoundError } from "./delegation-launch.js";
 import { listReports } from "./delegation-store.js";
@@ -18,6 +20,7 @@ export const DAY_SUMMARY_START = "<!-- cchub:day-summary START -->";
 export const DAY_SUMMARY_END = "<!-- cchub:day-summary END -->";
 const GIT_TIMEOUT_MS = 5000;
 const GIT_MAX_COMMITS = 30;
+const GIT_CONCURRENCY = 4;
 const KEY_POINTS_MAX = 5;
 const REPORTS_MAX = 20;
 const LINE_CAP = 200;
@@ -67,8 +70,24 @@ export interface DaySummary {
   commits: DaySummaryCommit[];
   empty: boolean;
   block: string;
+  digest: string;
   markdown: string;
 }
+
+export type DaySummaryErrorCode = "summary-markers-damaged" | "summary-changed" | "digest-required";
+
+export class DaySummaryError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: DaySummaryErrorCode,
+    readonly summary: DaySummary | null = null,
+  ) {
+    super(message);
+  }
+}
+
+export const summaryDigest = (block: string): string => createHash("sha256").update(block).digest("hex");
 
 const clipLine = (text: string, max = LINE_CAP): string => {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -194,7 +213,7 @@ export function withoutSummaryBlock(content: string): string {
   return content.slice(0, start) + content.slice(end + DAY_SUMMARY_END.length);
 }
 
-function doneTasks(settings: DelegationSettings, date: string): DaySummaryTask[] {
+function doneTasks(settings: DelegationSettings, date: string, preread: DailyReadResult | null): DaySummaryTask[] {
   const stamps = stampsFor(settings, date);
   const tasks: DaySummaryTask[] = [];
   const seen = new Set<string>();
@@ -211,7 +230,7 @@ function doneTasks(settings: DelegationSettings, date: string): DaySummaryTask[]
     }
   }
   if (settings.secondBrainRoot) {
-    const daily = readDaily(settings, date);
+    const daily = preread ?? readDaily(settings, date);
     if (daily.exists) {
       for (const title of doneTitles(withoutSummaryBlock(daily.content), stamps)) {
         const key = normalizeText(title);
@@ -257,6 +276,41 @@ async function repoCommits(repo: string, since: string, until: string): Promise<
   }
 }
 
+function newestMtime(dir: string): number {
+  let newest = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    newest = Math.max(newest, entry.isDirectory() ? newestMtime(path) : statSync(path).mtimeMs);
+  }
+  return newest;
+}
+
+export function branchesTouchedSince(repo: string, since: number): boolean {
+  try {
+    const gitDir = join(repo, ".git");
+    if (!statSync(gitDir).isDirectory() || existsSync(join(gitDir, "reftable"))) return true;
+    const packed = join(gitDir, "packed-refs");
+    const packedMtime = existsSync(packed) ? statSync(packed).mtimeMs : 0;
+    return Math.max(packedMtime, newestMtime(join(gitDir, "refs", "heads"))) >= since;
+  } catch {
+    return true;
+  }
+}
+
+export async function mapLimit<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await run(items[index] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 async function dayCommits(workspaces: WorkspaceRecord[], date: string): Promise<DaySummaryCommit[]> {
   const { start, end } = dayBounds(date);
   const since = isoWithOffset(start);
@@ -266,12 +320,13 @@ async function dayCommits(workspaces: WorkspaceRecord[], date: string): Promise<
   for (const workspace of [...workspaces].sort((a, b) => a.name.localeCompare(b.name))) {
     for (const repo of workspace.repos) {
       const key = process.platform === "win32" ? repo.path.toLowerCase() : repo.path;
-      if (seen.has(key) || !isDirectory(repo.path)) continue;
+      if (seen.has(key)) continue;
       seen.add(key);
+      if (!isDirectory(repo.path) || !branchesTouchedSince(repo.path, start.getTime())) continue;
       targets.push({ workspace: workspace.name, repo: repo.name, path: repo.path });
     }
   }
-  const results = await Promise.all(targets.map((target) => repoCommits(target.path, since, until)));
+  const results = await mapLimit(targets, GIT_CONCURRENCY, (target) => repoCommits(target.path, since, until));
   return targets.flatMap((target, index) =>
     (results[index] ?? []).map((commit) => ({ workspace: target.workspace, repo: target.repo, hash: commit.hash, subject: safeItem(commit.subject) })),
   );
@@ -308,12 +363,13 @@ export function renderSummaryBlock(summary: Pick<DaySummary, "sessions" | "tasks
   return lines.join("\n");
 }
 
-export async function composeDaySummary(settings: DelegationSettings, date: string): Promise<DaySummary> {
+export async function composeDaySummary(settings: DelegationSettings, date: string, daily: DailyReadResult | null = null): Promise<DaySummary> {
   const workspaces = discoverWorkspaces(settings.workspacesRoot);
+  const pendingCommits = dayCommits(workspaces, date);
   const sessions = daySessions(settings, workspaces, date);
-  const tasks = doneTasks(settings, date);
+  const tasks = doneTasks(settings, date, daily);
   const reports = dayReports(date);
-  const commits = await dayCommits(workspaces, date);
+  const commits = await pendingCommits;
   const heading = settings.memory.summaryHeading;
   const block = renderSummaryBlock({ sessions, tasks, reports, commits });
   return {
@@ -325,18 +381,36 @@ export async function composeDaySummary(settings: DelegationSettings, date: stri
     commits,
     empty: sessions.length + tasks.length + reports.length + commits.length === 0,
     block,
+    digest: summaryDigest(block),
     markdown: `## ${heading}\n\n${block}`,
   };
 }
 
 const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const countOf = (content: string, marker: string): number => content.split(marker).length - 1;
+
+export type SummaryMarkerState = "none" | "ok" | "damaged";
+
+export function summaryMarkerState(content: string): SummaryMarkerState {
+  const starts = countOf(content, DAY_SUMMARY_START);
+  const ends = countOf(content, DAY_SUMMARY_END);
+  if (starts === 0 && ends === 0) return "none";
+  if (starts === 1 && ends === 1 && content.indexOf(DAY_SUMMARY_START) < content.indexOf(DAY_SUMMARY_END)) return "ok";
+  return "damaged";
+}
+
+export const MARKERS_DAMAGED_MESSAGE =
+  "The day summary markers in this daily note are damaged: a START or END comment is missing, repeated or out of order. Fix or remove the cchub:day-summary markers in the daily, then write again.";
+
 export function applySummaryBlock(content: string, heading: string, block: string): string {
+  const state = summaryMarkerState(content);
+  if (state === "damaged") throw new DaySummaryError(MARKERS_DAMAGED_MESSAGE, 422, "summary-markers-damaged");
   const eol = content.includes("\r\n") ? "\r\n" : "\n";
   const piece = block.replace(/\r?\n/g, eol);
   const start = content.indexOf(DAY_SUMMARY_START);
-  const end = start < 0 ? -1 : content.indexOf(DAY_SUMMARY_END, start);
-  if (start >= 0 && end >= 0) return content.slice(0, start) + piece + content.slice(end + DAY_SUMMARY_END.length);
+  const end = content.indexOf(DAY_SUMMARY_END);
+  if (state === "ok") return content.slice(0, start) + piece + content.slice(end + DAY_SUMMARY_END.length);
   const headingRe = new RegExp(`^##[ \\t]+${escapeRegExp(heading)}[ \\t]*\\r?$`, "mi");
   const found = headingRe.exec(content);
   if (found) {
@@ -354,12 +428,22 @@ export interface DaySummaryWriteResult extends DailyWriteResult {
   summary: DaySummary;
 }
 
-export async function writeDaySummary(settings: DelegationSettings, date: string, baseUpdatedAt?: number, writeId?: string | null): Promise<DaySummaryWriteResult> {
+export interface DaySummaryWriteInput {
+  digest: string | null;
+  baseUpdatedAt?: number;
+  writeId?: string | null;
+}
+
+export async function writeDaySummary(settings: DelegationSettings, date: string, input: DaySummaryWriteInput): Promise<DaySummaryWriteResult> {
+  const { baseUpdatedAt, writeId } = input;
+  if (!input.digest) throw new DaySummaryError("digest required: preview the summary first and send its digest", 400, "digest-required");
   if (!settings.secondBrainRoot) throw new BadRequestError("second brain root not set");
   if (!settings.features.daily) throw new BadRequestError("the daily feature is disabled");
-  const summary = await composeDaySummary(settings, date);
   const daily = readDaily(settings, date);
   if (!daily.exists) throw new NotFoundError("the daily note for this date does not exist yet");
+  if (summaryMarkerState(daily.content) === "damaged") throw new DaySummaryError(MARKERS_DAMAGED_MESSAGE, 422, "summary-markers-damaged");
+  const summary = await composeDaySummary(settings, date, daily);
+  if (summary.digest !== input.digest) throw new DaySummaryError("The summary changed, review it again", 409, "summary-changed", summary);
   const next = applySummaryBlock(daily.content, summary.heading, summary.block);
   if (next === daily.content) return { date, path: daily.path, updatedAt: daily.updatedAt ?? 0, changed: false, summary };
   const written = writeDaily(settings, date, next, baseUpdatedAt ?? daily.updatedAt ?? undefined, writeId ?? null, "server");

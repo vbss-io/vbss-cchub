@@ -59,6 +59,14 @@ export const buildSearchQuery = (filters: HistoryFilters, offset: number, limit:
   return params.toString();
 };
 
+export interface WorkspaceFilterOption {
+  value: string;
+  label: string;
+}
+
+export const workspaceFilterOptions = (workspaces: readonly { name: string; contextPath: string | null }[]): WorkspaceFilterOption[] =>
+  workspaces.filter((workspace) => workspace.contextPath).map((workspace) => ({ value: workspace.name, label: workspace.name }));
+
 export const historyKey = (filters: HistoryFilters, limit: number): string =>
   JSON.stringify([filters.q.trim(), filters.client, filters.workspace, filters.period, filters.sort, filters.group, limit]);
 
@@ -222,7 +230,7 @@ export const indexStateLine = (status: HistoryIndexStatus | null): string => {
 export const historyStats = (status: HistoryIndexStatus): StatRow[] => [
   { label: "Sessions", value: status.sessions.toLocaleString("en-US") },
   { label: "Messages", value: status.rows.toLocaleString("en-US") },
-  { label: "Index size", value: formatBytes(status.dbBytes) },
+  { label: "Index size", value: status.indexBytesEstimated ? `about ${formatBytes(status.indexBytes)} (estimate)` : formatBytes(status.indexBytes) },
   { label: "Last full build", value: formatBuildTime(status.lastBuildMs) },
 ];
 
@@ -241,14 +249,18 @@ export const handoffView = (preview: HandoffPreview): HandoffView => {
 
 export const HANDOFF_EXPLAIN = "Adds a short recap to new Claude Code sessions started in this workspace. It reaches sessions only after you press Update hooks in Settings › Connections.";
 
-export type SummaryFailureKind = "conflict" | "missing-daily" | "daily-off" | "no-vault" | "other";
+export type SummaryFailureKind = "conflict" | "changed" | "markers" | "missing-daily" | "daily-off" | "no-vault" | "other";
 
 export interface SummaryFailure {
   kind: SummaryFailureKind;
   text: string;
 }
 
-export const summaryFailure = (status: number, message: string): SummaryFailure => {
+export const SUMMARY_CHANGED_TEXT = "The summary changed, review it again";
+
+export const summaryFailure = (status: number, message: string, code: string | null = null): SummaryFailure => {
+  if (code === "summary-changed") return { kind: "changed", text: SUMMARY_CHANGED_TEXT };
+  if (code === "summary-markers-damaged") return { kind: "markers", text: message };
   if (status === 409) return { kind: "conflict", text: "The daily changed, reload" };
   if (status === 404) return { kind: "missing-daily", text: "There is no daily note for this day yet. Create it in Today, then write the summary." };
   if (status === 400 && /disabled/i.test(message)) return { kind: "daily-off", text: "The daily feature is off. Turn on Today in Settings › Plugins to write into your diary." };
@@ -259,6 +271,18 @@ export const summaryFailure = (status: number, message: string): SummaryFailure 
 export const conflictUpdatedAt = (body: unknown): number | null => {
   const value = (body as { updatedAt?: unknown } | null)?.updatedAt;
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+};
+
+export const errorCodeOf = (body: unknown): string | null => {
+  const value = (body as { code?: unknown } | null)?.code;
+  return typeof value === "string" ? value : null;
+};
+
+export const changedSummaryOf = (body: unknown): DaySummary | null => {
+  if (errorCodeOf(body) !== "summary-changed") return null;
+  const summary = (body as { summary?: Partial<DaySummary> | null }).summary;
+  if (!summary || typeof summary.digest !== "string" || typeof summary.markdown !== "string" || typeof summary.block !== "string") return null;
+  return summary as DaySummary;
 };
 
 export interface SummaryPreviewView {
@@ -273,5 +297,8 @@ export const summaryPreviewView = (summary: DaySummary, dailyExists: boolean): S
   return { markdown: summary.markdown, canWrite: true, note: null };
 };
 
-export const writeOutcomeText = (result: Pick<DaySummaryWriteResult, "changed">, heading: string): string =>
+export const summaryWriteDisabled = (view: SummaryPreviewView | null, state: { loading: boolean; writing: boolean }): boolean =>
+  state.loading || state.writing || view === null || !view.canWrite;
+
+export const writeOutcomeText =(result: Pick<DaySummaryWriteResult, "changed">, heading: string): string =>
   result.changed ? `Written to the daily under "${heading}".` : "The daily already has this summary.";

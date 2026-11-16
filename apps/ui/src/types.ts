@@ -274,7 +274,8 @@ export interface HistoryIndexStatus {
   sessions: number;
   rows: number;
   textBytes: number;
-  dbBytes: number;
+  indexBytes: number;
+  indexBytesEstimated: boolean;
   lastBuildMs: number | null;
   lastBuildAt: number | null;
   lastRun: HistoryRunSummary | null;
@@ -343,6 +344,7 @@ export interface DaySummary {
   commits: DaySummaryCommit[];
   empty: boolean;
   block: string;
+  digest: string;
   markdown: string;
 }
 
