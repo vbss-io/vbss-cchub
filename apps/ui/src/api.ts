@@ -2,6 +2,7 @@ import type {
   AgentRecord,
   CodexSessionRecord,
   GroupRecord,
+  HistoryIndexStatus,
   HooksStatus,
   LiveAgent,
   OpenSessionResult,
@@ -236,6 +237,7 @@ export interface HubEvents {
   onSettings?: (settings: DelegationSettings) => void;
   onLimits?: () => void;
   onUsage?: () => void;
+  onHistory?: (status: HistoryIndexStatus) => void;
   onUiPrefs?: (prefs: UiPrefs) => void;
 }
 
@@ -307,6 +309,7 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("settings", (event) => handlers.onSettings?.(data<DelegationSettings>(event)));
   source.addEventListener("limits", () => handlers.onLimits?.());
   source.addEventListener("usage", () => handlers.onUsage?.());
+  source.addEventListener("history", (event) => handlers.onHistory?.(data<HistoryIndexStatus>(event)));
   source.addEventListener("ui-prefs", (event) => handlers.onUiPrefs?.(normalizeUiPrefs(data<unknown>(event))));
   return () => source.close();
 }

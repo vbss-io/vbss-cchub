@@ -10,6 +10,7 @@ import { BoardMoveProjectDialog, BoardParentPickerDialog } from "../components/B
 import type { BoardNoteActions, BoardTodayControls } from "../components/BoardParts";
 import { FocusOutliner, type OutlineFields } from "../components/FocusOutliner";
 import { ResizableSplit } from "../components/ResizableSplit";
+import { DaySummaryDialog } from "../components/DaySummaryDialog";
 import { StartDayPanel } from "../components/StartDayPanel";
 import { Toggletip } from "../components/Toggletip";
 import {
@@ -1101,6 +1102,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const [modeSlot, setModeSlot] = useState<HTMLElement | null>(null);
   const [kept, setKept] = useState<string[]>(() => parseDismissedOutOfSync(readStored(KEPT_TASKS_KEY)));
   const [confirmClear, setConfirmClear] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const [clearUndo, setClearUndo] = useState<ClearUndo | null>(null);
   const narrow = useNarrow();
 
@@ -1697,6 +1699,11 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
             Add task
           </button>
         )}
+        {data !== null && (
+          <button type="button" className="act" onClick={() => setSummaryOpen(true)}>
+            Day summary
+          </button>
+        )}
         <BoardActionsMenu label="More actions" items={menuItems} />
       </header>
 
@@ -2048,6 +2055,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
           ) : null}
         />
       )}
+
+      {summaryOpen && <DaySummaryDialog date={date} onClose={() => setSummaryOpen(false)} onNotice={onNotice} />}
 
       {confirmClear && (
         <ConfirmDialog

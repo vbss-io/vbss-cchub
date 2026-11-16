@@ -5,12 +5,13 @@ import type { AutostartStatus, ConnectStatus, DelegationSettings, McpClient, Set
 import type { PluginId } from "../plugins/types";
 import { isPluginPageSection, resolveSettingsLocation } from "../settings-model";
 import { coreSettingsTabs } from "../settings-sections";
-import type { GroupRecord } from "../types";
+import type { GroupRecord, HistoryIndexStatus } from "../types";
 import { AboutTab } from "./settings/AboutTab";
 import { AppearanceTab, type ThemeName } from "./settings/AppearanceTab";
 import { ConnectionsTab } from "./settings/ConnectionsTab";
 import { GeneralTab } from "./settings/GeneralTab";
 import { GroupsTab } from "./settings/GroupsTab";
+import { MemoryTab } from "./settings/MemoryTab";
 import { NotificationsTab, type NotifSettings } from "./settings/NotificationsTab";
 import { PluginPage } from "./settings/PluginPage";
 import { PluginsTab } from "./settings/PluginsTab";
@@ -29,6 +30,7 @@ interface Props {
   hooksBusy: boolean;
   notif: NotifSettings;
   groups: GroupRecord[];
+  subscribeHistory: (listener: (status: HistoryIndexStatus) => void) => () => void;
   onToggleHooks: () => void;
   onSaveSettings: (patch: SettingsPatch) => Promise<void>;
   onShell: (kind: ShellKind, action: "install" | "uninstall") => Promise<void>;
@@ -89,6 +91,7 @@ export function SettingsView(props: Props) {
         {!loadingPage && location.page !== null && location.pluginId !== null && (
           <PluginPage {...tabProps} page={location.page} pluginId={location.pluginId} features={features} tunnel={props.tunnel} onTunnelSettings={props.onTunnelSettings} />
         )}
+        {active === "memory" && <MemoryTab {...tabProps} subscribeHistory={props.subscribeHistory} />}
         {active === "connections" && (
           <ConnectionsTab
             enabled={enabled}

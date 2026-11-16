@@ -1,6 +1,12 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { WorkspaceRecord } from "../delegation";
+import { Highlighted } from "./Highlighted";
+import { DEFAULT_HISTORY_FILTERS, HISTORY_PALETTE_LIMIT } from "../memory-model";
+import { buildHistoryItems, parseCaptureQuery } from "../palette-items";
 import { KIND_LABEL, loadRecents, pushRecent, rankItems, saveRecents, type PaletteItem } from "../palette-model";
+import type { HistoryHit } from "../types";
+import { useHistorySearch } from "../use-history";
 import "../palette.css";
 
 interface Props {
@@ -10,13 +16,15 @@ interface Props {
   placeholder?: string;
   initialQuery?: string;
   queryItems?: (query: string) => PaletteItem[];
+  workspaces?: WorkspaceRecord[];
+  onOpenHit?: (hit: HistoryHit) => void;
 }
 
 const PAGE_STEP = 8;
 
-export function CommandPalette({ open, items, onClose, placeholder, initialQuery, queryItems }: Props) {
+export function CommandPalette({ open, items, onClose, placeholder, initialQuery, queryItems, workspaces, onOpenHit }: Props) {
   if (!open) return null;
-  return <PaletteDialog items={items} onClose={onClose} placeholder={placeholder ?? "Search sessions, workspaces, tasks and commands"} initialQuery={initialQuery ?? ""} queryItems={queryItems} />;
+  return <PaletteDialog items={items} onClose={onClose} placeholder={placeholder ?? "Search sessions, workspaces, tasks and commands"} initialQuery={initialQuery ?? ""} queryItems={queryItems} workspaces={workspaces} onOpenHit={onOpenHit} />;
 }
 
 interface DialogProps {
@@ -25,9 +33,13 @@ interface DialogProps {
   placeholder: string;
   initialQuery: string;
   queryItems?: (query: string) => PaletteItem[];
+  workspaces?: WorkspaceRecord[];
+  onOpenHit?: (hit: HistoryHit) => void;
 }
 
-function PaletteDialog({ items, onClose, placeholder, initialQuery, queryItems }: DialogProps) {
+const NO_WORKSPACES: WorkspaceRecord[] = [];
+
+function PaletteDialog({ items, onClose, placeholder, initialQuery, queryItems, workspaces = NO_WORKSPACES, onOpenHit }: DialogProps) {
   const [query, setQuery] = useState(initialQuery);
   const [active, setActive] = useState(0);
   const [recents, setRecents] = useState<string[]>(() => loadRecents());
@@ -36,7 +48,10 @@ function PaletteDialog({ items, onClose, placeholder, initialQuery, queryItems }
   const dialogRef = useRef<HTMLDivElement>(null);
   const listId = useId();
 
-  const results = useMemo(() => [...(queryItems?.(query) ?? []), ...rankItems(items, query, recents)], [items, query, recents, queryItems]);
+  const history = useHistorySearch({ ...DEFAULT_HISTORY_FILTERS, q: query }, { limit: HISTORY_PALETTE_LIMIT, enabled: onOpenHit !== undefined && parseCaptureQuery(query) === null });
+  const historyItems = useMemo(() => (onOpenHit ? buildHistoryItems(history.state.hits, workspaces, onOpenHit) : []), [history.state.hits, workspaces, onOpenHit]);
+  const results = useMemo(() => [...(queryItems?.(query) ?? []), ...rankItems(items, query, recents), ...historyItems], [items, query, recents, queryItems, historyItems]);
+  const searchingHistory = history.state.phase === "loading" && history.state.hits.length === 0;
   const activeIndex = results.length === 0 ? -1 : Math.min(active, results.length - 1);
   const optionId = (index: number) => `${listId}-opt-${index}`;
 
@@ -152,8 +167,13 @@ function PaletteDialog({ items, onClose, placeholder, initialQuery, queryItems }
         />
         <ul id={listId} className="palette__list" role="listbox" aria-label="Results">
           {results.map((item, index) => (
+            <Fragment key={item.id}>
+              {item.kind === "history" && results[index - 1]?.kind !== "history" && (
+                <li className="palette__section" role="presentation">
+                  History
+                </li>
+              )}
             <li
-              key={item.id}
               id={optionId(index)}
               className={`palette__item${index === activeIndex ? " palette__item--active" : ""}`}
               role="option"
@@ -164,13 +184,14 @@ function PaletteDialog({ items, onClose, placeholder, initialQuery, queryItems }
             >
               <span className={`palette__kind palette__kind--${item.kind}`}>{KIND_LABEL[item.kind]}</span>
               <span className="palette__text">
-                <span className="palette__title">{item.title}</span>
+                <span className="palette__title">{item.titleRanges ? <Highlighted text={item.title} ranges={item.titleRanges} /> : item.title}</span>
                 {item.subtitle && <span className="palette__subtitle">{item.subtitle}</span>}
               </span>
             </li>
+            </Fragment>
           ))}
         </ul>
-        {results.length === 0 && <p className="palette__empty">No matches</p>}
+        {results.length === 0 && <p className="palette__empty">{searchingHistory ? "Searching history..." : "No matches"}</p>}
         <footer className="palette__foot" aria-hidden="true">
           <span>
             <kbd>↑</kbd>

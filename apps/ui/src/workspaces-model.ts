@@ -26,7 +26,7 @@ export const repoCountLabel = (count: number): string => `${count} ${count === 1
 
 export const contextLabel = (workspace: Pick<WorkspaceRecord, "contextPath">): string => workspace.contextPath ?? "no context folder";
 
-export type WorkspaceMenuKey = "edit" | "delete";
+export type WorkspaceMenuKey = "edit" | "context" | "delete";
 
 export interface WorkspaceMenuEntry {
   key: WorkspaceMenuKey;
@@ -34,7 +34,8 @@ export interface WorkspaceMenuEntry {
   danger?: boolean;
 }
 
-export const workspaceMenuEntries = (editing: boolean): WorkspaceMenuEntry[] => [
+export const workspaceMenuEntries = (editing: boolean, contextOpen = false): WorkspaceMenuEntry[] => [
   { key: "edit", label: editing ? "Close repos editor" : "Edit repos" },
+  { key: "context", label: contextOpen ? "Close session context" : "Session context" },
   { key: "delete", label: "Delete", danger: true },
 ];

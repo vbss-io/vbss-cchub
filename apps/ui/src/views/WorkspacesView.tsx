@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { CardMenu, useCardMenu, type CardMenuItem } from "../components/CardMenu";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Toggletip } from "../components/Toggletip";
+import { WorkspaceContext } from "../components/WorkspaceContext";
+import { memorySettingsOf } from "../memory-model";
 import { createWorkspace, deleteWorkspace, openWorkspace, updateWorkspace, type DelegationSettings, type WorkspaceRecord } from "../delegation";
 import {
   contextLabel,
@@ -29,20 +31,24 @@ interface RowProps {
   workspace: WorkspaceRecord;
   focused: boolean;
   editing: boolean;
+  contextOpen: boolean;
+  contextOn: boolean;
   busy: boolean;
   editRepos: string;
   setRef: (node: HTMLLIElement | null) => void;
   onOpen: () => void;
   onToggleEdit: () => void;
+  onToggleContext: () => void;
+  onContextChanged: (enabled: boolean) => void;
   onDelete: () => void;
   onEditRepos: (value: string) => void;
   onSaveRepos: () => void;
 }
 
-function WorkspaceRow({ workspace, focused, editing, busy, editRepos, setRef, onOpen, onToggleEdit, onDelete, onEditRepos, onSaveRepos }: RowProps) {
+function WorkspaceRow({ workspace, focused, editing, contextOpen, contextOn, busy, editRepos, setRef, onOpen, onToggleEdit, onToggleContext, onContextChanged, onDelete, onEditRepos, onSaveRepos }: RowProps) {
   const menu = useCardMenu();
-  const handlers: Record<WorkspaceMenuKey, () => void> = { edit: onToggleEdit, delete: onDelete };
-  const items: CardMenuItem[] = workspaceMenuEntries(editing).map((entry) => ({
+  const handlers: Record<WorkspaceMenuKey, () => void> = { edit: onToggleEdit, context: onToggleContext, delete: onDelete };
+  const items: CardMenuItem[] = workspaceMenuEntries(editing, contextOpen).map((entry) => ({
     key: entry.key,
     label: entry.label,
     danger: entry.danger,
@@ -55,6 +61,7 @@ function WorkspaceRow({ workspace, focused, editing, busy, editRepos, setRef, on
         <span className="wsrow__name" title={workspace.name}>
           {workspace.name}
           {workspace.error && <span className="tag tag--hold">unreadable</span>}
+          {contextOn && <span className="muted small">session context on</span>}
         </span>
         <span className="wsrow__repos muted small">{repoCountLabel(workspace.repos.length)}</span>
         <span className="wsrow__context muted small" title={contextLabel(workspace)}>
@@ -67,6 +74,7 @@ function WorkspaceRow({ workspace, focused, editing, busy, editRepos, setRef, on
           <CardMenu menu={menu} items={items} label={`Actions for ${workspace.name}`} />
         </span>
       </div>
+      {contextOpen && <WorkspaceContext name={workspace.name} enabled={contextOn} onChanged={onContextChanged} />}
       {editing && (
         <div className="wsrow__detail">
           <p className="muted small path">{workspace.file}</p>
@@ -99,6 +107,8 @@ function WorkspaceRow({ workspace, focused, editing, busy, editRepos, setRef, on
 export function WorkspacesView({ workspaces, settings, enabled, focusName, onChanged, onOpenSettings, onNotice, onError }: Props) {
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
+  const [contextOpen, setContextOpen] = useState<string | null>(null);
+  const [handoffNames, setHandoffNames] = useState<string[]>(memorySettingsOf(settings).handoffWorkspaces);
   const [editRepos, setEditRepos] = useState("");
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -109,6 +119,10 @@ export function WorkspacesView({ workspaces, settings, enabled, focusName, onCha
   const focused = decodeWorkspaceParam(focusName);
 
   const scrolledRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setHandoffNames(memorySettingsOf(settings).handoffWorkspaces);
+  }, [settings]);
 
   useEffect(() => {
     if (!focused) {
@@ -224,6 +238,8 @@ export function WorkspacesView({ workspaces, settings, enabled, focusName, onCha
               workspace={workspace}
               focused={focused === workspace.name}
               editing={editing === workspace.name}
+              contextOpen={contextOpen === workspace.name}
+              contextOn={handoffNames.includes(workspace.name)}
               busy={busy}
               editRepos={editRepos}
               setRef={(node) => {
@@ -238,6 +254,8 @@ export function WorkspacesView({ workspaces, settings, enabled, focusName, onCha
                 })
               }
               onToggleEdit={() => toggleEdit(workspace)}
+              onToggleContext={() => setContextOpen((current) => (current === workspace.name ? null : workspace.name))}
+              onContextChanged={(enabled) => setHandoffNames((current) => (enabled ? [...new Set([...current, workspace.name])] : current.filter((item) => item !== workspace.name)))}
               onDelete={() => setPendingDelete(workspace)}
               onEditRepos={setEditRepos}
               onSaveRepos={() =>

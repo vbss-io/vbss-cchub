@@ -1,10 +1,11 @@
-export type PaletteKind = "session" | "workspace" | "task" | "command" | "view";
+export type PaletteKind = "session" | "workspace" | "task" | "command" | "view" | "history";
 
 export interface PaletteItem {
   id: string;
   kind: PaletteKind;
   title: string;
   subtitle?: string;
+  titleRanges?: [number, number][];
   keywords?: string[];
   run: () => void;
 }
@@ -19,6 +20,7 @@ export const KIND_LABEL: Record<PaletteKind, string> = {
   task: "Task",
   command: "Command",
   view: "Go to",
+  history: "History",
 };
 
 const SCORE_EXACT = 1000;

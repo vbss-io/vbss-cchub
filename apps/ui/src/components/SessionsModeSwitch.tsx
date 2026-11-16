@@ -1,9 +1,9 @@
-import { SESSIONS_MODES, type SessionsMode } from "../sessions-mode";
+import { sessionsModeOptions, type SessionsMode } from "../sessions-mode";
 
-export function SessionsModeSwitch({ mode, onMode }: { mode: SessionsMode; onMode: (mode: SessionsMode) => void }) {
+export function SessionsModeSwitch({ mode, flowOn, onMode }: { mode: SessionsMode; flowOn: boolean; onMode: (mode: SessionsMode) => void }) {
   return (
     <div className="runs-origin runs-mode" role="group" aria-label="View">
-      {SESSIONS_MODES.map((item) => (
+      {sessionsModeOptions(flowOn).map((item) => (
         <button
           key={item.key}
           type="button"

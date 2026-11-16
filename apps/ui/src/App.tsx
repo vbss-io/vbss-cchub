@@ -7,6 +7,8 @@ import { openOutcome } from "./act-model";
 import { ApprovalsProvider, useApprovalsStore } from "./approvals-context";
 import { CodexDrawer } from "./components/CodexDrawer";
 import { CommandPalette } from "./components/CommandPalette";
+import { copyText } from "./memory-clipboard";
+import { hitOpenPlan, type HitOpenResult } from "./memory-model";
 import { SessionDrawer } from "./components/SessionDrawer";
 import { TaskDrawer } from "./components/TaskDrawer";
 import { needsYouOnTop, parseOrigin, runsRouteOf, type Origin } from "./runs-model";
@@ -31,10 +33,11 @@ import { HubOfflineBanner } from "./components/HubOfflineBanner";
 import { useHubConnection } from "./use-hub-connection";
 import { DEFAULT_NOTIF_EVENTS, firedEvents, notifyEvent, resetFired, setNotifConfig } from "./notifications";
 import { isEmpty, isStale } from "./stale";
-import type { CodexSessionRecord, GroupRecord, RunEventMessage, RuntimeSnapshot, SessionRecord, SessionClient } from "./types";
+import type { CodexSessionRecord, GroupRecord, HistoryHit, HistoryIndexStatus, RunEventMessage, RuntimeSnapshot, SessionRecord, SessionClient } from "./types";
 import { BoardView } from "./views/BoardView";
 import { TodayView } from "./views/TodayView";
 import { FlowView } from "./views/FlowView";
+import { HistorySearchView } from "./views/HistorySearchView";
 import { ReportsView } from "./views/ReportsView";
 import { SessionsView } from "./views/SessionsView";
 import { settingsTabs } from "./settings-sections";
@@ -347,6 +350,7 @@ export function App() {
   const dailyListeners = useRef(new Set<(event: DailyStreamEvent) => void>());
   const boardListeners = useRef(new Set<(event: TasksBoardStreamEvent) => void>());
   const usageListeners = useRef(new Set<(event: UsageEvent) => void>());
+  const historyListeners = useRef(new Set<(status: HistoryIndexStatus) => void>());
   const taskStatusRef = useRef(new Map<string, TaskStatus>());
 
   const goToHash = useCallback((hash: string) => {
@@ -375,7 +379,7 @@ export function App() {
 
   const setSessionsMode = useCallback((mode: SessionsMode) => {
     setSessionsModeState(mode);
-    saveSessionsMode(mode);
+    if (mode !== "search") saveSessionsMode(mode);
   }, []);
 
   const openTask = useCallback((id: string) => {
@@ -679,8 +683,14 @@ export function App() {
       onUsage: () => {
         for (const listener of usageListeners.current) listener("usage");
       },
+      onSettings: (next) => {
+        if (mounted) setSettings(next);
+      },
       onLimits: () => {
         for (const listener of usageListeners.current) listener("limits");
+      },
+      onHistory: (status) => {
+        for (const listener of historyListeners.current) listener(status);
       },
       onUiPrefs: (next) => {
         if (!mounted || uiPrefsPending.current !== 0) return;
@@ -733,6 +743,13 @@ export function App() {
     usageListeners.current.add(listener);
     return () => {
       usageListeners.current.delete(listener);
+    };
+  }, []);
+
+  const subscribeHistory = useCallback((listener: (status: HistoryIndexStatus) => void) => {
+    historyListeners.current.add(listener);
+    return () => {
+      historyListeners.current.delete(listener);
     };
   }, []);
 
@@ -851,6 +868,41 @@ export function App() {
   );
   const openClaudeExternally = useCallback((id: string) => void openExternally(() => openSessionExternal(id)), [openExternally]);
   const openCodexExternally = useCallback((id: string) => void openExternally(() => openCodexExternal(id)), [openExternally]);
+
+  const openHistoryHit = useCallback(
+    async (hit: HistoryHit): Promise<HitOpenResult> => {
+      const plan = hitOpenPlan(hit, { claude: (id) => Object.hasOwn(sessions, id), codex: (id) => codexSessions.some((thread) => thread.id === id) });
+      if (plan.kind === "none") return { ok: false, reason: "This match has no session to open." };
+      if (plan.kind === "claude-drawer") {
+        openSession(plan.sessionId);
+        return { ok: true };
+      }
+      if (plan.kind === "codex-drawer") {
+        openCodex(plan.sessionId);
+        return { ok: true };
+      }
+      try {
+        const outcome = openOutcome(plan.kind === "claude-open" ? await openSessionExternal(plan.sessionId) : await openCodexExternal(plan.sessionId));
+        if (outcome.kind !== "opened") return { ok: false, reason: outcome.text };
+        ok(outcome.text);
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : "Could not open the session." };
+      }
+    },
+    [sessions, codexSessions, openSession, openCodex, ok],
+  );
+
+  const openHitFromPalette = useCallback(
+    (hit: HistoryHit) => {
+      void openHistoryHit(hit).then((result) => {
+        if (result.ok) return;
+        const id = hit.sessionId;
+        pushToast("error", id ? `${result.reason} Session id: ${id}` : result.reason, id ? { label: "Copy session id", run: () => void copyText(id) } : undefined);
+      });
+    },
+    [openHistoryHit, pushToast],
+  );
 
   const moveGroup = (id: string, direction: -1 | 1) => {
     const index = groups.findIndex((group) => group.id === id);
@@ -1267,7 +1319,8 @@ export function App() {
                 onOrigin={setSessionsOrigin}
                 needsYouTop={needsYouTop}
                 mode={runsMode}
-                modeSwitch={flowEnabled ? <SessionsModeSwitch mode={runsMode} onMode={setSessionsMode} /> : undefined}
+                modeSwitch={<SessionsModeSwitch mode={runsMode} flowOn={flowEnabled} onMode={setSessionsMode} />}
+                renderSearch={() => <HistorySearchView workspaces={workspaces} subscribeHistory={subscribeHistory} onOpenHit={openHistoryHit} onOpenSettings={() => navigate("settings", "memory")} />}
                 renderMap={
                   flowEnabled
                     ? (controls) => (
@@ -1369,6 +1422,7 @@ export function App() {
                 hooksBusy={hooksBusy}
                 notif={notifSettings}
                 groups={groups}
+                subscribeHistory={subscribeHistory}
                 onToggleHooks={() => void toggleHooks()}
                 onSaveSettings={saveSettings}
                 onShell={shell}
@@ -1483,7 +1537,7 @@ export function App() {
           />
         )}
         {showWhatsNew && <WhatsNew onClose={() => setShowWhatsNew(false)} />}
-        <CommandPalette key={paletteSeed.key} open={paletteOpen} items={paletteItems} onClose={closePalette} initialQuery={paletteSeed.query} queryItems={captureQueryItems} />
+        <CommandPalette key={paletteSeed.key} open={paletteOpen} items={paletteItems} onClose={closePalette} initialQuery={paletteSeed.query} queryItems={captureQueryItems} workspaces={workspaces} onOpenHit={openHitFromPalette} />
 
         {toasts.length > 0 && (
           <div className="toasts" aria-live="polite">
