@@ -1,12 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from "react";
 import { decidePermission, fetchPermissions } from "./api";
 import { approvalsOf, decisionBody, reduceApprovals, type ApprovalsState } from "./approvals-model";
-import type { PermissionAgent, PermissionRequestRecord, PermissionResolved } from "./types";
+import type { PermissionAgent, PermissionRequestRecord, PermissionRequestSummary, PermissionResolved } from "./types";
 
 const TICK_MS = 1_000;
 
 export interface ApprovalsHandlers {
-  onPermissionRequest: (record: PermissionRequestRecord) => void;
+  onPermissionRequest: (record: PermissionRequestSummary) => void;
   onPermissionResolved: (event: PermissionResolved) => void;
   reload: () => void;
 }
@@ -26,7 +26,12 @@ export function useApprovalsStore(): ApprovalsStore {
   }, []);
   const handlers = useMemo<ApprovalsHandlers>(
     () => ({
-      onPermissionRequest: (record) => dispatch({ type: "request", record }),
+      onPermissionRequest: (record) => {
+        dispatch({ type: "request", record });
+        void fetchPermissions()
+          .then((list) => dispatch({ type: "details", list }))
+          .catch(() => undefined);
+      },
       onPermissionResolved: (event) => dispatch({ type: "resolved", id: event.id }),
       reload,
     }),

@@ -58,6 +58,22 @@ describe("reduceApprovals", () => {
     assert.equal(reduceApprovals(after, { type: "resolved", id: "zzz" }), after);
   });
 
+  it("shows a broadcast summary first and fills tool input and cwd from the guarded fetch", () => {
+    const { toolInput: _input, cwd: _cwd, turnId: _turn, ...summary } = record({ id: "a", toolInput: { command: "git push" }, cwd: "C:/work/api", turnId: "t1" });
+    const shown = reduceApprovals([], { type: "request", record: summary });
+    assert.equal(shown[0]?.toolInput, null);
+    assert.equal(shown[0]?.cwd, null);
+    const stale = record({ id: "gone", createdAt: NOW - 5 });
+    const filled = reduceApprovals(shown, { type: "details", list: [stale, record({ id: "a", toolInput: { command: "git push" }, cwd: "C:/work/api", turnId: "t1" })] });
+    assert.deepEqual(filled.map((item) => item.id), ["a"]);
+    assert.deepEqual(filled[0]?.toolInput, { command: "git push" });
+    assert.equal(filled[0]?.cwd, "C:/work/api");
+    assert.equal(reduceApprovals(filled, { type: "details", list: [stale] }), filled);
+    const again = reduceApprovals(filled, { type: "request", record: summary });
+    assert.deepEqual(again[0]?.toolInput, { command: "git push" });
+    assert.equal(again[0]?.turnId, "t1");
+  });
+
   it("replaces the list from a fresh fetch", () => {
     const state = reduceApprovals([record({ id: "old" })], { type: "replace", list: [record({ id: "n2", createdAt: NOW + 2 }), record({ id: "n1" })] });
     assert.deepEqual(state.map((item) => item.id), ["n1", "n2"]);

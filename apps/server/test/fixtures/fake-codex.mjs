@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 const argv = process.argv.slice(2);
@@ -57,6 +58,13 @@ async function main() {
   const sleepDirective = /sleep:(\d+)/.exec(prompt);
 
   emit({ type: "thread.started", thread_id: threadId });
+  const rolloutDir = process.env.FAKE_CODEX_ROLLOUT_DIR;
+  if (rolloutDir) {
+    const file = join(rolloutDir, `rollout-${threadId}.jsonl`);
+    const at = new Date().toISOString();
+    if (!existsSync(file)) appendFileSync(file, `${JSON.stringify({ timestamp: at, type: "session_meta", payload: { id: threadId, timestamp: at, cwd: process.cwd(), originator: "codex_exec", source: "exec" } })}\n`);
+    appendFileSync(file, `${JSON.stringify({ timestamp: at, type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: prompt }] } })}\n`);
+  }
   emit({ type: "turn.started" });
   if (sleepDirective) await sleep(Number(sleepDirective[1]));
 

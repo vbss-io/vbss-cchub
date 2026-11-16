@@ -8,6 +8,7 @@ import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus } from "./worktr
 import { CODEX_SANDBOXES, ISOLATION_MODES, ORIGIN_CLIENTS, PERMISSION_MODES, RUNNERS, TASK_STATUSES, type CodexSandbox, type Isolation, type OriginClient, type PermissionMode, type RunKind, type Runner, type TaskStatus } from "./delegation-types.js";
 import { isDirectory } from "./workspaces.js";
 import { openElsewhere } from "./codex-live.js";
+import { rolloutChangedSinceHubRun } from "./codex-rollout-mark.js";
 import { asString, oneOf, sendError, taskJson } from "./route-helpers.js";
 
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
@@ -229,7 +230,7 @@ export function tasksRouter(): Router {
       res.status(409).json({ error: "this thread is no longer the task's current Codex thread", code: "not-current-thread" });
       return;
     }
-    if (openElsewhere(req.params.id)) {
+    if (openElsewhere(req.params.id) || (task.status !== "running" && rolloutChangedSinceHubRun(req.params.id))) {
       res.status(409).json({ error: "this thread is open in the Codex app or CLI; reply there with Open session", code: "open-elsewhere" });
       return;
     }

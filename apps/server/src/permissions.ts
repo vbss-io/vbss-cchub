@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { broadcast } from "./sse.js";
 
@@ -11,6 +11,7 @@ export type PermissionOutcome = "allow" | "deny" | "expired" | "superseded" | "w
 
 export const SUBAGENT_WINDOW_CAP_SEC = 20;
 export const DECISION_MESSAGE_MAX = 2000;
+export const WAITER_GRACE_MS = 3_000;
 
 export interface PermissionRequestInput {
   agent: PermissionAgent;
@@ -29,6 +30,15 @@ export interface PermissionRequestRecord extends PermissionRequestInput {
   createdAt: number;
   expiresAt: number;
 }
+
+export type PermissionRequestSummary = Omit<PermissionRequestRecord, "toolInput" | "cwd" | "turnId">;
+
+export interface OpenedPermission {
+  record: PermissionRequestRecord;
+  waitToken: string;
+}
+
+export type WaitAttach = { status: "gone" } | { status: "forbidden" } | { status: "waiting"; stop: () => void };
 
 export interface PermissionDecision {
   behavior: PermissionBehavior;
@@ -54,7 +64,9 @@ export interface SessionMove {
 
 interface Pending {
   record: PermissionRequestRecord;
+  waitToken: string;
   timer: NodeJS.Timeout;
+  graceTimer: NodeJS.Timeout | null;
   waiters: Set<(decision: PermissionDecision | null) => void>;
 }
 
@@ -70,6 +82,7 @@ function settle(id: string, outcome: PermissionOutcome, decision: PermissionDeci
   if (!entry) return null;
   pending.delete(id);
   clearTimeout(entry.timer);
+  if (entry.graceTimer) clearTimeout(entry.graceTimer);
   for (const waiter of entry.waiters) waiter(decision);
   entry.waiters.clear();
   const resolved: PermissionResolved = { id, agent: entry.record.agent, sessionId: entry.record.sessionId, outcome, at: Date.now() };
@@ -77,14 +90,37 @@ function settle(id: string, outcome: PermissionOutcome, decision: PermissionDeci
   return entry.record;
 }
 
-export function openPermissionRequest(input: PermissionRequestInput, windowMs: number, now: number = Date.now()): PermissionRequestRecord | null {
+export const permissionSummary = (record: PermissionRequestRecord): PermissionRequestSummary => ({
+  id: record.id,
+  agent: record.agent,
+  sessionId: record.sessionId,
+  agentId: record.agentId,
+  toolName: record.toolName,
+  title: record.title,
+  windowMs: record.windowMs,
+  createdAt: record.createdAt,
+  expiresAt: record.expiresAt,
+});
+
+export function openPermissionRequest(
+  input: PermissionRequestInput,
+  windowMs: number,
+  options: { now?: number; graceMs?: number } = {},
+): OpenedPermission | null {
   if (windowMs <= 0) return null;
+  const now = options.now ?? Date.now();
   const record: PermissionRequestRecord = { ...input, id: randomUUID(), windowMs, createdAt: now, expiresAt: now + windowMs };
+  const waitToken = randomBytes(24).toString("base64url");
   const timer = setTimeout(() => settle(record.id, "expired", null), windowMs);
   timer.unref();
-  pending.set(record.id, { record, timer, waiters: new Set() });
-  broadcast("permission-request", record);
-  return record;
+  const graceTimer = setTimeout(() => {
+    const entry = pending.get(record.id);
+    if (entry && entry.waiters.size === 0) settle(record.id, "withdrawn", null);
+  }, options.graceMs ?? WAITER_GRACE_MS);
+  graceTimer.unref();
+  pending.set(record.id, { record, waitToken, timer, graceTimer, waiters: new Set() });
+  broadcast("permission-request", permissionSummary(record));
+  return { record, waitToken };
 }
 
 export function listPermissionRequests(): PermissionRequestRecord[] {
@@ -95,12 +131,27 @@ export function getPermissionRequest(id: string): PermissionRequestRecord | null
   return pending.get(id)?.record ?? null;
 }
 
-export function waitForDecision(id: string, onDecision: (decision: PermissionDecision | null) => void): (() => void) | null {
+function tokenMatches(expected: string, given: string | null): boolean {
+  if (given === null) return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(given);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+export function waitForDecision(id: string, waitToken: string | null, onDecision: (decision: PermissionDecision | null) => void): WaitAttach {
   const entry = pending.get(id);
-  if (!entry) return null;
+  if (!entry) return { status: "gone" };
+  if (!tokenMatches(entry.waitToken, waitToken)) return { status: "forbidden" };
+  if (entry.graceTimer) {
+    clearTimeout(entry.graceTimer);
+    entry.graceTimer = null;
+  }
   entry.waiters.add(onDecision);
-  return () => {
-    entry.waiters.delete(onDecision);
+  return {
+    status: "waiting",
+    stop: () => {
+      entry.waiters.delete(onDecision);
+    },
   };
 }
 

@@ -1052,3 +1052,42 @@ export function listCodexRunLinks(): CodexRunLink[] {
   }
   return [...byThread.values()];
 }
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS hub_codex_rollout_marks (
+    thread_id   TEXT PRIMARY KEY,
+    file        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    mtime_ms    INTEGER NOT NULL,
+    recorded_at INTEGER NOT NULL
+  );
+`);
+
+export interface CodexRolloutMark {
+  threadId: string;
+  file: string;
+  size: number;
+  mtimeMs: number;
+  recordedAt: number;
+}
+
+const saveRolloutMarkStmt = db.prepare(`
+  INSERT INTO hub_codex_rollout_marks (thread_id, file, size, mtime_ms, recorded_at) VALUES (@threadId, @file, @size, @mtimeMs, @recordedAt)
+  ON CONFLICT(thread_id) DO UPDATE SET file = @file, size = @size, mtime_ms = @mtimeMs, recorded_at = @recordedAt
+`);
+const getRolloutMarkStmt = db.prepare(`
+  SELECT thread_id AS threadId, file, size, mtime_ms AS mtimeMs, recorded_at AS recordedAt FROM hub_codex_rollout_marks WHERE thread_id = ?
+`);
+const deleteRolloutMarkStmt = db.prepare(`DELETE FROM hub_codex_rollout_marks WHERE thread_id = ?`);
+
+export function saveCodexRolloutMark(mark: Omit<CodexRolloutMark, "recordedAt">, recordedAt: number = Date.now()): void {
+  saveRolloutMarkStmt.run({ ...mark, recordedAt });
+}
+
+export function getCodexRolloutMark(threadId: string): CodexRolloutMark | null {
+  return (getRolloutMarkStmt.get(threadId) as CodexRolloutMark | undefined) ?? null;
+}
+
+export function deleteCodexRolloutMark(threadId: string): void {
+  deleteRolloutMarkStmt.run(threadId);
+}

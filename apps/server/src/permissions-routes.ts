@@ -21,6 +21,14 @@ const TOOL_NAME_MAX = 200;
 
 const text = (value: unknown, max = 4000): string | null => (typeof value === "string" && value.length > 0 ? value.slice(0, max) : null);
 
+export const WAIT_TOKEN_HEADER = "x-hub-wait-token";
+
+function waitTokenOf(req: Request): string | null {
+  const header = req.header(WAIT_TOKEN_HEADER);
+  if (typeof header === "string" && header.length > 0) return header;
+  return typeof req.query.token === "string" && req.query.token.length > 0 ? req.query.token : null;
+}
+
 export function permissionGuard(req: Request, res: Response, next: NextFunction): void {
   if (!isLoopbackAddress(req.socket.remoteAddress)) {
     res.status(403).json({ error: "permission requests and decisions accept loopback connections only" });
@@ -70,7 +78,7 @@ export function permissionsRouter(): Router {
     const windowSec = agent === "claude" ? approvals.claudeWindowSec : approvals.codexWindowSec;
     const delegated = body.delegated === true || isDelegated(agent, sessionId);
     const windowMs = delegated ? 0 : windowMsFor(windowSec, agentId);
-    const record = openPermissionRequest(
+    const opened = openPermissionRequest(
       {
         agent,
         sessionId,
@@ -83,22 +91,30 @@ export function permissionsRouter(): Router {
       },
       windowMs,
     );
-    res.json({ id: record?.id ?? null, windowMs: record?.windowMs ?? 0, expiresAt: record?.expiresAt ?? null });
+    if (!opened) {
+      res.json({ id: null, windowMs: 0, expiresAt: null });
+      return;
+    }
+    res.json({ id: opened.record.id, windowMs: opened.record.windowMs, expiresAt: opened.record.expiresAt, waitToken: opened.waitToken });
   });
 
   router.get("/:id/wait", (req, res) => {
     const id = req.params.id;
     let answered = false;
-    const stop = waitForDecision(id, (decision) => {
+    const attached = waitForDecision(id, waitTokenOf(req), (decision) => {
       answered = true;
       res.json({ decision });
     });
-    if (!stop) {
+    if (attached.status === "gone") {
       res.json({ decision: null });
       return;
     }
+    if (attached.status === "forbidden") {
+      res.status(403).json({ error: "wait token missing or wrong" });
+      return;
+    }
     res.on("close", () => {
-      stop();
+      attached.stop();
       if (!answered) withdrawPermission(id);
     });
   });

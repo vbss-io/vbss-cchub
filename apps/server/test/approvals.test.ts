@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fixtures, freePort, makeSandbox, serverDir, startServer, waitFor, type RunningServer } from "./helpers.js";
@@ -12,6 +12,8 @@ const openCapture = join(box.tmp, "open-capture.txt");
 const notifyHook = join(serverDir, "hooks", "notify.mjs");
 const codexHook = join(serverDir, "hooks", "codex-notify.mjs");
 const SAMPLE_THREAD = "01a0aaaa-0000-7000-8000-000000000001";
+const today = new Date();
+const rolloutDay = join(box.codexHome, "sessions", String(today.getFullYear()), String(today.getMonth() + 1).padStart(2, "0"), String(today.getDate()).padStart(2, "0"));
 let hub: RunningServer;
 const running = new Set<ChildProcess>();
 
@@ -74,6 +76,67 @@ async function http(method: string, path: string, body?: unknown, origin?: strin
   return { status: res.status, json: text ? JSON.parse(text) : null };
 }
 
+interface HubEvent {
+  event: string;
+  data: Record<string, unknown>;
+}
+
+interface EventTap {
+  next: (match: (event: HubEvent) => boolean, timeoutMs: number) => Promise<HubEvent>;
+  close: () => void;
+}
+
+async function tapEvents(): Promise<EventTap> {
+  const controller = new AbortController();
+  const res = await fetch(`${hub.base}/api/events`, { signal: controller.signal });
+  if (!res.body) throw new Error("no event stream");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  const seen: HubEvent[] = [];
+  const wakers = new Set<() => void>();
+  let buffer = "";
+  const pump = async (): Promise<void> => {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) return;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      for (let cut = buffer.indexOf("\n\n"); cut >= 0; cut = buffer.indexOf("\n\n")) {
+        const frame = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        const event = /^event: (.*)$/m.exec(frame)?.[1];
+        const data = /^data: (.*)$/m.exec(frame)?.[1];
+        if (event && data) seen.push({ event, data: JSON.parse(data) as Record<string, unknown> });
+      }
+      for (const wake of [...wakers]) wake();
+    }
+  };
+  pump().catch(() => undefined);
+  const next = (match: (event: HubEvent) => boolean, timeoutMs: number): Promise<HubEvent> =>
+    new Promise((resolveEvent, reject) => {
+      let timer: NodeJS.Timeout | null = null;
+      const check = (): void => {
+        const found = seen.find(match);
+        if (!found) return;
+        if (timer) clearTimeout(timer);
+        wakers.delete(check);
+        resolveEvent(found);
+      };
+      timer = setTimeout(() => {
+        wakers.delete(check);
+        reject(new Error("event not seen in time"));
+      }, timeoutMs);
+      wakers.add(check);
+      check();
+    });
+  await next((item) => item.event === "ready", 10_000);
+  return { next, close: () => controller.abort() };
+}
+
+const resolvedOf =
+  (id: string) =>
+  (item: HubEvent): boolean =>
+    item.event === "permission-resolved" && item.data.id === id;
+
 const pendingList = async (): Promise<Pending[]> => (await http("GET", "/api/permissions")).json as Pending[];
 
 const pendingFor = (sessionId: string): Promise<Pending> =>
@@ -103,6 +166,7 @@ before(async () => {
     HUB_DELEGATION: "1",
     HUB_URL_OPENER: JSON.stringify([process.execPath, join(fixtures, "fake-open-url.mjs")]),
     FAKE_OPEN_CAPTURE: openCapture,
+    FAKE_CODEX_ROLLOUT_DIR: rolloutDay,
   });
 });
 
@@ -213,11 +277,67 @@ describe("Claude PermissionRequest through the hub", () => {
   });
 
   it("drops the request when Claude kills the hook", async () => {
-    const hook = runHook(notifyHook, hub.port, permissionInput("g1-killed", "make"));
-    await pendingFor("g1-killed");
-    hook.child.kill();
-    await hook.done;
-    await waitFor(async () => ((await pendingList()).some((item) => item.sessionId === "g1-killed") ? null : true), 5000);
+    const tap = await tapEvents();
+    try {
+      const hook = runHook(notifyHook, hub.port, permissionInput("g1-killed", "make"));
+      const request = await pendingFor("g1-killed");
+      hook.child.kill();
+      await hook.done;
+      const resolved = await tap.next(resolvedOf(request.id), 20_000);
+      assert.equal(resolved.data.outcome, "withdrawn");
+      assert.equal((await pendingList()).some((item) => item.sessionId === "g1-killed"), false);
+    } finally {
+      tap.close();
+    }
+  });
+
+  it("withdraws a request whose hook dies before it starts waiting", async () => {
+    const tap = await tapEvents();
+    try {
+      const started = Date.now();
+      const opened = (await http("POST", "/api/permissions/request", { agent: "claude", sessionId: "g1-no-waiter", toolName: "Bash", toolInput: { command: "make" } })).json as { id: string };
+      assert.equal(typeof opened.id, "string");
+      const resolved = await tap.next(resolvedOf(opened.id), 20_000);
+      assert.equal(resolved.data.outcome, "withdrawn");
+      assert.ok(Date.now() - started >= 2_500, `withdrawn after ${Date.now() - started} ms`);
+      assert.equal((await pendingList()).some((item) => item.sessionId === "g1-no-waiter"), false);
+    } finally {
+      tap.close();
+    }
+  });
+
+  it("requires the wait token and a bad one does not withdraw the request", async () => {
+    const opened = (await http("POST", "/api/permissions/request", { agent: "claude", sessionId: "g1-token", toolName: "Bash", toolInput: { command: "ls" } })).json as { id: string; waitToken: string };
+    assert.equal(typeof opened.waitToken, "string");
+    assert.ok(opened.waitToken.length >= 16);
+    const waitUrl = `${hub.base}/api/permissions/${opened.id}/wait`;
+    assert.equal((await fetch(waitUrl)).status, 403);
+    assert.equal((await fetch(`${waitUrl}?token=wrong`)).status, 403);
+    assert.equal((await fetch(waitUrl, { headers: { "x-hub-wait-token": `${opened.waitToken}x` } })).status, 403);
+    const listed = await pendingList();
+    assert.equal(listed.filter((item) => item.id === opened.id).length, 1);
+    assert.ok(!JSON.stringify(listed).includes(opened.waitToken));
+    const waiting = fetch(`${waitUrl}?token=${encodeURIComponent(opened.waitToken)}`).then(async (res) => ({ status: res.status, json: (await res.json()) as { decision: unknown } }));
+    await waitFor(async () => ((await http("POST", `/api/permissions/${opened.id}/decision`, { behavior: "allow" })).status === 200 ? true : null), 10_000);
+    const answer = await waiting;
+    assert.equal(answer.status, 200);
+    assert.deepEqual(answer.json.decision, { behavior: "allow", message: null });
+  });
+
+  it("broadcasts the request without the tool input or cwd and keeps them on the guarded list", async () => {
+    const tap = await tapEvents();
+    try {
+      const hook = runHook(notifyHook, hub.port, permissionInput("g1-sse", "cat ~/.ssh/id_rsa"));
+      const sent = await tap.next((item) => item.event === "permission-request" && item.data.sessionId === "g1-sse", 10_000);
+      assert.deepEqual(Object.keys(sent.data).sort(), ["agent", "agentId", "createdAt", "expiresAt", "id", "sessionId", "title", "toolName", "windowMs"]);
+      assert.ok(!JSON.stringify(sent.data).includes("id_rsa"));
+      const request = await pendingFor("g1-sse");
+      assert.deepEqual(request.toolInput, { command: "cat ~/.ssh/id_rsa", description: "test command" });
+      await http("POST", `/api/permissions/${request.id}/decision`, { behavior: "deny" });
+      await hook.done;
+    } finally {
+      tap.close();
+    }
   });
 
   it("does not wait in headless or hub-delegated sessions", async () => {
@@ -379,5 +499,35 @@ describe("open and reply", () => {
     const res = await http("POST", `/delegation/codex/${SAMPLE_THREAD}/reply`, { text: "go on" });
     assert.equal(res.status, 409);
     assert.equal((res.json as { code: string }).code, "not-hub-thread");
+  });
+
+  interface TaskDetail {
+    task: { id: string; status: string; sessionId: string | null };
+    runs: { status: string }[];
+  }
+
+  const settledTask = (id: string, runs: number): Promise<TaskDetail> =>
+    waitFor(async () => {
+      const detail = (await http("GET", `/delegation/tasks/${id}`)).json as TaskDetail;
+      return detail.runs.length >= runs && !["pending", "running"].includes(detail.task.status) ? detail : null;
+    }, 20_000);
+
+  it("refuses to reply once someone else wrote to the hub thread's rollout", async () => {
+    assert.equal((await http("PUT", "/delegation/settings", { workspacesRoot: box.root })).status, 200);
+    const created = await http("POST", "/delegation/tasks", { prompt: "codex please", workspace: "pilot", runner: "codex" });
+    assert.equal(created.status, 201, JSON.stringify(created.json));
+    const taskId = (created.json as TaskDetail).task.id;
+    const first = await settledTask(taskId, 1);
+    const threadId = first.task.sessionId ?? "";
+    assert.match(threadId, /^thread-/);
+    const rollout = join(rolloutDay, `rollout-${threadId}.jsonl`);
+    assert.ok(existsSync(rollout));
+    const reply = await http("POST", `/delegation/codex/${threadId}/reply`, { text: "go on" });
+    assert.equal(reply.status, 201, JSON.stringify(reply.json));
+    await settledTask(taskId, 2);
+    appendFileSync(rollout, `${JSON.stringify({ timestamp: new Date().toISOString(), type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "typed in the Codex app" }] } })}\n`);
+    const refused = await http("POST", `/delegation/codex/${threadId}/reply`, { text: "and more" });
+    assert.equal(refused.status, 409);
+    assert.equal((refused.json as { code: string }).code, "open-elsewhere");
   });
 });

@@ -276,9 +276,10 @@ async function askHub() {
   } catch {
     return null;
   }
-  if (!opened || typeof opened.id !== "string" || !(Number(opened.windowMs) > 0)) return null;
+  if (!opened || typeof opened.id !== "string" || typeof opened.waitToken !== "string" || !(Number(opened.windowMs) > 0)) return null;
   try {
     const res = await fetch(`http://${HOST}:${PORT}/api/permissions/${encodeURIComponent(opened.id)}/wait`, {
+      headers: { "x-hub-wait-token": opened.waitToken },
       signal: AbortSignal.timeout(Number(opened.windowMs) + WAIT_MARGIN_MS),
     });
     if (!res.ok) return null;

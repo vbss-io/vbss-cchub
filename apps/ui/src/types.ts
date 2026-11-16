@@ -167,6 +167,8 @@ export interface PermissionRequestRecord {
   expiresAt: number;
 }
 
+export type PermissionRequestSummary = Omit<PermissionRequestRecord, "toolInput" | "cwd" | "turnId">;
+
 export interface PermissionResolved {
   id: string;
   agent: PermissionAgent;

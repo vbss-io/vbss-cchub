@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
 import { runTask, type RunEvent } from "./executor.js";
+import { markCodexRolloutAfterRun } from "./codex-rollout-mark.js";
 import { broadcast } from "./sse.js";
 import { appendHubSource } from "./second-brain.js";
 import { appendRunEvent, beginRun, createTask, finishRun, getSettings, getTaskDetail, listTasks } from "./delegation-store.js";
@@ -271,6 +272,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
         error: outcome.error,
         exitCode: outcome.exitCode,
       });
+      if (task.runner === "codex") markCodexRolloutAfterRun(outcome.sessionId ?? run.sessionId);
       const summary = outcome.status === "completed" ? (outcome.result ?? "").slice(0, 160) : (outcome.error ?? "");
       brainNote(`task ${outcome.status} · ${task.workspace} · ${task.title} (${task.runner}) — ${summary}`);
       if (task.dailyDate) broadcast("daily", { date: task.dailyDate, updatedAt: Date.now(), source: "hub", writeId: null });
@@ -298,6 +300,7 @@ export function startRun(task: TaskRecord, kind: RunKind, prompt: string, model:
       } catch (storeErr) {
         console.error(`run ${run.id} could not be finalized: ${String(storeErr)}`);
       }
+      if (task.runner === "codex") markCodexRolloutAfterRun(run.sessionId);
       if (task.dailyDate) broadcast("daily", { date: task.dailyDate, updatedAt: Date.now(), source: "hub", writeId: null });
       endRunSession(run.sessionId, "run failed");
       if (fromShare) finishShareRequestByTask({ taskId: task.id, status: "failed", error: message, sessionId: null });

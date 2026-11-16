@@ -1,11 +1,12 @@
 import type { NotifEventConfig } from "./notifications";
-import type { PermissionAgent, PermissionRequestRecord } from "./types";
+import type { PermissionAgent, PermissionRequestRecord, PermissionRequestSummary } from "./types";
 
 export type ApprovalsState = readonly PermissionRequestRecord[];
 
 export type ApprovalsAction =
   | { type: "replace"; list: readonly PermissionRequestRecord[] }
-  | { type: "request"; record: PermissionRequestRecord }
+  | { type: "request"; record: PermissionRequestSummary }
+  | { type: "details"; list: readonly PermissionRequestRecord[] }
   | { type: "resolved"; id: string }
   | { type: "prune"; now: number };
 
@@ -17,7 +18,16 @@ const byCreated = (a: PermissionRequestRecord, b: PermissionRequestRecord): numb
 
 export function reduceApprovals(state: ApprovalsState, action: ApprovalsAction): ApprovalsState {
   if (action.type === "replace") return [...action.list].sort(byCreated);
-  if (action.type === "request") return [...state.filter((item) => item.id !== action.record.id), action.record].sort(byCreated);
+  if (action.type === "request") {
+    const known = state.find((item) => item.id === action.record.id);
+    const merged: PermissionRequestRecord = { toolInput: known?.toolInput ?? null, cwd: known?.cwd ?? null, turnId: known?.turnId ?? null, ...action.record };
+    return [...state.filter((item) => item.id !== action.record.id), merged].sort(byCreated);
+  }
+  if (action.type === "details") {
+    const byId = new Map(action.list.map((item) => [item.id, item]));
+    if (!state.some((item) => byId.has(item.id))) return state;
+    return state.map((item) => byId.get(item.id) ?? item);
+  }
   if (action.type === "resolved") return state.some((item) => item.id === action.id) ? state.filter((item) => item.id !== action.id) : state;
   const alive = state.filter((item) => item.expiresAt + APPROVAL_GRACE_MS > action.now);
   return alive.length === state.length ? state : alive;

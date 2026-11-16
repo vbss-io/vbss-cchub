@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, describe, it } from "node:test";
+import { after, describe, it, mock } from "node:test";
 import type { NextFunction, Request, Response } from "express";
 
 const dataDir = mkdtempSync(join(tmpdir(), "cchub-g1-guard-"));
@@ -12,6 +12,7 @@ delete process.env.HUB_RESOURCE_DIR;
 const { permissionGuard } = await import("../src/permissions-routes.js");
 const permissions = await import("../src/permissions.js");
 const { db } = await import("../src/db.js");
+const { onBroadcast } = await import("../src/sse.js");
 
 interface Captured {
   status: number | null;
@@ -66,10 +67,11 @@ describe("pending permission store", () => {
   const base = { agent: "claude" as const, sessionId: "s1", agentId: null, toolName: "Bash", toolInput: { command: "ls" }, cwd: null, turnId: null, title: null };
 
   it("only the pending id can be decided, once", () => {
-    const record = permissions.openPermissionRequest(base, 10_000);
-    assert.ok(record);
+    const opened = permissions.openPermissionRequest(base, 10_000);
+    assert.ok(opened);
+    const { record } = opened;
     let got: unknown = "unset";
-    permissions.waitForDecision(record.id, (decision) => {
+    permissions.waitForDecision(record.id, opened.waitToken, (decision) => {
       got = decision;
     });
     assert.equal(permissions.decidePermission("other-id", { behavior: "allow", message: null }), null);
@@ -80,10 +82,11 @@ describe("pending permission store", () => {
 
   it("drops the allow message and opens nothing for a zero window", () => {
     assert.equal(permissions.openPermissionRequest(base, 0), null);
-    const record = permissions.openPermissionRequest(base, 10_000);
-    assert.ok(record);
+    const opened = permissions.openPermissionRequest(base, 10_000);
+    assert.ok(opened);
+    const { record } = opened;
     let got: unknown = null;
-    permissions.waitForDecision(record.id, (decision) => {
+    permissions.waitForDecision(record.id, opened.waitToken, (decision) => {
       got = decision;
     });
     permissions.decidePermission(record.id, { behavior: "allow", message: "ignored" });
@@ -91,7 +94,7 @@ describe("pending permission store", () => {
   });
 
   it("a parallel tool with the same name but another input does not clear the request", () => {
-    const record = permissions.openPermissionRequest(base, 10_000);
+    const record = permissions.openPermissionRequest(base, 10_000)?.record;
     assert.ok(record);
     permissions.clearForSessionMove({ agent: "claude", sessionId: "s1", agentId: null, scope: "tool", toolName: "Bash", toolInput: { command: "pwd" } });
     assert.ok(permissions.getPermissionRequest(record.id));
@@ -100,12 +103,70 @@ describe("pending permission store", () => {
   });
 
   it("Stop of the main thread keeps a subagent's request, SessionEnd clears it", () => {
-    const sub = permissions.openPermissionRequest({ ...base, agentId: "a1" }, 10_000);
+    const sub = permissions.openPermissionRequest({ ...base, agentId: "a1" }, 10_000)?.record;
     assert.ok(sub);
     permissions.clearForSessionMove({ agent: "claude", sessionId: "s1", agentId: null, scope: "turn", toolName: null, toolInput: undefined });
     assert.ok(permissions.getPermissionRequest(sub.id));
     permissions.clearForSessionMove({ agent: "claude", sessionId: "s1", agentId: null, scope: "session", toolName: null, toolInput: undefined });
     assert.equal(permissions.getPermissionRequest(sub.id), null);
+  });
+
+  it("withdraws a request when no hook starts waiting within the grace period", () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      const opened = permissions.openPermissionRequest({ ...base, sessionId: "grace-none" }, 60_000);
+      assert.ok(opened);
+      mock.timers.tick(permissions.WAITER_GRACE_MS - 1);
+      assert.ok(permissions.getPermissionRequest(opened.record.id));
+      mock.timers.tick(1);
+      assert.equal(permissions.getPermissionRequest(opened.record.id), null);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("a waiter attached in time cancels the grace withdrawal", () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      const opened = permissions.openPermissionRequest({ ...base, sessionId: "grace-waiter" }, 60_000);
+      assert.ok(opened);
+      mock.timers.tick(permissions.WAITER_GRACE_MS - 1);
+      const attached = permissions.waitForDecision(opened.record.id, opened.waitToken, () => undefined);
+      assert.equal(attached.status, "waiting");
+      mock.timers.tick(permissions.WAITER_GRACE_MS * 3);
+      assert.ok(permissions.getPermissionRequest(opened.record.id));
+      permissions.withdrawPermission(opened.record.id);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("refuses a waiter without the right token and keeps the request pending", () => {
+    const opened = permissions.openPermissionRequest({ ...base, sessionId: "token" }, 10_000);
+    assert.ok(opened);
+    assert.equal(permissions.waitForDecision(opened.record.id, null, () => undefined).status, "forbidden");
+    assert.equal(permissions.waitForDecision(opened.record.id, `${opened.waitToken}x`, () => undefined).status, "forbidden");
+    assert.equal(permissions.waitForDecision(opened.record.id, "short", () => undefined).status, "forbidden");
+    assert.ok(permissions.getPermissionRequest(opened.record.id));
+    assert.equal(permissions.waitForDecision("not-pending", opened.waitToken, () => undefined).status, "gone");
+    permissions.withdrawPermission(opened.record.id);
+  });
+
+  it("broadcasts the request without tool input, cwd, turn or wait token", () => {
+    const seen: unknown[] = [];
+    const off = onBroadcast((event, data) => {
+      if (event === "permission-request") seen.push(data);
+    });
+    const opened = permissions.openPermissionRequest({ ...base, sessionId: "sse", cwd: "C:/secret/repo", turnId: "turn-9", toolInput: { command: "cat ~/.ssh/id_rsa" } }, 10_000);
+    off();
+    assert.ok(opened);
+    assert.equal(seen.length, 1);
+    const sent = seen[0] as Record<string, unknown>;
+    assert.deepEqual(Object.keys(sent).sort(), ["agent", "agentId", "createdAt", "expiresAt", "id", "sessionId", "title", "toolName", "windowMs"]);
+    assert.ok(!JSON.stringify(sent).includes("id_rsa"));
+    assert.ok(!JSON.stringify(sent).includes(opened.waitToken));
+    assert.deepEqual(permissions.getPermissionRequest(opened.record.id)?.toolInput, { command: "cat ~/.ssh/id_rsa" });
+    permissions.withdrawPermission(opened.record.id);
   });
 
   it("caps the window for subagents only", () => {
