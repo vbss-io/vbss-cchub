@@ -6,6 +6,7 @@ import type {
   LiveAgent,
   OpenSessionResult,
   PermissionRequestRecord,
+  PermissionRequestSummary,
   PermissionResolved,
   RunEventMessage,
   RuntimeSnapshot,
@@ -226,7 +227,7 @@ export interface HubEvents {
   onShareStream?: (event: ShareStreamEvent) => void;
   onNavigate?: (hash: string) => void;
   onToast?: (card: ToastCard) => void;
-  onPermissionRequest?: (record: PermissionRequestRecord) => void;
+  onPermissionRequest?: (record: PermissionRequestSummary) => void;
   onPermissionResolved?: (event: PermissionResolved) => void;
   onClaims?: (claims: ClaimRecord[]) => void;
   onDaily?: (event: DailyStreamEvent) => void;
@@ -297,7 +298,7 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("share-stream", (event) => handlers.onShareStream?.(data<ShareStreamEvent>(event)));
   source.addEventListener("ui-navigate", (event) => handlers.onNavigate?.(data<{ hash: string }>(event).hash));
   source.addEventListener("toast", (event) => handlers.onToast?.(data<ToastCard>(event)));
-  source.addEventListener("permission-request", (event) => handlers.onPermissionRequest?.(data<PermissionRequestRecord>(event)));
+  source.addEventListener("permission-request", (event) => handlers.onPermissionRequest?.(data<PermissionRequestSummary>(event)));
   source.addEventListener("permission-resolved", (event) => handlers.onPermissionResolved?.(data<PermissionResolved>(event)));
   source.addEventListener("claims", (event) => handlers.onClaims?.(data<ClaimRecord[]>(event)));
   source.addEventListener("daily", (event) => handlers.onDaily?.(data<DailyStreamEvent>(event)));

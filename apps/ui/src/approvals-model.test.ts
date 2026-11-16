@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  needsDetails,
   APPROVAL_GRACE_MS,
   approvalToastsOn,
   approvalView,
@@ -63,15 +64,20 @@ describe("reduceApprovals", () => {
     const shown = reduceApprovals([], { type: "request", record: summary });
     assert.equal(shown[0]?.toolInput, null);
     assert.equal(shown[0]?.cwd, null);
+    assert.equal(shown[0]?.pendingDetails, true);
+    assert.equal(needsDetails(shown), true);
     const stale = record({ id: "gone", createdAt: NOW - 5 });
     const filled = reduceApprovals(shown, { type: "details", list: [stale, record({ id: "a", toolInput: { command: "git push" }, cwd: "C:/work/api", turnId: "t1" })] });
     assert.deepEqual(filled.map((item) => item.id), ["a"]);
     assert.deepEqual(filled[0]?.toolInput, { command: "git push" });
     assert.equal(filled[0]?.cwd, "C:/work/api");
+    assert.equal(filled[0]?.pendingDetails, undefined);
+    assert.equal(needsDetails(filled), false);
     assert.equal(reduceApprovals(filled, { type: "details", list: [stale] }), filled);
     const again = reduceApprovals(filled, { type: "request", record: summary });
     assert.deepEqual(again[0]?.toolInput, { command: "git push" });
     assert.equal(again[0]?.turnId, "t1");
+    assert.equal(again[0]?.pendingDetails, undefined);
   });
 
   it("replaces the list from a fresh fetch", () => {

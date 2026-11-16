@@ -141,6 +141,27 @@ describe("pending permission store", () => {
     }
   });
 
+  it("a waiter that arrives right after the user decided still gets the decision, only with its token and only once", () => {
+    mock.timers.enable({ apis: ["setTimeout"] });
+    try {
+      const opened = permissions.openPermissionRequest({ ...base, sessionId: "late-waiter" }, 60_000);
+      assert.ok(opened);
+      permissions.decidePermission(opened.record.id, { behavior: "allow", message: null });
+      assert.equal(permissions.waitForDecision(opened.record.id, "wrong", () => undefined).status, "forbidden");
+      const got: unknown[] = [];
+      assert.equal(permissions.waitForDecision(opened.record.id, opened.waitToken, (decision) => got.push(decision)).status, "waiting");
+      assert.deepEqual(got, [{ behavior: "allow", message: null }]);
+      assert.equal(permissions.waitForDecision(opened.record.id, opened.waitToken, () => undefined).status, "gone");
+      const other = permissions.openPermissionRequest({ ...base, sessionId: "late-expired" }, 60_000);
+      assert.ok(other);
+      permissions.decidePermission(other.record.id, { behavior: "deny", message: null });
+      mock.timers.tick(permissions.LATE_WAITER_MS);
+      assert.equal(permissions.waitForDecision(other.record.id, other.waitToken, () => undefined).status, "gone");
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
   it("refuses a waiter without the right token and keeps the request pending", () => {
     const opened = permissions.openPermissionRequest({ ...base, sessionId: "token" }, 10_000);
     assert.ok(opened);

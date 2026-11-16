@@ -1,7 +1,9 @@
 import type { NotifEventConfig } from "./notifications";
 import type { PermissionAgent, PermissionRequestRecord, PermissionRequestSummary } from "./types";
 
-export type ApprovalsState = readonly PermissionRequestRecord[];
+export type ApprovalItem = PermissionRequestRecord & { pendingDetails?: true };
+
+export type ApprovalsState = readonly ApprovalItem[];
 
 export type ApprovalsAction =
   | { type: "replace"; list: readonly PermissionRequestRecord[] }
@@ -20,7 +22,9 @@ export function reduceApprovals(state: ApprovalsState, action: ApprovalsAction):
   if (action.type === "replace") return [...action.list].sort(byCreated);
   if (action.type === "request") {
     const known = state.find((item) => item.id === action.record.id);
-    const merged: PermissionRequestRecord = { toolInput: known?.toolInput ?? null, cwd: known?.cwd ?? null, turnId: known?.turnId ?? null, ...action.record };
+    const merged: ApprovalItem = known
+      ? { ...known, ...action.record }
+      : { toolInput: null, cwd: null, turnId: null, ...action.record, pendingDetails: true };
     return [...state.filter((item) => item.id !== action.record.id), merged].sort(byCreated);
   }
   if (action.type === "details") {
@@ -32,6 +36,8 @@ export function reduceApprovals(state: ApprovalsState, action: ApprovalsAction):
   const alive = state.filter((item) => item.expiresAt + APPROVAL_GRACE_MS > action.now);
   return alive.length === state.length ? state : alive;
 }
+
+export const needsDetails = (list: ApprovalsState): boolean => list.some((item) => item.pendingDetails === true);
 
 export const sessionKey = (agent: PermissionAgent, sessionId: string): string => `${agent}:${sessionId}`;
 

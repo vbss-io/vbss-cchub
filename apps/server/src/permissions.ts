@@ -12,6 +12,7 @@ export type PermissionOutcome = "allow" | "deny" | "expired" | "superseded" | "w
 export const SUBAGENT_WINDOW_CAP_SEC = 20;
 export const DECISION_MESSAGE_MAX = 2000;
 export const WAITER_GRACE_MS = 3_000;
+export const LATE_WAITER_MS = 10_000;
 
 export interface PermissionRequestInput {
   agent: PermissionAgent;
@@ -72,6 +73,20 @@ interface Pending {
 
 const pending = new Map<string, Pending>();
 
+interface Decided {
+  waitToken: string;
+  decision: PermissionDecision;
+  timer: NodeJS.Timeout;
+}
+
+const decided = new Map<string, Decided>();
+
+function rememberDecision(id: string, waitToken: string, decision: PermissionDecision): void {
+  const timer = setTimeout(() => decided.delete(id), LATE_WAITER_MS);
+  timer.unref();
+  decided.set(id, { waitToken, decision, timer });
+}
+
 export function windowMsFor(windowSec: number, agentId: string | null): number {
   const capped = agentId ? Math.min(windowSec, SUBAGENT_WINDOW_CAP_SEC) : windowSec;
   return Math.max(0, Math.round(capped)) * 1000;
@@ -83,6 +98,7 @@ function settle(id: string, outcome: PermissionOutcome, decision: PermissionDeci
   pending.delete(id);
   clearTimeout(entry.timer);
   if (entry.graceTimer) clearTimeout(entry.graceTimer);
+  if (decision && entry.waiters.size === 0) rememberDecision(id, entry.waitToken, decision);
   for (const waiter of entry.waiters) waiter(decision);
   entry.waiters.clear();
   const resolved: PermissionResolved = { id, agent: entry.record.agent, sessionId: entry.record.sessionId, outcome, at: Date.now() };
@@ -140,7 +156,15 @@ function tokenMatches(expected: string, given: string | null): boolean {
 
 export function waitForDecision(id: string, waitToken: string | null, onDecision: (decision: PermissionDecision | null) => void): WaitAttach {
   const entry = pending.get(id);
-  if (!entry) return { status: "gone" };
+  if (!entry) {
+    const late = decided.get(id);
+    if (!late) return { status: "gone" };
+    if (!tokenMatches(late.waitToken, waitToken)) return { status: "forbidden" };
+    clearTimeout(late.timer);
+    decided.delete(id);
+    onDecision(late.decision);
+    return { status: "waiting", stop: () => undefined };
+  }
   if (!tokenMatches(entry.waitToken, waitToken)) return { status: "forbidden" };
   if (entry.graceTimer) {
     clearTimeout(entry.graceTimer);

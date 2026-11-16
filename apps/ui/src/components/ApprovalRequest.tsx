@@ -1,13 +1,12 @@
 import { useState, type MouseEvent } from "react";
 import { useApprovals } from "../approvals-context";
-import { approvalView, countdown, countdownFraction } from "../approvals-model";
-import type { PermissionRequestRecord } from "../types";
+import { approvalView, countdown, countdownFraction, type ApprovalItem } from "../approvals-model";
 import { shortFolder } from "../wsmatch";
 import { ClampText } from "./ShowMore";
 import "../approvals.css";
 
 interface Props {
-  request: PermissionRequestRecord;
+  request: ApprovalItem;
   compact?: boolean;
   showTitle?: boolean;
   reasonField?: boolean;
@@ -23,6 +22,7 @@ export function ApprovalRequest({ request, compact = false, showTitle = false, r
   const view = approvalView(request);
   const left = countdown(request.expiresAt, now);
   const fraction = countdownFraction(request, now);
+  const loading = request.pendingDetails === true;
   const stop = (event: MouseEvent) => event.stopPropagation();
 
   const cancelDeny = () => {
@@ -65,6 +65,7 @@ export function ApprovalRequest({ request, compact = false, showTitle = false, r
       <div className="approval__bar" aria-hidden="true">
         <span className="approval__fill" style={{ width: `${Math.round(fraction * 100)}%` }} />
       </div>
+      {loading && <span className="approval__cwd">Loading the request...</span>}
       {view.input.length > 0 && (
         <ClampText className="approval__input" lines={lines}>
           {view.input}
@@ -110,7 +111,7 @@ export function ApprovalRequest({ request, compact = false, showTitle = false, r
             <button type="button" className="act" disabled={busy} onClick={startDeny}>
               Deny
             </button>
-            <button type="button" className="act act--focus" disabled={busy} onClick={() => void send("allow")}>
+            <button type="button" className="act act--focus" disabled={busy || loading} title={loading ? "Wait until the request is shown" : undefined} onClick={() => void send("allow")}>
               {busy ? "Sending..." : "Allow"}
             </button>
           </>
@@ -121,7 +122,7 @@ export function ApprovalRequest({ request, compact = false, showTitle = false, r
 }
 
 interface ListProps {
-  requests: readonly PermissionRequestRecord[];
+  requests: readonly ApprovalItem[];
   compact?: boolean;
   showTitle?: boolean;
   reasonField?: boolean;

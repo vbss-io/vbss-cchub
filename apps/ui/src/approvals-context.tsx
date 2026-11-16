@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from "react";
 import { decidePermission, fetchPermissions } from "./api";
-import { approvalsOf, decisionBody, reduceApprovals, type ApprovalsState } from "./approvals-model";
+import { approvalsOf, decisionBody, needsDetails, reduceApprovals, type ApprovalsState } from "./approvals-model";
 import type { PermissionAgent, PermissionRequestRecord, PermissionRequestSummary, PermissionResolved } from "./types";
 
 const TICK_MS = 1_000;
+const DETAILS_RETRY_MS = 1_500;
 
 export interface ApprovalsHandlers {
   onPermissionRequest: (record: PermissionRequestSummary) => void;
@@ -38,6 +39,16 @@ export function useApprovalsStore(): ApprovalsStore {
     [reload],
   );
   const settle = useCallback((id: string) => dispatch({ type: "resolved", id }), []);
+  const missing = needsDetails(list);
+  useEffect(() => {
+    if (!missing) return;
+    const id = window.setInterval(() => {
+      void fetchPermissions()
+        .then((next) => dispatch({ type: "details", list: next }))
+        .catch(() => undefined);
+    }, DETAILS_RETRY_MS);
+    return () => window.clearInterval(id);
+  }, [missing]);
   const pending = list.length > 0;
   useEffect(() => {
     if (!pending) return;
