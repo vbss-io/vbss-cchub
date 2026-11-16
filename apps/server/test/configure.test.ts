@@ -35,12 +35,14 @@ interface Status {
 }
 
 const OLD_EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd", "SubagentStart", "SubagentStop"];
+const G1_EVENTS = ["PermissionRequest", "PostToolUse", "PostToolUseFailure"];
+const NEW_MISSING = ["PermissionRequest", "PostToolUse", "PostToolUseFailure", "SessionEnd", "StopFailure"];
 const hubEntry = (): HookEntry => ({ hooks: [{ type: "command", command: `node "${notifyPath}"` }] });
 const userStop: HookEntry = { hooks: [{ type: "command", command: "say done" }] };
 const userGuard: HookEntry = { matcher: "Bash", hooks: [{ type: "command", command: "my-guard.sh" }] };
 
-function run(settingsPath: string, action: string): Status {
-  const out = spawnSync(process.execPath, [configure, action, "--settings", settingsPath, "--notify", notifyPath], {
+function run(settingsPath: string, action: string, extra: string[] = []): Status {
+  const out = spawnSync(process.execPath, [configure, action, "--settings", settingsPath, "--notify", notifyPath, ...extra], {
     env: { ...process.env, HOME: home, USERPROFILE: home },
     encoding: "utf8",
   });
@@ -70,7 +72,7 @@ describe("hook configuration", () => {
     const status = run(oldInstall("old"), "status");
     assert.equal(status.installed, false);
     assert.equal(status.outdated, true);
-    assert.deepEqual(status.missing.sort(), ["SessionEnd", "StopFailure"]);
+    assert.deepEqual(status.missing.sort(), NEW_MISSING);
   });
 
   it("does not call a settings file without hub hooks outdated", () => {
@@ -91,7 +93,7 @@ describe("hook configuration", () => {
     run(path, "install");
     const twice = read(path);
     assert.deepEqual(twice, once);
-    for (const event of [...OLD_EVENTS, "StopFailure"]) assert.equal(ours(twice.hooks[event]).length, 1, event);
+    for (const event of [...OLD_EVENTS, "StopFailure", ...G1_EVENTS]) assert.equal(ours(twice.hooks[event]).length, 1, event);
     assert.ok((ours(twice.hooks.SessionEnd)[0]?.hooks[0]?.timeout ?? 0) > 1.5);
     assert.deepEqual(twice.hooks.Stop?.[0], userStop);
     assert.deepEqual(twice.hooks.PreToolUse, [userGuard]);
@@ -135,14 +137,14 @@ describe("hook configuration", () => {
     assert.deepEqual(userCommands(settings.hooks.SessionEnd), ["clear|ping-me.sh"]);
     assert.deepEqual(settings.hooks.Stop?.[0], { hooks: [userSay] });
     assert.deepEqual(settings.hooks.SessionEnd?.[0], { matcher: "clear", hooks: [userPing] });
-    for (const event of [...OLD_EVENTS, "StopFailure"]) assert.equal(ours(settings.hooks[event]).length, 1, event);
+    for (const event of [...OLD_EVENTS, "StopFailure", ...G1_EVENTS]) assert.equal(ours(settings.hooks[event]).length, 1, event);
   });
 
   it("an update of an outdated install keeps the shared user hooks and is stable", () => {
     const path = sharedInstall("shared-update");
     const before = run(path, "status");
     assert.equal(before.outdated, true);
-    assert.deepEqual(before.missing.sort(), ["SessionEnd", "StopFailure"]);
+    assert.deepEqual(before.missing.sort(), NEW_MISSING);
     run(path, "install");
     const once = read(path);
     run(path, "install");
@@ -150,6 +152,25 @@ describe("hook configuration", () => {
     assert.deepEqual(userCommands(once.hooks.Stop), ["|say done"]);
     assert.deepEqual(userCommands(once.hooks.SessionEnd), ["clear|ping-me.sh"]);
     assert.ok((ours(once.hooks.SessionEnd)[0]?.hooks[0]?.timeout ?? 0) > 1.5);
+  });
+
+  it("registers PermissionRequest with the approval timeout and the tool events as async", () => {
+    const path = join(home, "g1.json");
+    writeFileSync(path, JSON.stringify({ hooks: { PreToolUse: [userGuard] } }));
+    run(path, "install", ["--permission-timeout", "330"]);
+    const settings = read(path);
+    assert.equal(ours(settings.hooks.PermissionRequest)[0]?.hooks[0]?.timeout, 330);
+    for (const event of ["PostToolUse", "PostToolUseFailure"]) {
+      const hook = ours(settings.hooks[event])[0]?.hooks[0] as HookCommand & { async?: boolean };
+      assert.equal(hook.async, true, event);
+    }
+    assert.equal(run(path, "status", ["--permission-timeout", "330"]).installed, true);
+    const changed = run(path, "status", ["--permission-timeout", "50"]);
+    assert.equal(changed.outdated, true);
+    assert.deepEqual(changed.missing, ["PermissionRequest"]);
+    run(path, "install", ["--permission-timeout", "50"]);
+    assert.equal(ours(read(path).hooks.PermissionRequest)[0]?.hooks[0]?.timeout, 50);
+    assert.deepEqual(read(path).hooks.PreToolUse, [userGuard]);
   });
 
   it("uninstall removes only the hub hook from a shared entry and keeps its matcher", () => {

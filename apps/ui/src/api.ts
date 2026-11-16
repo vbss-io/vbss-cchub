@@ -4,6 +4,10 @@ import type {
   GroupRecord,
   HooksStatus,
   LiveAgent,
+  OpenSessionResult,
+  PermissionRequestRecord,
+  PermissionRequestSummary,
+  PermissionResolved,
   RunEventMessage,
   RuntimeSnapshot,
   SessionLive,
@@ -120,6 +124,42 @@ export const markSessionSeen = (sessionId: string): Promise<void> =>
 
 export const focusCodexApp = (): Promise<FocusResult> => send("POST", "/api/codex/focus");
 
+export const openSession = (sessionId: string): Promise<OpenSessionResult> =>
+  openResult(`/api/sessions/${encodeURIComponent(sessionId)}/open`);
+
+export const openCodexSession = (id: string): Promise<OpenSessionResult> => openResult(`/api/codex/${encodeURIComponent(id)}/open`);
+
+function safeJson(text: string): unknown {
+  try {
+    return text.length > 0 ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function openResult(path: string): Promise<OpenSessionResult> {
+  const res = await fetch(`${base}${path}`, { method: "POST" });
+  const json = safeJson(await res.text()) as (Partial<OpenSessionResult> & { error?: string }) | null;
+  if (json && typeof json.ok === "boolean") return { ok: json.ok, method: json.method ?? "focus", ...(json.url ? { url: json.url } : {}), ...(json.reason ? { reason: json.reason } : {}), ...(json.focused !== undefined ? { focused: json.focused } : {}) };
+  return { ok: false, method: "focus", reason: json?.error ?? `request failed (${res.status})` };
+}
+
+export const fetchPermissions = (): Promise<PermissionRequestRecord[]> => getJson("/api/permissions");
+
+export type DecisionOutcome = "done" | "gone";
+
+export async function decidePermission(id: string, body: { behavior: "allow" | "deny"; message?: string }): Promise<DecisionOutcome> {
+  const res = await fetch(`${base}/api/permissions/${encodeURIComponent(id)}/decision`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (res.status === 404) return "gone";
+  if (res.ok) return "done";
+  const json = safeJson(await res.text()) as { error?: string } | null;
+  throw new Error(json?.error ?? `decision failed (${res.status})`);
+}
+
 export interface DesktopNotifyStatus {
   supported: boolean;
   appId: string;
@@ -187,6 +227,8 @@ export interface HubEvents {
   onShareStream?: (event: ShareStreamEvent) => void;
   onNavigate?: (hash: string) => void;
   onToast?: (card: ToastCard) => void;
+  onPermissionRequest?: (record: PermissionRequestSummary) => void;
+  onPermissionResolved?: (event: PermissionResolved) => void;
   onClaims?: (claims: ClaimRecord[]) => void;
   onDaily?: (event: DailyStreamEvent) => void;
   onTasksBoard?: (event: TasksBoardStreamEvent) => void;
@@ -256,6 +298,8 @@ export function subscribe(handlers: HubEvents): () => void {
   source.addEventListener("share-stream", (event) => handlers.onShareStream?.(data<ShareStreamEvent>(event)));
   source.addEventListener("ui-navigate", (event) => handlers.onNavigate?.(data<{ hash: string }>(event).hash));
   source.addEventListener("toast", (event) => handlers.onToast?.(data<ToastCard>(event)));
+  source.addEventListener("permission-request", (event) => handlers.onPermissionRequest?.(data<PermissionRequestSummary>(event)));
+  source.addEventListener("permission-resolved", (event) => handlers.onPermissionResolved?.(data<PermissionResolved>(event)));
   source.addEventListener("claims", (event) => handlers.onClaims?.(data<ClaimRecord[]>(event)));
   source.addEventListener("daily", (event) => handlers.onDaily?.(data<DailyStreamEvent>(event)));
   source.addEventListener("tasks", (event) => handlers.onTasksBoard?.(data<TasksBoardStreamEvent>(event)));

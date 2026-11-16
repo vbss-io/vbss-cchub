@@ -111,6 +111,7 @@ export const config = {
   claudeArgsPrefix: parseJsonStringArray(process.env.HUB_CLAUDE_ARGS_PREFIX),
   codexBin: process.env.HUB_CODEX_BIN ?? newestCodexBinary() ?? "codex",
   codexArgsPrefix: parseJsonStringArray(process.env.HUB_CODEX_ARGS_PREFIX),
+  urlOpener: parseJsonStringArray(process.env.HUB_URL_OPENER),
   trustedOrigins: parseList(process.env.HUB_TRUSTED_ORIGINS),
   workspacesRoot: process.env.HUB_WORKSPACES_ROOT ?? null,
   editorCommand: process.env.HUB_EDITOR ?? "code",

@@ -1,7 +1,7 @@
 import type { HooksStatus } from "./types";
 
 export const HOOK_EVENTS_HINT =
-  "session start, prompts, notifications (such as permission prompts), stops and failed stops, subagent start and stop, session end";
+  "session start, prompts, notifications, permission requests, tool results, stops and failed stops, subagent start and stop, session end";
 
 export interface HooksView {
   tag: string;

@@ -1,4 +1,5 @@
 import { applyCodexOverlay, scanCodexSessions } from "./codex-sessions.js";
+import { listCodexLive, mergeCodexLive } from "./codex-live.js";
 import type { CodexSessionRecord, CodexThreadOverride } from "./codex-sessions.js";
 import { db } from "./db.js";
 import { listCodexRunLinks } from "./delegation-store.js";
@@ -52,10 +53,12 @@ function invalidate(): void {
   cached = null;
 }
 
+export const invalidateCodexSessions = invalidate;
+
 export function listCodexSessions(): CodexSessionRecord[] {
   const now = Date.now();
   if (cached && now - cached.at < CACHE_MS) return cached.value;
-  const value = applyCodexOverlay(scanCodexSessions(), {
+  const value = applyCodexOverlay(mergeCodexLive(scanCodexSessions(), listCodexLive(now)), {
     links: listCodexRunLinks(),
     overrides: listCodexOverrides(),
   });

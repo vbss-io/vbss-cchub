@@ -33,6 +33,7 @@ interface Props {
   onSaveSettings: (patch: SettingsPatch) => Promise<void>;
   onShell: (kind: ShellKind, action: "install" | "uninstall") => Promise<void>;
   onMcp: (client: McpClient, action: "install" | "uninstall") => Promise<void>;
+  onCodexHooks: (action: "install" | "uninstall") => Promise<void>;
   tunnel: TunnelStatus | null;
   onTunnelSettings: (patch: { authtoken?: string | null; domain?: string | null }) => Promise<void>;
   autostart: AutostartStatus | null;
@@ -98,6 +99,9 @@ export function SettingsView(props: Props) {
             onToggleHooks={props.onToggleHooks}
             onShell={props.onShell}
             onMcp={props.onMcp}
+            settings={settings}
+            onSaveSettings={props.onSaveSettings}
+            onCodexHooks={props.onCodexHooks}
           />
         )}
         {active === "notifications" && <NotificationsTab notif={props.notif} onNotif={props.onNotif} />}

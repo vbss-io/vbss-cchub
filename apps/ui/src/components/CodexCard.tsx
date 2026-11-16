@@ -1,16 +1,20 @@
 import { focusCodexApp } from "../api";
 import { useState, type MouseEvent } from "react";
+import { canOpenCodex } from "../act-model";
+import { useApprovals } from "../approvals-context";
 import { codexClient } from "../clients";
 import { IconFocus } from "../icons";
 import { relativeTime } from "../time";
 import type { CodexSessionRecord } from "../types";
 import { shortFolder } from "../wsmatch";
+import { ApprovalList } from "./ApprovalRequest";
 import { CardMenu, useCardMenu, type CardMenuItem } from "./CardMenu";
 import type { TaskTone } from "../runs-model";
 import { RunFoot, RunMeta, RunStatus } from "./RunChips";
 
 const STATUS_LABEL: Record<CodexSessionRecord["status"], string> = {
   active: "Active",
+  waiting: "Waiting for input",
   idle: "Idle",
   ended: "Ended",
 };
@@ -31,26 +35,29 @@ interface Props {
   workspace: string | null;
   codexAppRunning: boolean;
   onOpen: (id: string) => void;
+  onOpenSession?: (id: string) => void;
   onRename: (id: string, title: string) => void;
   onArchive: (id: string) => void;
   onUnarchive: (id: string) => void;
   onDelete: (id: string) => void;
 }
 
-export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRename, onArchive, onUnarchive, onDelete }: Props) {
+export function CodexCard({ session, workspace, codexAppRunning, onOpen, onOpenSession, onRename, onArchive, onUnarchive, onDelete }: Props) {
   const [renaming, setRenaming] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const menu = useCardMenu();
+  const approvals = useApprovals().forSession("codex", session.id);
 
   const archived = session.archivedAt != null;
   const name = session.customTitle ?? session.title;
   const clientInfo = codexClient(session.client);
-  const tone: TaskTone = !archived && session.status === "active" ? "go" : "muted";
+  const tone: TaskTone = archived ? "muted" : session.status === "waiting" ? "pend" : session.status === "active" ? "go" : "muted";
   const folder = shortFolder(session.cwd);
   const origin = originLabel(session);
 
   const stop = (event: MouseEvent) => event.stopPropagation();
   const menuItems: CardMenuItem[] = [
+    ...(onOpenSession && canOpenCodex({ status: session.status, archivedAt: session.archivedAt }) ? [{ key: "open", label: "Open session", onSelect: () => onOpenSession(session.id) }] : []),
     { key: "rename", label: "Rename", onSelect: () => setRenaming(true) },
     archived ? { key: "unarchive", label: "Unarchive", onSelect: () => onUnarchive(session.id) } : { key: "archive", label: "Archive", onSelect: () => onArchive(session.id) },
   ];
@@ -146,6 +153,8 @@ export function CodexCard({ session, workspace, codexAppRunning, onOpen, onRenam
           { key: "where", text: workspace ?? folder, title: session.cwd ?? folder },
           ...(workspace && workspace !== folder ? [{ key: "folder", text: folder, title: session.cwd ?? folder }] : []),
         ]} extras={origin ? [origin] : []} />
+
+      <ApprovalList requests={approvals} />
 
       <RunFoot actions={codexAppRunning || archived ? actions : undefined}>
         <span className="rc__model">

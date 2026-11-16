@@ -114,6 +114,7 @@ function settingsFor(root: string): DelegationSettings {
     widget: { edge: "right", rings: { claude: false, codex: false }, panel: "sessions", autostart: true },
     limits: { claude: false, codex: false, codexLive: false, refreshMinutes: 5 },
     usage: { days: 7 },
+    approvals: { claudeWindowSec: 300, codexWindowSec: 20 },
   };
 }
 

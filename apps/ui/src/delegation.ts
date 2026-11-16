@@ -2,6 +2,7 @@ import { hubBase } from "./api";
 import type { HubPluginInfo } from "./agent-tools";
 import { usageResponseState } from "./usage-format";
 import { emptyUiPrefs, normalizeUiPrefs } from "./plugins/ui-prefs";
+import type { ApprovalsSettings, CodexHooksStatus } from "./types";
 
 const base = `${hubBase}/delegation`;
 
@@ -157,6 +158,7 @@ export interface DelegationSettings {
   widget: WidgetSettings;
   limits: LimitsSettings;
   usage: UsageSettings;
+  approvals: ApprovalsSettings;
 }
 
 export interface TaskRecord {
@@ -264,6 +266,7 @@ export interface ConnectStatus {
   server: { command: string; args: string[]; env: Record<string, string> };
   shell: Record<ShellKind, ShellStatus>;
   mcp: Record<McpClient, McpStatus>;
+  codexHooks?: CodexHooksStatus;
 }
 
 export class DelegationDisabledError extends Error {}
@@ -292,7 +295,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T;
 }
 
-export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily" | "tasks" | "trail" | "widget" | "limits" | "usage">> & {
+export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily" | "tasks" | "trail" | "widget" | "limits" | "usage" | "approvals">> & {
   features?: Partial<DelegationSettings["features"]>;
   tasks?: Partial<Omit<TasksFeatureSettings, "prefixes">> & { prefixes?: Partial<TasksPrefixes> };
   daily?: Partial<Omit<DailySettings, "headings">> & { headings?: Partial<DailyHeadings> };
@@ -300,6 +303,7 @@ export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily
   widget?: Partial<Omit<WidgetSettings, "rings">> & { rings?: Partial<WidgetSettings["rings"]> };
   limits?: Partial<LimitsSettings>;
   usage?: Partial<UsageSettings>;
+  approvals?: Partial<ApprovalsSettings>;
 };
 
 export interface ClaudeLimitWindow {
@@ -740,6 +744,11 @@ export const configureShell = (shell: ShellKind, action: "install" | "uninstall"
 
 export const configureMcp = (client: McpClient, action: "install" | "uninstall"): Promise<McpStatus> =>
   call("POST", "/connect/mcp", { client, action });
+
+export const getCodexHooks = (): Promise<CodexHooksStatus> => call("GET", "/connect/codex-hooks");
+
+export const configureCodexHooks = (action: "install" | "uninstall"): Promise<CodexHooksStatus> =>
+  call("POST", "/connect/codex-hooks", { action });
 
 export const listTasks = (limit = 100, includeArchived = false): Promise<TaskRecord[]> =>
   call("GET", `/tasks?limit=${limit}${includeArchived ? "&archived=1" : ""}`);

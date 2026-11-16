@@ -47,7 +47,7 @@ copyFileSync(execPath, join(sidecar, "node.exe"));
 for (const f of ["focus.ps1", "toast.ps1", "toast-status.ps1"]) {
   copyFileSync(join(root, "apps/server/scripts", f), join(sidecar, "scripts", f));
 }
-for (const f of ["configure.mjs", "notify.mjs", "guard.mjs", "statusline-cchub.mjs", "notify.sh", "find-host-window.ps1"]) {
+for (const f of ["configure.mjs", "notify.mjs", "guard.mjs", "statusline-cchub.mjs", "codex-notify.mjs", "notify.sh", "find-host-window.ps1"]) {
   copyFileSync(join(root, "apps/server/hooks", f), join(sidecar, "hooks", f));
 }
 

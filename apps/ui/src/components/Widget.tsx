@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { fetchSessions, focusSession, reportUiError, subscribe } from "../api";
+import { ApprovalsProvider, useApprovalsStore, type ApprovalsStore } from "../approvals-context";
+import { pendingLabel } from "../approvals-model";
 import { sessionClient, isHubRun } from "../clients";
 import {
   fetchLimits,
@@ -43,6 +45,7 @@ import {
   type SectionPlan,
   type WidgetTone,
 } from "../widget-model";
+import { ApprovalList } from "./ApprovalRequest";
 import { BrandMark } from "./BrandMark";
 import { inFlight, needsYou } from "./TaskCard";
 import "../widget.css";
@@ -415,6 +418,17 @@ function RowTail({ meta }: { meta: RowMeta }) {
 }
 
 export function Widget() {
+  const approvalsStore = useApprovalsStore();
+  return (
+    <ApprovalsProvider store={approvalsStore}>
+      <WidgetView approvalsStore={approvalsStore} />
+    </ApprovalsProvider>
+  );
+}
+
+function WidgetView({ approvalsStore }: { approvalsStore: ApprovalsStore }) {
+  const approvalHandlers = approvalsStore.handlers;
+  const approvals = approvalsStore.list;
   const [sessions, setSessions] = useState<Record<string, SessionRecord>>({});
   const [tasks, setTasks] = useState<TaskRecord[]>([]);
   const [tick, setTick] = useState(0);
@@ -557,7 +571,12 @@ export function Widget() {
     reloadTasks();
     reloadConfig();
     const unsubscribe = subscribe({
-      onOpen: reloadConfig,
+      onOpen: () => {
+        reloadConfig();
+        approvalHandlers.reload();
+      },
+      onPermissionRequest: approvalHandlers.onPermissionRequest,
+      onPermissionResolved: approvalHandlers.onPermissionResolved,
       onSession: (session) => setSessions((prev) => ({ ...prev, [session.sessionId]: session })),
       onRemoved: (sessionId) =>
         setSessions((prev) => {
@@ -765,6 +784,7 @@ export function Widget() {
     const { needsYou: waiting, running, idle } = splitSessions(live);
     const visibleTasks = config.delegated ? tasks.filter((t) => t.archivedAt == null) : [];
     const attentionTasks = visibleTasks.filter((t) => needsYou(t.status)).sort((a, b) => b.updatedAt - a.updatedAt);
+    const codexApprovalSessions = new Set(approvals.filter((item) => item.agent === "codex").map((item) => item.sessionId)).size;
     const delegated = visibleTasks.filter((t) => inFlight(t.status)).sort((a, b) => a.createdAt - b.createdAt);
     const doneRecent = visibleTasks
       .filter((t) => t.status === "completed" && Date.now() - t.updatedAt < 3_600_000)
@@ -779,11 +799,11 @@ export function Widget() {
       attentionTasks,
       delegated,
       doneRecent,
-      needYou: waiting.length + attentionTasks.length,
+      needYou: waiting.length + attentionTasks.length + codexApprovalSessions,
       failed: attentionTasks.filter((t) => t.status === "failed" || t.status === "interrupted").length,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, tasks, tick, config.delegated]);
+  }, [sessions, tasks, tick, config.delegated, approvals]);
 
   const goSession = (sessionId: string) => {
     void focusSession(sessionId);
@@ -884,9 +904,21 @@ export function Widget() {
   const codexWeek = config.rings.codex ? limits?.codex?.secondary ?? null : null;
   const liveCount = model.live.length - model.idle.length;
 
+  const approvalsBlock =
+    approvals.length > 0 ? (
+      <section className="wg-sec wg-sec--approvals">
+        <div className="wg-sec-h">
+          {pendingLabel(approvals.length)} <span className="wg-sec-n">{approvals.length}</span>
+        </div>
+        <ApprovalList requests={approvals} compact showTitle reasonField={false} />
+      </section>
+    ) : null;
+
   const sessionsBody =
-    sections.length > 0 ? (
-      sections.map((section) => (
+    sections.length > 0 || approvalsBlock ? (
+      <>
+        {approvalsBlock}
+        {sections.map((section) => (
         <section key={section.key} className={`wg-sec wg-sec--${section.key}`}>
           <div className="wg-sec-h">
             {section.label} <span className="wg-sec-n">{section.count}</span>
@@ -894,7 +926,8 @@ export function Widget() {
           {rowsOf(section)}
           {section.more > 0 && <div className="wg-more">+{section.more} more</div>}
         </section>
-      ))
+        ))}
+      </>
     ) : (
       <div className="wg-empty">All quiet, nothing running right now.</div>
     );

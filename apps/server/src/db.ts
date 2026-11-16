@@ -185,6 +185,7 @@ const statusByKind: Record<Exclude<HookKind, "meta" | "notification" | "subagent
   stop: "idle",
   stop_failure: "idle",
   permission_request: "waiting",
+  tool_done: "active",
   session_end: "ended",
 };
 

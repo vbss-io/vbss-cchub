@@ -28,12 +28,17 @@ import type {
   WidgetSettings,
   LimitsSettings,
   UsageSettings,
+  ApprovalsSettings,
   UiLayoutPrefs,
   UiPrefs,
   UiPrefsPatch,
   UiSidebarPrefs,
 } from "./delegation-types.js";
 import {
+  APPROVAL_WINDOW_MAX,
+  APPROVAL_WINDOW_MIN,
+  CLAUDE_APPROVAL_WINDOW_DEFAULT,
+  CODEX_APPROVAL_WINDOW_DEFAULT,
   PLUGIN_FEATURE_KEYS,
   FOCUS_SOURCES,
   parseAutonomy,
@@ -453,6 +458,10 @@ export function getSettings(): DelegationSettings {
     usage: {
       days: storedInt(stored, "usage.days", USAGE_DAYS_MIN, USAGE_DAYS_MAX, USAGE_DAYS_DEFAULT),
     },
+    approvals: {
+      claudeWindowSec: storedInt(stored, "approvals.claudeWindowSec", APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CLAUDE_APPROVAL_WINDOW_DEFAULT),
+      codexWindowSec: storedInt(stored, "approvals.codexWindowSec", APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CODEX_APPROVAL_WINDOW_DEFAULT),
+    },
   };
 }
 
@@ -612,6 +621,7 @@ export interface UpdateSettingsInput {
   widget?: Partial<Omit<WidgetSettings, "rings">> & { rings?: Partial<WidgetSettings["rings"]> };
   limits?: Partial<LimitsSettings>;
   usage?: Partial<UsageSettings>;
+  approvals?: Partial<ApprovalsSettings>;
 }
 
 export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
@@ -679,6 +689,12 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     }
     if (patch.usage?.days !== undefined) {
       upsertSettingStmt.run("usage.days", String(clampInt(patch.usage.days, USAGE_DAYS_MIN, USAGE_DAYS_MAX, USAGE_DAYS_DEFAULT)));
+    }
+    if (patch.approvals?.claudeWindowSec !== undefined) {
+      upsertSettingStmt.run("approvals.claudeWindowSec", String(clampInt(patch.approvals.claudeWindowSec, APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CLAUDE_APPROVAL_WINDOW_DEFAULT)));
+    }
+    if (patch.approvals?.codexWindowSec !== undefined) {
+      upsertSettingStmt.run("approvals.codexWindowSec", String(clampInt(patch.approvals.codexWindowSec, APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CODEX_APPROVAL_WINDOW_DEFAULT)));
     }
   });
   apply();
@@ -1035,4 +1051,43 @@ export function listCodexRunLinks(): CodexRunLink[] {
     byThread.set(row.threadId, { threadId: row.threadId, taskId: row.taskId, latestRunStatus: row.status, taskTitle: row.taskTitle });
   }
   return [...byThread.values()];
+}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS hub_codex_rollout_marks (
+    thread_id   TEXT PRIMARY KEY,
+    file        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    mtime_ms    INTEGER NOT NULL,
+    recorded_at INTEGER NOT NULL
+  );
+`);
+
+export interface CodexRolloutMark {
+  threadId: string;
+  file: string;
+  size: number;
+  mtimeMs: number;
+  recordedAt: number;
+}
+
+const saveRolloutMarkStmt = db.prepare(`
+  INSERT INTO hub_codex_rollout_marks (thread_id, file, size, mtime_ms, recorded_at) VALUES (@threadId, @file, @size, @mtimeMs, @recordedAt)
+  ON CONFLICT(thread_id) DO UPDATE SET file = @file, size = @size, mtime_ms = @mtimeMs, recorded_at = @recordedAt
+`);
+const getRolloutMarkStmt = db.prepare(`
+  SELECT thread_id AS threadId, file, size, mtime_ms AS mtimeMs, recorded_at AS recordedAt FROM hub_codex_rollout_marks WHERE thread_id = ?
+`);
+const deleteRolloutMarkStmt = db.prepare(`DELETE FROM hub_codex_rollout_marks WHERE thread_id = ?`);
+
+export function saveCodexRolloutMark(mark: Omit<CodexRolloutMark, "recordedAt">, recordedAt: number = Date.now()): void {
+  saveRolloutMarkStmt.run({ ...mark, recordedAt });
+}
+
+export function getCodexRolloutMark(threadId: string): CodexRolloutMark | null {
+  return (getRolloutMarkStmt.get(threadId) as CodexRolloutMark | undefined) ?? null;
+}
+
+export function deleteCodexRolloutMark(threadId: string): void {
+  deleteRolloutMarkStmt.run(threadId);
 }

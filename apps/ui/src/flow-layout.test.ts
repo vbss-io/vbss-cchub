@@ -242,6 +242,15 @@ test("codex thread lands in its workspace lane", () => {
   assert.equal(node?.parent, "ws:alpha");
 });
 
+test("a Codex thread waiting on you reads as pending and running", () => {
+  const waiting = { ...codex("cx", "/repo/alpha"), status: "waiting" as const };
+  const graph = buildFlow(input({ codex: [waiting], workspaces: [workspace("alpha", "/repo/alpha")] }));
+  const node = graph.nodes.find((n) => n.codexId === "cx");
+  assert.equal(node?.tone, "pend");
+  assert.equal(node?.running, true);
+  assert.equal(node?.subtitle, "codex · waiting");
+});
+
 test("orientation swaps the main axis", () => {
   const sessions = [session("a", "/repo/alpha", "active")];
   const ws = [workspace("alpha", "/repo/alpha")];

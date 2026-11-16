@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { canOpenSession } from "../act-model";
+import { useApprovals } from "../approvals-context";
 import { fetchSessionLiveSummary, fetchSubagentLive, focusSession, markSessionSeen, type ClaimRecord } from "../api";
 import { claudeClient, sessionClient } from "../clients";
 import { IconChevron, IconClose, IconExpand, IconFocus } from "../icons";
@@ -20,6 +22,7 @@ import { agentStepsLabel, sessionMenuKeys, sessionPrimaryAction, sessionRelation
 import { shortFolder } from "../wsmatch";
 import { LIST_WINDOW } from "../show-more";
 import { ClampScope, ClampText, ShowMoreList } from "./ShowMore";
+import { ApprovalList } from "./ApprovalRequest";
 
 interface Props {
   session: SessionRecord;
@@ -32,6 +35,7 @@ interface Props {
   onShare?: (sessionId: string) => void;
   onArchive?: (sessionId: string) => void;
   onOpenTask?: (taskId: string) => void;
+  onOpenSession?: (sessionId: string) => void;
 }
 
 const ROLE_LABEL: Record<TranscriptEntry["role"], string> = {
@@ -99,7 +103,7 @@ export function Timeline({ entries, empty, detail, onShowDetail, assistantLabel 
 
 const shortName = (session: SessionRecord): string => session.customTitle ?? session.title ?? session.sessionId.slice(0, 8);
 
-export function SessionDrawer({ session, sessions = {}, workspace, claims = [], delegatedEnabled, onReleaseClaim, onClose, onShare, onArchive, onOpenTask }: Props) {
+export function SessionDrawer({ session, sessions = {}, workspace, claims = [], delegatedEnabled, onReleaseClaim, onClose, onShare, onArchive, onOpenTask, onOpenSession }: Props) {
   const [pickedTab, setTab] = useState<SessionTab>("activity");
   const [live, setLive] = useState<SessionLiveSummary | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
@@ -256,7 +260,10 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
   const primary = sessionPrimaryAction({ status: current.status, stale: current.stale === true });
   const clientInfo = sessionClient(current);
   const canShare = !!onShare && !!workspace && current.status !== "ended";
+  const approvals = useApprovals().forSession("claude", current.sessionId);
+  const canOpen = !!onOpenSession && canOpenSession({ status: current.status, archivedAt: current.archivedAt, stale: current.stale === true });
   const menuAction: Record<SessionMenuKey, CardMenuItem> = {
+    open: { key: "open", label: "Open session", onSelect: () => onOpenSession?.(current.sessionId) },
     share: { key: "share", label: "Share", onSelect: () => onShare?.(current.sessionId) },
     large: { key: "large", label: full ? "Back to the side panel" : "Open in a large view", onSelect: () => setFull((value) => !value) },
     archive: { key: "archive", label: "Archive", onSelect: () => onArchive?.(current.sessionId) },
@@ -274,7 +281,7 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
     helpersTotal: current.helpersTotal ?? 0,
     peers: folderPeers(current.cwd, Object.values(sessions), [], { sessionId: current.sessionId }),
   });
-  const menuItems = sessionMenuKeys({ canShare, archived: current.archivedAt != null || !onArchive }).map((key) => menuAction[key]);
+  const menuItems = sessionMenuKeys({ canShare, canOpen, archived: current.archivedAt != null || !onArchive }).map((key) => menuAction[key]);
 
   return (
     <>
@@ -305,6 +312,12 @@ export function SessionDrawer({ session, sessions = {}, workspace, claims = [], 
           </button>
         </div>
       </header>
+
+      {approvals.length > 0 && (
+        <div className="drawer__approvals">
+          <ApprovalList requests={approvals} />
+        </div>
+      )}
 
       <div className="drawer__tabs" role="tablist">
         {tabs.map((item) => (

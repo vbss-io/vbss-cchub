@@ -61,12 +61,17 @@ describe("sessionMenuKeys", () => {
   it("drops Share when it cannot be shared and Archive when archived", () => {
     assert.deepEqual(sessionMenuKeys({ canShare: false, archived: true }), ["large"]);
   });
+
+  it("puts Open session first when the session can be opened", () => {
+    assert.deepEqual(sessionMenuKeys({ canShare: true, archived: false, canOpen: true }), ["open", "share", "large", "archive"]);
+  });
 });
 
 describe("codexPrimaryAction", () => {
   it("offers Focus app for a live thread while the Codex app is open", () => {
     assert.equal(codexPrimaryAction({ status: "active", appRunning: true }), "focus-app");
     assert.equal(codexPrimaryAction({ status: "idle", appRunning: true }), "focus-app");
+    assert.equal(codexPrimaryAction({ status: "waiting", appRunning: true }), "focus-app");
   });
 
   it("offers nothing when the app is closed or the thread ended", () => {
@@ -80,6 +85,10 @@ describe("codexMenuKeys", () => {
     assert.deepEqual(codexMenuKeys({ hubTask: true, delegatedOn: true, archived: false }), ["task", "large", "archive"]);
     assert.deepEqual(codexMenuKeys({ hubTask: true, delegatedOn: false, archived: false }), ["large", "archive"]);
     assert.deepEqual(codexMenuKeys({ hubTask: false, delegatedOn: true, archived: true }), ["large", "unarchive"]);
+  });
+
+  it("puts Open session first when the thread can be opened", () => {
+    assert.deepEqual(codexMenuKeys({ hubTask: true, delegatedOn: true, archived: false, canOpen: true }), ["open", "task", "large", "archive"]);
   });
 });
 
