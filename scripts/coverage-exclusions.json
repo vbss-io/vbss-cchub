@@ -10,6 +10,8 @@
   },
   "vscode-ext": {},
   "desktop": {
-    "src/main.rs": "bootstrap: five-line binary entrypoint that only calls vbss_cchub_lib::run()"
+    "src/main.rs": "bootstrap: five-line binary entrypoint that only calls vbss_cchub_lib::run()",
+    "src/app.rs": "Tauri wiring: builder, window/tray/single-instance setup and the restart command, which need a real AppHandle and webview; the supervisor logic lives in lib.rs and is unit tested",
+    "src/tests.rs": "unit tests of lib.rs (cfg(test) module), not product code"
   }
 }
