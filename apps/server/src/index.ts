@@ -49,7 +49,9 @@ import { warmUsage } from "./usage-routes.js";
 import { mountPlugins } from "./plugins/index.js";
 import { recordAppVersion, runDailyMaintenance } from "./backups.js";
 import { enableVaultSnapshots } from "./vault-snapshot.js";
-import { startLimitsPolling, stopLimitsPolling } from "./limits.js";
+import { limitsSnapshot, startLimitsPolling, stopLimitsPolling } from "./limits.js";
+import { recordLimitsPayload } from "./limits-forecast.js";
+import { startRoutineScheduler, stopRoutineScheduler } from "./routines.js";
 import { abortActiveRuns, resolveWorkspaceTarget } from "./delegation-launch.js";
 import { getSettings, listCodexRunLinks, markRunningAsInterrupted, migratePluginFlags } from "./delegation-store.js";
 import { markCodexRolloutAfterRun } from "./codex-rollout-mark.js";
@@ -716,8 +718,16 @@ app.listen(config.port, config.host, () => {
     startLimitsPolling(settings);
     if (settings.features.usage) setTimeout(warmUsage, USAGE_WARMUP_DELAY_MS).unref();
     startHistoryIndexer();
+    startRoutineScheduler();
     onBroadcast((event) => {
       if (event === "settings") startLimitsPolling(getSettings());
+      if (event === "limits") {
+        try {
+          recordLimitsPayload(limitsSnapshot(getSettings()));
+        } catch (err) {
+          console.error(`limit sample failed: ${String(err)}`);
+        }
+      }
     });
   }
 });
@@ -725,6 +735,7 @@ app.listen(config.port, config.host, () => {
 function shutdown(reason: string): void {
   stopTunnel();
   stopHistoryIndexer();
+  stopRoutineScheduler();
   stopLimitsPolling();
   abortAllAsks(reason);
   abortActiveRuns(reason);

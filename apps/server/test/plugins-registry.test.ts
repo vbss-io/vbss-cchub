@@ -116,7 +116,7 @@ describe("server plugin registry", () => {
       routes.map((route) => route.mount),
       [
         "/delegation/ui-prefs",
-        ...Array.from({ length: 14 }, () => "/delegation"),
+        ...Array.from({ length: 17 }, () => "/delegation"),
         "/delegation/usage",
         "/delegation/limits",
         "/delegation/backups",

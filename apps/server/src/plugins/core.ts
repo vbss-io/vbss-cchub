@@ -2,6 +2,7 @@ import { Router } from "express";
 import { backupsRouter } from "../backups-routes.js";
 import { connectRouter } from "../connect-routes.js";
 import { delegationGuard } from "../delegation-security.js";
+import { healthRouter } from "../health-routes.js";
 import { memoryRouter } from "../memory-routes.js";
 import { overviewRouter } from "../overview-routes.js";
 import { pluginsRouter } from "../plugins-routes.js";
@@ -24,6 +25,7 @@ export const corePlugin: ServerPlugin = {
     { order: 50, mount: "/delegation", router: settingsRouter },
     { order: 70, mount: "/delegation", router: connectRouter },
     { order: 80, mount: "/delegation", router: overviewRouter },
+    { order: 85, mount: "/delegation", router: healthRouter },
     { order: 145, mount: "/delegation", router: pluginsRouter },
     { order: 170, mount: "/delegation/backups", router: backupsRouter },
     { order: 175, mount: "/delegation/memory", router: memoryRouter },
