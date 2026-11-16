@@ -174,6 +174,8 @@ const kindByEvent = {
   Stop: "stop",
   StopFailure: "stop_failure",
   PermissionRequest: "permission_request",
+  PostToolUse: "tool_done",
+  PostToolUseFailure: "tool_done",
   SubagentStart: "subagent_start",
   SubagentStop: "subagent_stop",
   SessionEnd: "session_end",
@@ -233,18 +235,92 @@ function buildBody(eventKind, hostInfo, transcript, withMessage) {
   };
 }
 
-async function post(body) {
+async function post(body, timeoutMs = 2000) {
   try {
-    await fetch(`http://${HOST}:${PORT}/hook`, {
+    const res = await fetch(`http://${HOST}:${PORT}/hook`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
+    return res.ok;
   } catch {
-    // hub offline: never block Claude Code
+    return false;
   }
 }
+
+const HANDSHAKE_TIMEOUT_MS = 800;
+const WAIT_MARGIN_MS = 5000;
+const isPermission = kind === "permission_request";
+const mayDecide = isPermission && !isHeadless && !shareLabel && process.env.HUB_DELEGATED !== "1";
+
+async function askHub() {
+  let opened;
+  try {
+    const res = await fetch(`http://${HOST}:${PORT}/api/permissions/request`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        agent: "claude",
+        sessionId,
+        agentId: input.agent_id ?? null,
+        toolName: input.tool_name ?? null,
+        toolInput: input.tool_input ?? null,
+        cwd: input.cwd ?? null,
+        delegated: false,
+      }),
+      signal: AbortSignal.timeout(HANDSHAKE_TIMEOUT_MS),
+    });
+    if (!res.ok) return null;
+    opened = await res.json();
+  } catch {
+    return null;
+  }
+  if (!opened || typeof opened.id !== "string" || !(Number(opened.windowMs) > 0)) return null;
+  try {
+    const res = await fetch(`http://${HOST}:${PORT}/api/permissions/${encodeURIComponent(opened.id)}/wait`, {
+      signal: AbortSignal.timeout(Number(opened.windowMs) + WAIT_MARGIN_MS),
+    });
+    if (!res.ok) return null;
+    const out = await res.json();
+    return out && typeof out.decision === "object" ? out.decision : null;
+  } catch {
+    return null;
+  }
+}
+
+function officialDecision(decision) {
+  if (!decision) return null;
+  if (decision.behavior === "allow") return { behavior: "allow" };
+  if (decision.behavior !== "deny") return null;
+  return typeof decision.message === "string" && decision.message.length > 0 ? { behavior: "deny", message: decision.message } : { behavior: "deny" };
+}
+
+async function decideAndExit(observed) {
+  if (mayDecide && observed) {
+    const decision = officialDecision(await askHub());
+    if (decision) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PermissionRequest", decision } }));
+  }
+  process.exit(0);
+}
+
+if (kind === "tool_done") {
+  await post(
+    {
+      kind,
+      sessionId,
+      cwd: input.cwd ?? null,
+      source: SOURCE,
+      agentId: input.agent_id ?? null,
+      toolName: input.tool_name ?? null,
+      toolInput: input.tool_input ?? null,
+    },
+    HANDSHAKE_TIMEOUT_MS,
+  );
+  process.exit(0);
+}
+
+const observeTimeout = isPermission ? HANDSHAKE_TIMEOUT_MS : 2000;
 
 if (isWorker) {
   await post(buildBody("meta", resolveHostInfo(sessionId), readTranscript(input.transcript_path), false));
@@ -252,12 +328,11 @@ if (isWorker) {
 }
 
 if (inline) {
-  await post(buildBody(kind, resolveHostInfo(sessionId), readTranscript(input.transcript_path), true));
-  process.exit(0);
+  await decideAndExit(await post(buildBody(kind, resolveHostInfo(sessionId), readTranscript(input.transcript_path), true), observeTimeout));
 }
 
 const cached = cachedHostInfo(sessionId);
-await post(buildBody(kind, cached ? { ...cached, cached: true } : { hostPid: null, shellPid: null, claudePid: null, host: null }, null, true));
+const observed = await post(buildBody(kind, cached ? { ...cached, cached: true } : { hostPid: null, shellPid: null, claudePid: null, host: null }, null, true), observeTimeout);
 const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...process.argv.slice(2), WORKER_FLAG], {
   detached: true,
   stdio: ["pipe", "ignore", "ignore"],
@@ -266,4 +341,4 @@ const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...proces
 });
 child.stdin.end(raw);
 child.unref();
-process.exit(0);
+await decideAndExit(observed);

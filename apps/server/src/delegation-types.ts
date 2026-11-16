@@ -149,6 +149,16 @@ export interface UsageSettings {
   days: number;
 }
 
+export interface ApprovalsSettings {
+  claudeWindowSec: number;
+  codexWindowSec: number;
+}
+
+export const APPROVAL_WINDOW_MIN = 0;
+export const APPROVAL_WINDOW_MAX = 1800;
+export const CLAUDE_APPROVAL_WINDOW_DEFAULT = 300;
+export const CODEX_APPROVAL_WINDOW_DEFAULT = 20;
+
 export const LIMITS_REFRESH_MIN = 1;
 export const LIMITS_REFRESH_MAX = 60;
 export const LIMITS_REFRESH_DEFAULT = 5;
@@ -241,6 +251,7 @@ export interface DelegationSettings {
   widget: WidgetSettings;
   limits: LimitsSettings;
   usage: UsageSettings;
+  approvals: ApprovalsSettings;
 }
 
 export const RUN_TIMEOUT_MIN = 5;

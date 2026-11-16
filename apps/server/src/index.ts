@@ -36,6 +36,7 @@ import { codexLiveEntries, findCodexRollout } from "./codex-sessions.js";
 import {
   archiveCodexThread,
   hideCodexThread,
+  invalidateCodexSessions,
   listCodexSessions,
   setCodexTitle,
   unarchiveCodexThread,
@@ -64,6 +65,10 @@ import { isHubRun, scheduleTrail, trailTriggerOf } from "./trail.js";
 import { addClient, broadcast, clientCount, onBroadcast } from "./sse.js";
 import { HOOK_KINDS, type HookKind, type HookPayload, type SessionRecord } from "./types.js";
 import { whenBrainWritesIdle } from "./second-brain.js";
+import { claudeSessionMove, clearAllPermissions, clearForSessionMove, hasPendingPermission } from "./permissions.js";
+import { permissionGuard, permissionsRouter } from "./permissions-routes.js";
+import { codexSessionMove, isCodexHookEvent, recordCodexHook, type CodexHookFacts } from "./codex-live.js";
+import { codexThreadUrl, openUrl, vscodeSessionUrl } from "./deep-links.js";
 
 const isHookKind = (value: unknown): value is HookKind =>
   typeof value === "string" && (HOOK_KINDS as readonly string[]).includes(value);
@@ -81,6 +86,8 @@ const kindByEvent: Record<string, HookKind> = {
   Stop: "stop",
   StopFailure: "stop_failure",
   PermissionRequest: "permission_request",
+  PostToolUse: "tool_done",
+  PostToolUseFailure: "tool_done",
   SubagentStart: "subagent_start",
   SubagentStop: "subagent_stop",
   SessionEnd: "session_end",
@@ -111,6 +118,27 @@ function trailAfterHook(session: SessionRecord, kind: HookKind): void {
   } catch (err) {
     console.error(`session trail schedule failed: ${String(err)}`);
   }
+}
+
+function settleClaudePermissions(payload: HookPayload, toolName: string | null, toolInput: unknown): void {
+  const move = claudeSessionMove({
+    kind: payload.kind,
+    sessionId: payload.sessionId,
+    agentId: payload.agentId,
+    notificationType: payload.notificationType,
+    toolName,
+    toolInput,
+  });
+  if (move) clearForSessionMove(move);
+}
+
+function applyToolDone(payload: HookPayload, toolName: string | null, toolInput: unknown): SessionRecord | null {
+  settleClaudePermissions(payload, toolName, toolInput);
+  const current = getSession(payload.sessionId);
+  if (!current || current.status !== "waiting" || hasPendingPermission("claude", payload.sessionId)) return current;
+  const session = applyHook({ ...payload, message: null });
+  broadcast("session", session);
+  return session;
 }
 
 recordAppVersion(appVersion);
@@ -148,9 +176,14 @@ app.post("/hook", (req, res) => {
     agentMessage: asString(body.agentMessage),
     shareLabel: asString(body.shareLabel),
   };
+  if (payload.kind === "tool_done") {
+    res.json(applyToolDone(payload, asString(body.toolName), body.toolInput) ?? { ok: true });
+    return;
+  }
   const seededAt = process.env.HUB_DEV_SEED === "1" ? asNumber(body.updatedAt) : null;
   const session = payload.kind === "meta" ? (applyMeta(payload) ?? applyHook(payload, seededAt ?? undefined)) : applyHook(payload, seededAt ?? undefined);
   broadcast("session", session);
+  settleClaudePermissions(payload, null, undefined);
   trailAfterHook(session, payload.kind);
   if (payload.kind === "session_end") {
     const releasedClaims = releaseClaimsOfSession(payload.sessionId);
@@ -169,9 +202,10 @@ app.post("/hook/raw", (req, res) => {
     return;
   }
   const transcriptPath = asString(body.transcript_path);
-  const transcript = readTranscript(transcriptPathFor(transcriptPath, source));
+  const toolDone = kind === "tool_done";
+  const transcript = toolDone ? readTranscript(null) : readTranscript(transcriptPathFor(transcriptPath, source));
   let title = transcript.title;
-  if (transcriptPath) {
+  if (transcriptPath && !toolDone) {
     const sessionsDir = transcriptPath.replace(/(\.claude)[\\/]projects[\\/].*$/, "$1/sessions");
     const meta = readSessionName(transcriptPathFor(sessionsDir, source) ?? "", body.session_id);
     const userName = meta.nameSource !== "derived" ? meta.name : null;
@@ -199,11 +233,18 @@ app.post("/hook/raw", (req, res) => {
     agentMessage: asString(body.agent_id) ? (asString(body.last_assistant_message)?.slice(0, 400) ?? null) : null,
     shareLabel: asString(body.share_label) ?? null,
   };
+  if (toolDone) {
+    res.json(applyToolDone(payload, asString(body.tool_name), body.tool_input) ?? { ok: true });
+    return;
+  }
   const session = applyHook(payload);
+  settleClaudePermissions(payload, null, undefined);
   broadcast("session", session);
   trailAfterHook(session, payload.kind);
   res.json(session);
 });
+
+app.use("/api/permissions", permissionsRouter());
 
 app.get("/api/sessions", (_req, res) => {
   res.json(listSessions());
@@ -321,14 +362,56 @@ app.get("/api/codex/sessions", (_req, res) => {
   res.json(listCodexSessions());
 });
 
-app.post("/api/codex/focus", async (_req, res) => {
+async function focusCodexApp(): Promise<{ status: number; body: { ok: boolean; reason?: string; method: "focus" } }> {
   const snapshot = await runtimeSnapshot();
   const pid = snapshot.codexApp.pids[0] ?? null;
-  if (!pid) {
-    res.status(409).json({ ok: false, reason: "the Codex app is not running" });
+  if (!pid) return { status: 409, body: { ok: false, reason: "the Codex app is not running", method: "focus" } };
+  return { status: 200, body: { ...(await focusWindow(pid, null)), method: "focus" } };
+}
+
+app.post("/api/codex/focus", async (_req, res) => {
+  const result = await focusCodexApp();
+  res.status(result.status).json(result.body);
+});
+
+app.post("/api/codex/hook", permissionGuard, (req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const sessionId = asString(body.sessionId);
+  if (!isCodexHookEvent(body.event) || !sessionId) {
+    res.status(400).json({ error: "event and sessionId required" });
     return;
   }
-  res.json(await focusWindow(pid, null));
+  const facts: CodexHookFacts = {
+    event: body.event,
+    sessionId,
+    cwd: asString(body.cwd),
+    transcriptPath: asString(body.transcriptPath),
+    model: asString(body.model),
+    toolName: asString(body.toolName),
+    toolInput: body.toolInput,
+    lastAssistantMessage: asString(body.lastAssistantMessage),
+    delegated: body.delegated === true,
+  };
+  const state = recordCodexHook(facts);
+  const move = codexSessionMove(facts);
+  if (move) clearForSessionMove(move);
+  invalidateCodexSessions();
+  broadcast("codex", listCodexSessions());
+  res.json(state);
+});
+
+app.post("/api/codex/:id/open", async (req, res) => {
+  const thread = codexThreadFor(req.params.id);
+  if (!thread) {
+    res.status(404).json({ error: "thread not found" });
+    return;
+  }
+  if (thread.client === "codex-app") {
+    res.json({ ...(await openUrl(codexThreadUrl(thread.id))), method: "deep-link" });
+    return;
+  }
+  const result = await focusCodexApp();
+  res.status(result.status).json(result.body);
 });
 
 app.get("/api/codex/:id/live", (req, res) => {
@@ -340,6 +423,8 @@ app.get("/api/codex/:id/live", (req, res) => {
   }
   res.json({ entries: codexLiveEntries(file, limit) });
 });
+
+const isVscodePanel = (session: SessionRecord): boolean => session.client === "vscode" && !session.shellPid;
 
 const codexThreadFor = (id: string) => listCodexSessions().find((session) => session.id === id) ?? null;
 
@@ -391,7 +476,28 @@ app.post("/api/sessions/:id/focus", async (req, res) => {
   if (seen) broadcast("session", seen);
   const result = await focusWindow(session.hostPid, session.cwd);
   if (session.shellPid) broadcast("focus-terminal", { shellPid: session.shellPid });
+  if (!result.ok && isVscodePanel(session)) {
+    res.json({ ...(await openUrl(vscodeSessionUrl(session.sessionId))), method: "deep-link" });
+    return;
+  }
   res.json(result);
+});
+
+app.post("/api/sessions/:id/open", async (req, res) => {
+  const session = getSession(req.params.id);
+  if (!session) {
+    res.status(404).json({ error: "session not found" });
+    return;
+  }
+  const seen = markSessionSeen(req.params.id);
+  if (seen) broadcast("session", seen);
+  const focus = await focusWindow(session.hostPid, session.cwd);
+  if (isVscodePanel(session)) {
+    res.json({ ...(await openUrl(vscodeSessionUrl(session.sessionId))), method: "deep-link", focused: focus.ok });
+    return;
+  }
+  if (session.shellPid) broadcast("focus-terminal", { shellPid: session.shellPid });
+  res.json({ ...focus, method: "focus" });
 });
 
 app.post("/api/sessions/:id/seen", (req, res) => {
@@ -616,6 +722,7 @@ function shutdown(reason: string): void {
   stopLimitsPolling();
   abortAllAsks(reason);
   abortActiveRuns(reason);
+  clearAllPermissions();
   const drained = whenBrainWritesIdle();
   const deadline = new Promise<void>((resolve) => setTimeout(resolve, 2000).unref());
   void Promise.race([drained, deadline]).then(() => process.exit(0));

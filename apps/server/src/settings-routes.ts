@@ -3,7 +3,7 @@ import { broadcast } from "./sse.js";
 import { getSettings, updateSettings, type UpdateSettingsInput } from "./delegation-store.js";
 import { watchDaily } from "./daily.js";
 import { watchTasksBoard } from "./tasks-board.js";
-import { AUTONOMY_LEVELS, FOCUS_SOURCES, LIMITS_REFRESH_MAX, LIMITS_REFRESH_MIN, RUN_TIMEOUT_MAX, RUN_TIMEOUT_MIN, RUNNERS, TASKS_DATE_TOKEN, TASKS_PRIORITY_LEVELS_MAX, TASKS_PRIORITY_LEVELS_MIN, TASKS_PRIORITY_TAG_RE, TASKS_SEPARATOR_RE, TRAIL_DETAILS, USAGE_DAYS_MAX, USAGE_DAYS_MIN, WIDGET_EDGES, WIDGET_PANELS, type Autonomy, type FocusSource, type Runner, type TrailDetail, type WidgetEdge, type WidgetPanel } from "./delegation-types.js";
+import { APPROVAL_WINDOW_MAX, APPROVAL_WINDOW_MIN, AUTONOMY_LEVELS, FOCUS_SOURCES, LIMITS_REFRESH_MAX, LIMITS_REFRESH_MIN, RUN_TIMEOUT_MAX, RUN_TIMEOUT_MIN, RUNNERS, TASKS_DATE_TOKEN, TASKS_PRIORITY_LEVELS_MAX, TASKS_PRIORITY_LEVELS_MIN, TASKS_PRIORITY_TAG_RE, TASKS_SEPARATOR_RE, TRAIL_DETAILS, USAGE_DAYS_MAX, USAGE_DAYS_MIN, WIDGET_EDGES, WIDGET_PANELS, type Autonomy, type FocusSource, type Runner, type TrailDetail, type WidgetEdge, type WidgetPanel } from "./delegation-types.js";
 import { isDirectory } from "./workspaces.js";
 import { asString } from "./route-helpers.js";
 
@@ -391,6 +391,20 @@ export function settingsRouter(): Router {
         usagePatch.days = days;
       }
       patch.usage = usagePatch;
+    }
+    const approvalsBody = body.approvals as Record<string, unknown> | undefined;
+    if (approvalsBody && typeof approvalsBody === "object") {
+      const approvalsPatch: NonNullable<UpdateSettingsInput["approvals"]> = {};
+      for (const key of ["claudeWindowSec", "codexWindowSec"] as const) {
+        if (!(key in approvalsBody)) continue;
+        const seconds = approvalsBody[key];
+        if (typeof seconds !== "number" || !Number.isInteger(seconds) || seconds < APPROVAL_WINDOW_MIN || seconds > APPROVAL_WINDOW_MAX) {
+          res.status(400).json({ error: `approvals.${key} must be an integer from ${APPROVAL_WINDOW_MIN} to ${APPROVAL_WINDOW_MAX}` });
+          return;
+        }
+        approvalsPatch[key] = seconds;
+      }
+      patch.approvals = approvalsPatch;
     }
     const updated = updateSettings(patch);
     watchDaily(updated);

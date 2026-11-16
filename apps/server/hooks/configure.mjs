@@ -16,9 +16,14 @@ const notifyPath = flag("--notify") ?? join(here, "notify.mjs");
 const settingsPath = flag("--settings") ?? join(homedir(), ".claude", "settings.json");
 const source = flag("--source");
 const runner = flag("--runner") ?? "node";
+const DEFAULT_PERMISSION_TIMEOUT = 330;
+const permissionTimeoutArg = Number(flag("--permission-timeout"));
+const permissionTimeout = Number.isInteger(permissionTimeoutArg) && permissionTimeoutArg > 0 ? permissionTimeoutArg : DEFAULT_PERMISSION_TIMEOUT;
 
-const EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure", "SessionEnd", "SubagentStart", "SubagentStop"];
-const TIMEOUTS = { SessionEnd: 5 };
+const EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure", "SessionEnd", "SubagentStart", "SubagentStop", "PermissionRequest", "PostToolUse", "PostToolUseFailure"];
+const TIMEOUTS = { SessionEnd: 5, PermissionRequest: permissionTimeout };
+const ASYNC_EVENTS = new Set(["PostToolUse", "PostToolUseFailure"]);
+const EXACT_TIMEOUT_EVENTS = new Set(["PermissionRequest"]);
 const posix = (value) => value.replace(/\\/g, "/");
 const quotedRunner = runner === "node" || runner === "sh" ? runner : `"${posix(runner)}"`;
 const command = `${source ? `HUB_SOURCE=${source} ` : ""}${quotedRunner} "${posix(notifyPath)}"`;
@@ -49,16 +54,28 @@ function writeSettings(settings) {
   writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
 }
 
-const hubHook = (event) => (TIMEOUTS[event] ? { type: "command", command, timeout: TIMEOUTS[event] } : { type: "command", command });
+function hubHook(event) {
+  const hook = { type: "command", command };
+  if (TIMEOUTS[event]) hook.timeout = TIMEOUTS[event];
+  if (ASYNC_EVENTS.has(event)) hook.async = true;
+  return hook;
+}
 
-const isCurrent = (event, entry) => !TIMEOUTS[event] || entry.hooks.some((h) => isHubHook(h) && typeof h.timeout === "number" && h.timeout > 0);
+function isCurrentHook(event, hook) {
+  if (!isHubHook(hook)) return false;
+  if (ASYNC_EVENTS.has(event) && hook.async !== true) return false;
+  if (EXACT_TIMEOUT_EVENTS.has(event)) return hook.timeout === TIMEOUTS[event];
+  return !TIMEOUTS[event] || (typeof hook.timeout === "number" && hook.timeout > 0);
+}
+
+const isCurrent = (event, entry) => entry.hooks.some((h) => isCurrentHook(event, h));
 
 function status(settings) {
   const hooks = settings?.hooks ?? {};
   const ours = (event) => (Array.isArray(hooks[event]) ? hooks[event].filter(isOurs) : []);
   const events = EVENTS.filter((event) => ours(event).length > 0);
   const missing = EVENTS.filter((event) => !ours(event).some((entry) => isCurrent(event, entry)));
-  return { installed: missing.length === 0, outdated: events.length > 0 && missing.length > 0, missing, events, settingsPath, notifyPath };
+  return { installed: missing.length === 0, outdated: events.length > 0 && missing.length > 0, missing, events, settingsPath, notifyPath, permissionTimeout };
 }
 
 function install(settings) {

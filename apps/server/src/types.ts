@@ -6,6 +6,7 @@ export const HOOK_KINDS = [
   "stop",
   "stop_failure",
   "permission_request",
+  "tool_done",
   "session_end",
   "subagent_start",
   "subagent_stop",

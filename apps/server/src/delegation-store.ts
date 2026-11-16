@@ -28,12 +28,17 @@ import type {
   WidgetSettings,
   LimitsSettings,
   UsageSettings,
+  ApprovalsSettings,
   UiLayoutPrefs,
   UiPrefs,
   UiPrefsPatch,
   UiSidebarPrefs,
 } from "./delegation-types.js";
 import {
+  APPROVAL_WINDOW_MAX,
+  APPROVAL_WINDOW_MIN,
+  CLAUDE_APPROVAL_WINDOW_DEFAULT,
+  CODEX_APPROVAL_WINDOW_DEFAULT,
   PLUGIN_FEATURE_KEYS,
   FOCUS_SOURCES,
   parseAutonomy,
@@ -453,6 +458,10 @@ export function getSettings(): DelegationSettings {
     usage: {
       days: storedInt(stored, "usage.days", USAGE_DAYS_MIN, USAGE_DAYS_MAX, USAGE_DAYS_DEFAULT),
     },
+    approvals: {
+      claudeWindowSec: storedInt(stored, "approvals.claudeWindowSec", APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CLAUDE_APPROVAL_WINDOW_DEFAULT),
+      codexWindowSec: storedInt(stored, "approvals.codexWindowSec", APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CODEX_APPROVAL_WINDOW_DEFAULT),
+    },
   };
 }
 
@@ -612,6 +621,7 @@ export interface UpdateSettingsInput {
   widget?: Partial<Omit<WidgetSettings, "rings">> & { rings?: Partial<WidgetSettings["rings"]> };
   limits?: Partial<LimitsSettings>;
   usage?: Partial<UsageSettings>;
+  approvals?: Partial<ApprovalsSettings>;
 }
 
 export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
@@ -679,6 +689,12 @@ export function updateSettings(patch: UpdateSettingsInput): DelegationSettings {
     }
     if (patch.usage?.days !== undefined) {
       upsertSettingStmt.run("usage.days", String(clampInt(patch.usage.days, USAGE_DAYS_MIN, USAGE_DAYS_MAX, USAGE_DAYS_DEFAULT)));
+    }
+    if (patch.approvals?.claudeWindowSec !== undefined) {
+      upsertSettingStmt.run("approvals.claudeWindowSec", String(clampInt(patch.approvals.claudeWindowSec, APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CLAUDE_APPROVAL_WINDOW_DEFAULT)));
+    }
+    if (patch.approvals?.codexWindowSec !== undefined) {
+      upsertSettingStmt.run("approvals.codexWindowSec", String(clampInt(patch.approvals.codexWindowSec, APPROVAL_WINDOW_MIN, APPROVAL_WINDOW_MAX, CODEX_APPROVAL_WINDOW_DEFAULT)));
     }
   });
   apply();

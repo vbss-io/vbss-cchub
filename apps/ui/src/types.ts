@@ -144,7 +144,66 @@ export interface HooksStatus {
   events: string[];
   settingsPath?: string;
   notifyPath?: string;
+  permissionTimeout?: number;
   wsl?: WslHookStatus[];
+}
+
+export type PermissionAgent = "claude" | "codex";
+
+export type PermissionOutcome = "allow" | "deny" | "expired" | "superseded" | "withdrawn";
+
+export interface PermissionRequestRecord {
+  id: string;
+  agent: PermissionAgent;
+  sessionId: string;
+  agentId: string | null;
+  toolName: string;
+  toolInput: unknown;
+  cwd: string | null;
+  turnId: string | null;
+  title: string | null;
+  windowMs: number;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface PermissionResolved {
+  id: string;
+  agent: PermissionAgent;
+  sessionId: string;
+  outcome: PermissionOutcome;
+  at: number;
+}
+
+export interface PermissionDecisionResult {
+  ok: boolean;
+  request: PermissionRequestRecord | null;
+}
+
+export interface ApprovalsSettings {
+  claudeWindowSec: number;
+  codexWindowSec: number;
+}
+
+export interface CodexHooksStatus {
+  path: string;
+  exists: boolean;
+  installed: boolean;
+  updateAvailable: boolean;
+  events: string[];
+  missing: string[];
+  backupPath: string;
+  hasBackup: boolean;
+  error: string | null;
+  trustNote: string;
+}
+
+export interface OpenSessionResult {
+  ok: boolean;
+  method: "deep-link" | "focus";
+  url?: string;
+  reason?: string;
+  focused?: boolean;
 }
 
 export interface RunEventMessage {

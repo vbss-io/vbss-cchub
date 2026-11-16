@@ -2,11 +2,12 @@ import { Router } from "express";
 import { getSession, sessionByPid } from "./db.js";
 import { broadcast } from "./sse.js";
 import { runtimeSnapshot } from "./runtimes.js";
-import { archiveTask, clearTaskWorktreePath, getTask, getTaskDetail, listTaskEvents, listTasks, markTaskMerged, TaskBusyError, unarchiveTask, setTaskOrigin, listTasksByOrigin, resolveTaskId } from "./delegation-store.js";
+import { listCodexRunLinks, archiveTask, clearTaskWorktreePath, getTask, getTaskDetail, listTaskEvents, listTasks, markTaskMerged, TaskBusyError, unarchiveTask, setTaskOrigin, listTasksByOrigin, resolveTaskId } from "./delegation-store.js";
 import { abortRun, delegateTask, startRun, repoPathOf } from "./delegation-launch.js";
 import { discardTaskWorktree, mergeTaskWorktree, worktreeStatus } from "./worktrees.js";
 import { CODEX_SANDBOXES, ISOLATION_MODES, ORIGIN_CLIENTS, PERMISSION_MODES, RUNNERS, TASK_STATUSES, type CodexSandbox, type Isolation, type OriginClient, type PermissionMode, type RunKind, type Runner, type TaskStatus } from "./delegation-types.js";
 import { isDirectory } from "./workspaces.js";
+import { openElsewhere } from "./codex-live.js";
 import { asString, oneOf, sendError, taskJson } from "./route-helpers.js";
 
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
@@ -205,6 +206,47 @@ export function tasksRouter(): Router {
     } catch (err) {
       if (err instanceof TaskBusyError) {
         res.status(409).json({ error: "task already running" });
+        return;
+      }
+      throw err;
+    }
+    res.status(201).json(getTaskDetail(task.id));
+  });
+
+  router.post("/codex/:id/reply", (req, res) => {
+    const body = req.body as Record<string, unknown>;
+    const link = listCodexRunLinks().find((item) => item.threadId === req.params.id);
+    if (!link) {
+      res.status(409).json({ error: "this Codex thread was not started by the hub; replying from here could put two writers on one thread, use Open session instead", code: "not-hub-thread" });
+      return;
+    }
+    const task = getTask(link.taskId);
+    if (!task) {
+      res.status(404).json({ error: "task not found" });
+      return;
+    }
+    if (task.runner !== "codex" || task.sessionId !== req.params.id) {
+      res.status(409).json({ error: "this thread is no longer the task's current Codex thread", code: "not-current-thread" });
+      return;
+    }
+    if (openElsewhere(req.params.id)) {
+      res.status(409).json({ error: "this thread is open in the Codex app or CLI; reply there with Open session", code: "open-elsewhere" });
+      return;
+    }
+    const prompt = asString(body.text);
+    if (!prompt) {
+      res.status(400).json({ error: "text required" });
+      return;
+    }
+    if (!isDirectory(task.cwd)) {
+      res.status(400).json({ error: `working directory no longer exists: ${task.cwd}` });
+      return;
+    }
+    try {
+      startRun(task, "continue", prompt, task.requestedModel, task.permissionMode);
+    } catch (err) {
+      if (err instanceof TaskBusyError) {
+        res.status(409).json({ error: "task already running", code: "busy" });
         return;
       }
       throw err;

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { config } from "./config.js";
+import { getSettings } from "./delegation-store.js";
 
 const run = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -84,6 +85,7 @@ async function configureWsl(action: HookAction, distro: string): Promise<WslResu
       "sh",
       "--source",
       `wsl-${distro}`,
+      ...permissionArgs(),
     ]);
     return { distro, installed: result.installed === true, outdated: result.outdated === true };
   } catch (error) {
@@ -91,8 +93,17 @@ async function configureWsl(action: HookAction, distro: string): Promise<WslResu
   }
 }
 
+export const PERMISSION_HOOK_MARGIN_SEC = 30;
+export const PERMISSION_HOOK_OFF_TIMEOUT_SEC = 10;
+
+export function permissionHookTimeoutSec(windowSec: number): number {
+  return windowSec > 0 ? windowSec + PERMISSION_HOOK_MARGIN_SEC : PERMISSION_HOOK_OFF_TIMEOUT_SEC;
+}
+
+const permissionArgs = (): string[] => ["--permission-timeout", String(permissionHookTimeoutSec(getSettings().approvals.claudeWindowSec))];
+
 export async function windowsHooks(action: HookAction): Promise<Record<string, unknown>> {
-  return configure(action, config.resourceDir ? ["--runner", config.nodeBin] : []);
+  return configure(action, [...(config.resourceDir ? ["--runner", config.nodeBin] : []), ...permissionArgs()]);
 }
 
 export async function wslHooks(action: HookAction): Promise<WslResult[]> {
