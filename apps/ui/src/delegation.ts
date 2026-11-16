@@ -589,6 +589,7 @@ export interface TodayEntry {
   task: BoardTask;
   project: { id: string; title: string; name: string };
   parentTitle: string | null;
+  visibleSubtasks?: string[];
 }
 
 export interface TodayCapture {
@@ -722,6 +723,36 @@ export const reorderFocus = (date: string, input: TodayReorderInput): Promise<{ 
 export const clearToday = (date: string): Promise<TodayClearResult> => call("POST", todayPath(date, "clear"));
 
 export const undoClearToday = (date: string, token: string): Promise<{ restored: true }> => call("POST", todayPath(date, "clear/undo"), { token });
+
+export interface TodaySubtaskOption {
+  id: string;
+  projectId: string;
+  line: number;
+  raw: string;
+  title: string;
+  status: BoardStatus;
+  scheduled: string | null;
+  planned: boolean;
+  inToday: boolean;
+  duplicate: boolean;
+}
+
+export interface TodaySubtaskOptions {
+  parentId: string;
+  subtasks: TodaySubtaskOption[];
+}
+
+export interface TodayPlanSubtaskInput {
+  projectId: string;
+  line: number;
+  raw: string;
+  planned: boolean;
+}
+
+export const getTodaySubtasks = (date: string, projectId: string, line: number): Promise<TodaySubtaskOptions> =>
+  call("GET", `${todayPath(date, "subtasks")}?projectId=${encodeURIComponent(projectId)}&line=${line}`);
+
+export const planTodaySubtask = (date: string, input: TodayPlanSubtaskInput): Promise<TodaySubtaskOptions> => call("POST", todayPath(date, "subtasks"), input);
 
 export const listWorkspaces = (): Promise<WorkspaceRecord[]> => call("GET", "/workspaces");
 

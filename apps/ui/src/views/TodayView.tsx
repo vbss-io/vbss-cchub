@@ -12,6 +12,7 @@ import { FocusOutliner, type OutlineFields } from "../components/FocusOutliner";
 import { ResizableSplit } from "../components/ResizableSplit";
 import { DaySummaryDialog } from "../components/DaySummaryDialog";
 import { StartDayPanel } from "../components/StartDayPanel";
+import { TodaySubtaskPicker, type SubtaskPickerTarget } from "../components/TodaySubtaskPicker";
 import { Toggletip } from "../components/Toggletip";
 import {
   collapseAllFocus,
@@ -126,6 +127,7 @@ import {
   CLEAR_UNDO_MS,
   clearedNotice,
   movesInNote,
+  subtaskPlansOf,
   type LinkTarget,
   type PickerTask,
 } from "../today-model";
@@ -1103,6 +1105,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const [kept, setKept] = useState<string[]>(() => parseDismissedOutOfSync(readStored(KEPT_TASKS_KEY)));
   const [confirmClear, setConfirmClear] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [subtaskPicker, setSubtaskPicker] = useState<SubtaskPickerTarget | null>(null);
   const [clearUndo, setClearUndo] = useState<ClearUndo | null>(null);
   const narrow = useNarrow();
 
@@ -1226,6 +1229,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const sections = useMemo(() => (data === null ? null : noteSections(data, boardTasks, projects)), [data, boardTasks, projects]);
   const outOfSync = visibleOutOfSync(data?.outOfSync, kept);
   const groups: OutlineGroup[] = useMemo(() => outlineGroupsOf(focus), [focus]);
+  const subtaskPlans = useMemo(() => subtaskPlansOf(focus), [focus]);
   const focusIds = useMemo(() => entryTaskIds(focus), [focus]);
   const excluded = useMemo(() => entryTaskIds(carried), [carried]);
   const openTasks = useMemo(() => flattenBoardTasks(boardTasks).filter(isFocusable), [boardTasks]);
@@ -1899,6 +1903,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                     collapse={collapse}
                     onCollapseChange={setCollapse}
                     onAddToProject={canAddFromToday ? addFromToday : undefined}
+                    subtaskPlan={(node) => subtaskPlans.get(node.id) ?? null}
+                    onPlanSubtasks={noteActions ? (node) => setSubtaskPicker({ projectId: node.projectId, line: node.line, title: node.title }) : undefined}
                   />
                 )}
               </section>
@@ -2057,6 +2063,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
       )}
 
       {summaryOpen && <DaySummaryDialog date={date} onClose={() => setSummaryOpen(false)} onNotice={onNotice} />}
+      {subtaskPicker !== null && <TodaySubtaskPicker date={date} target={subtaskPicker} onClose={() => setSubtaskPicker(null)} onChanged={() => void refresh()} />}
 
       {confirmClear && (
         <ConfirmDialog

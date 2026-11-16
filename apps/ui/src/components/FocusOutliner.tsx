@@ -60,6 +60,8 @@ export interface FocusOutlinerProps {
   collapse?: FocusCollapse;
   onCollapseChange?: (next: FocusCollapse) => void;
   onAddToProject?: (projectId: string, text: string) => Promise<void>;
+  subtaskPlan?: (node: OutlineNode) => { open: number; hidden: number } | null;
+  onPlanSubtasks?: (node: OutlineNode) => void;
 }
 
 interface AddState {
@@ -165,6 +167,8 @@ export function FocusOutliner({
   collapse = EXPANDED,
   onCollapseChange,
   onAddToProject,
+  subtaskPlan,
+  onPlanSubtasks,
 }: FocusOutlinerProps) {
   const shown = useMemo(() => visibleFocusGroups(groups, collapse), [groups, collapse]);
   const flat = useMemo(() => flattenVisible(shown), [shown]);
@@ -629,6 +633,7 @@ export function FocusOutliner({
     const done = node.status === "done";
     const state = checkState(node.status);
     const checkLabel = done ? `Reopen ${node.title}` : state === "mixed" ? `Complete ${node.title} (in progress)` : `Complete ${node.title}`;
+    const plan = onPlanSubtasks === undefined || subtaskPlan === undefined ? null : subtaskPlan(node);
     const full = fullOf(node);
     const expandable = hasHiddenContent(full);
     const collapsed = expandable && isTaskCollapsed(collapse, full);
@@ -701,6 +706,18 @@ export function FocusOutliner({
               {collapsed && <span className="outliner__hidden">{hiddenSummary(full)}</span>}
             </span>
           )}
+          {!isEditing && plan !== null && plan.hidden > 0 && (
+            <button
+              type="button"
+              className="outliner__plan"
+              tabIndex={-1}
+              title="Plan subtasks"
+              aria-label={`Plan subtasks of ${node.title}, ${plan.hidden} not in this day`}
+              onClick={() => onPlanSubtasks?.(node)}
+            >
+              +{plan.hidden}
+            </button>
+          )}
           {!isEditing && renderChips(node)}
           <button
             type="button"
@@ -735,6 +752,19 @@ export function FocusOutliner({
                 {action.label}
               </button>
             ))}
+            {plan !== null && plan.open > 0 && (
+              <button
+                type="button"
+                role="menuitem"
+                className="outliner__menuitem"
+                onClick={() => {
+                  setMenuId(null);
+                  onPlanSubtasks?.(node);
+                }}
+              >
+                Plan subtasks
+              </button>
+            )}
           </div>
         )}
         {isEditing && (

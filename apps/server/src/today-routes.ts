@@ -71,6 +71,30 @@ export function todayRouter(): Router {
     }
   });
 
+  router.get("/:date/subtasks", (req, res) => {
+    try {
+      const date = dateOf(req.params.date);
+      const projectId = req.query.projectId;
+      const line = typeof req.query.line === "string" && /^\d+$/.test(req.query.line) ? Number(req.query.line) : null;
+      if (typeof projectId !== "string" || projectId === "") throw new BadRequestError("projectId required");
+      if (line === null) throw new BadRequestError("line must be a non-negative integer");
+      res.json(todayApi.subtaskOptions(getSettings(), date, { projectId, line }));
+    } catch (err) {
+      sendTodayError(res, err);
+    }
+  });
+
+  router.post("/:date/subtasks", (req, res) => {
+    try {
+      const date = dateOf(req.params.date);
+      const body = (req.body ?? {}) as Body;
+      if (typeof body.planned !== "boolean") throw new BadRequestError("planned must be a boolean");
+      res.json(todayApi.planSubtask(getSettings(), date, { projectId: requireString(body, "projectId"), line: requireLine(body), raw: requireString(body, "raw"), planned: body.planned }));
+    } catch (err) {
+      sendTodayError(res, err);
+    }
+  });
+
   router.post("/:date/reorder", (req, res) => {
     try {
       const date = dateOf(req.params.date);
