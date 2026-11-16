@@ -26,6 +26,7 @@ const TABS_BEFORE_PLUGIN_PAGES: SettingsTabEntry[] = [
 ];
 
 const TABS_AFTER_PLUGIN_PAGES: SettingsTabEntry[] = [
+  { key: "memory", label: "Memory" },
   { key: "connections", label: "Connections" },
   { key: "notifications", label: "Notifications" },
   { key: "groups", label: "Groups" },
@@ -71,6 +72,7 @@ export const SETTINGS_TAB_KEYWORDS: Readonly<Record<string, string[]>> = {
   "plugin-limits": ["usage", "quota", "tokens", "plugin"],
   "plugin-widget": ["tray", "overlay", "edge", "rings", "plugin"],
   "plugin-share": ["share", "sharing", "ngrok", "tunnel", "identity", "plugin"],
+  memory: ["history", "search", "index", "rebuild", "clear", "day summary", "heading", "handoff", "context", "new sessions"],
   connections: ["hooks", "mcp", "shell", "alias", "wk", "claude code", "codex", "approvals", "permission", "allow", "deny", "codex hooks"],
   notifications: ["alerts", "toast", "sound"],
   groups: ["sessions", "workspace"],

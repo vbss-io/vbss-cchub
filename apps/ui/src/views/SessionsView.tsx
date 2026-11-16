@@ -158,6 +158,7 @@ interface Props {
   mode: SessionsMode;
   modeSwitch?: ReactNode;
   renderMap?: (controls: MapControls) => ReactNode;
+  renderSearch?: () => ReactNode;
   tick: number;
   onOrigin: (origin: Origin) => void;
   onOpen: (sessionId: string) => void;
@@ -196,6 +197,7 @@ export function SessionsView({
   mode,
   modeSwitch,
   renderMap,
+  renderSearch,
   tick,
   onOrigin,
   onOpen,
@@ -508,7 +510,7 @@ export function SessionsView({
       <strong>Origin</strong> picks what runs here: Claude Code sessions, Codex threads{delegatedEnabled ? " or work delegated to the hub" : ""}.{" "}
       {delegatedEnabled && "A delegated task folds the hub session that runs it. "}
       {delegatedEnabled ? "Hub runs are headless sessions launched by delegated tasks" : "Hub runs are headless sessions the hub launches"}; they never notify and stay out of All. Share forks answer people through your share links. Codex threads are read from
-      ~/.codex/sessions and are read-only here. Client and sort live under Filters.{modeSwitch ? " List and Flow show the same runs as cards or as a live graph." : ""}
+      ~/.codex/sessions and are read-only here. Client and sort live under Filters.{renderMap ? " List and Flow show the same runs as cards or as a live graph." : ""}
     </>
   );
 
@@ -516,10 +518,12 @@ export function SessionsView({
   const emptyLabel = origin === "codex" ? "Codex threads" : origin === "delegated" ? "delegated tasks" : origin === "claude" ? "Claude sessions" : "sessions";
 
   const mapMode = mode === "map" && renderMap !== undefined;
+  const searchMode = mode === "search" && renderSearch !== undefined;
 
   return (
     <div className={`view view--runs ${mapMode ? "view--runs-map" : ""}`}>
       <div className="runs-head">
+        {!searchMode && (
         <div className="runs-origin" role="group" aria-label="Origin">
           {originOptions(delegatedEnabled).map((key) => (
             <button
@@ -536,8 +540,9 @@ export function SessionsView({
             </button>
           ))}
         </div>
+        )}
         <div className="runs-head__right">
-          {!mapMode && (
+          {!mapMode && !searchMode && (
             <Toggletip label="About this view" align="end">
               {help}
             </Toggletip>
@@ -548,7 +553,9 @@ export function SessionsView({
 
       {mapMode && renderMap({ query, onQuery: setQuery, origin })}
 
-      {!mapMode && (
+      {searchMode && renderSearch()}
+
+      {!mapMode && !searchMode && (
       <>
       <div className="toolbar runs-toolbar">
         <div className="filters">

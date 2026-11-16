@@ -1,6 +1,7 @@
 import type { BoardProject, BoardTask, WorkspaceRecord } from "./delegation";
 import type { PaletteItem } from "./palette-model";
-import type { CodexSessionRecord, SessionRecord } from "./types";
+import { hitDetail, hitHeadline } from "./memory-model";
+import type { CodexSessionRecord, HistoryHit, SessionRecord } from "./types";
 import { SETTINGS_TAB_KEYWORDS, type SettingsTabEntry } from "./settings-model";
 import { settingsTabs } from "./settings-sections";
 import { shortFolder, workspaceOf } from "./wsmatch";
@@ -213,3 +214,13 @@ export const buildCaptureItems = (query: string, capture: (text: string) => void
   if (!text) return [];
   return [{ id: "capture:new", kind: "command", title: `Capture: ${text}`, subtitle: "Adds to today's captures", run: () => capture(text) }];
 };
+
+export const buildHistoryItems = (hits: HistoryHit[], workspaces: WorkspaceRecord[], open: (hit: HistoryHit) => void): PaletteItem[] =>
+  hits.map((hit) => ({
+    id: `history:${hit.messageId}`,
+    kind: "history",
+    title: hit.snippet,
+    titleRanges: hit.highlights,
+    subtitle: `${hitHeadline(hit, workspaceOf(workspaces, hit.cwd))} · ${hitDetail(hit)}`,
+    run: () => open(hit),
+  }));

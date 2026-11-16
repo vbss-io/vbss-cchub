@@ -120,6 +120,7 @@ describe("server plugin registry", () => {
         "/delegation/usage",
         "/delegation/limits",
         "/delegation/backups",
+        "/delegation/memory",
         "/delegation/today",
       ],
     );

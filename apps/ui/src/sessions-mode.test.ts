@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { SESSIONS_MODES, mapScope, mapSummaryLine, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, sessionsModeRouteOf, sessionsSubtitle } from "./sessions-mode";
+import { SESSIONS_MODES, sessionsModeOptions, mapScope, mapSummaryLine, navClickMode, navCurrentKey, parseSessionsMode, resolveSessionsMode, sessionsModeRouteOf, sessionsSubtitle } from "./sessions-mode";
 
 describe("parseSessionsMode", () => {
-  it("reads map and falls back to list for anything else", () => {
+  it("reads map and search and falls back to list for anything else", () => {
     assert.equal(parseSessionsMode("map"), "map");
+    assert.equal(parseSessionsMode("search"), "search");
     assert.equal(parseSessionsMode("list"), "list");
     assert.equal(parseSessionsMode(null), "list");
     assert.equal(parseSessionsMode(undefined), "list");
@@ -16,6 +17,11 @@ describe("resolveSessionsMode", () => {
   it("keeps the remembered mode while the Flow plugin is on", () => {
     assert.equal(resolveSessionsMode("map", true), "map");
     assert.equal(resolveSessionsMode("list", true), "list");
+  });
+
+  it("keeps Search whether or not the Flow plugin is on", () => {
+    assert.equal(resolveSessionsMode("search", true), "search");
+    assert.equal(resolveSessionsMode("search", false), "search");
   });
 
   it("falls back to the list when the Flow plugin is off", () => {
@@ -116,14 +122,19 @@ describe("navClickMode for Delegated", () => {
 });
 
 describe("SESSIONS_MODES", () => {
-  it("labels the switch List | Flow, never Map", () => {
+  it("labels the switch List | Flow | Search, never Map", () => {
     assert.deepEqual(
       SESSIONS_MODES.map((mode) => mode.label),
-      ["List", "Flow"],
+      ["List", "Flow", "Search"],
     );
     assert.deepEqual(
       SESSIONS_MODES.map((mode) => mode.key),
-      ["list", "map"],
+      ["list", "map", "search"],
     );
+  });
+
+  it("hides Flow from the switch while the Flow plugin is off but keeps Search", () => {
+    assert.deepEqual(sessionsModeOptions(false).map((mode) => mode.key), ["list", "search"]);
+    assert.deepEqual(sessionsModeOptions(true).map((mode) => mode.key), ["list", "map", "search"]);
   });
 });

@@ -115,6 +115,7 @@ function settingsFor(root: string): DelegationSettings {
     limits: { claude: false, codex: false, codexLive: false, refreshMinutes: 5 },
     usage: { days: 7 },
     approvals: { claudeWindowSec: 300, codexWindowSec: 20 },
+    memory: { historyIndex: true, handoffWorkspaces: [], summaryHeading: "Day summary" },
   };
 }
 

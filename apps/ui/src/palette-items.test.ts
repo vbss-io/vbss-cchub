@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { BoardProject, BoardTask, WorkspaceRecord } from "./delegation";
-import { buildCaptureItems, buildCommandItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, CAPTURE_PREFILL, PALETTE_SESSION_CAP, parseCaptureQuery, type SessionActions } from "./palette-items";
+import { buildCaptureItems, buildCommandItems, buildHistoryItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, CAPTURE_PREFILL, PALETTE_SESSION_CAP, parseCaptureQuery, type SessionActions } from "./palette-items";
 import { settingsTabs } from "./settings-sections";
-import type { CodexSessionRecord, SessionRecord } from "./types";
+import type { CodexSessionRecord, HistoryHit, SessionRecord } from "./types";
 
 const ids = (items: { id: string }[]) => items.map((entry) => entry.id);
 
@@ -90,7 +90,7 @@ describe("buildViewItems", () => {
     assert.deepEqual(ids(items).slice(0, 2), ["view:sessions", "view:settings"]);
     assert.deepEqual(
       ids(items).filter((id) => id.startsWith("settings:")),
-      ["settings:general", "settings:appearance", "settings:plugins", "settings:plugin-sessions", "settings:plugin-today", "settings:connections", "settings:notifications", "settings:groups", "settings:about"],
+      ["settings:general", "settings:appearance", "settings:plugins", "settings:plugin-sessions", "settings:plugin-today", "settings:memory", "settings:connections", "settings:notifications", "settings:groups", "settings:about"],
     );
     assert.equal(items.every((entry) => entry.kind === "view"), true);
   });
@@ -305,5 +305,41 @@ describe("capture", () => {
     assert.equal(items[0]?.title, "Capture: ring the bank");
     items[0]?.run();
     assert.deepEqual(sent, ["ring the bank"]);
+  });
+});
+
+describe("buildHistoryItems", () => {
+  const hit = (extra: Partial<HistoryHit> = {}): HistoryHit => ({
+    messageId: 7,
+    sessionId: "s7",
+    client: "codex",
+    title: "Fix login",
+    cwd: "C:/repos/api",
+    workspace: "C:/repos/api",
+    role: "assistant",
+    at: new Date(2026, 10, 15, 9, 5).getTime(),
+    seq: 3,
+    snippet: "…the login redirect",
+    highlights: [[5, 10]],
+    matches: 1,
+    ...extra,
+  });
+  const space: WorkspaceRecord = { name: "shop", file: "x", contextPath: null, repos: [{ name: "api", path: "C:/repos/api" }], error: null };
+
+  it("turns each hit into a History item with its highlights and a readable subtitle", () => {
+    const opened: string[] = [];
+    const [item] = buildHistoryItems([hit()], [space], (value) => opened.push(value.sessionId ?? ""));
+    assert.equal(item?.id, "history:7");
+    assert.equal(item?.kind, "history");
+    assert.equal(item?.title, "…the login redirect");
+    assert.deepEqual(item?.titleRanges, [[5, 10]]);
+    assert.equal(item?.subtitle, "Codex · Fix login · shop · Assistant · 2026-11-15 09:05");
+    item?.run();
+    assert.deepEqual(opened, ["s7"]);
+  });
+
+  it("works without a title, a workspace or a date", () => {
+    const [item] = buildHistoryItems([hit({ title: null, cwd: null, at: null, role: "user" })], [], () => undefined);
+    assert.equal(item?.subtitle, "Codex · session s7 · You");
   });
 });

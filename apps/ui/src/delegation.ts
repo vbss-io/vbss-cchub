@@ -2,7 +2,7 @@ import { hubBase } from "./api";
 import type { HubPluginInfo } from "./agent-tools";
 import { usageResponseState } from "./usage-format";
 import { emptyUiPrefs, normalizeUiPrefs } from "./plugins/ui-prefs";
-import type { ApprovalsSettings, CodexHooksStatus } from "./types";
+import type { ApprovalsSettings, CodexHooksStatus, MemorySettings } from "./types";
 
 const base = `${hubBase}/delegation`;
 
@@ -159,6 +159,7 @@ export interface DelegationSettings {
   limits: LimitsSettings;
   usage: UsageSettings;
   approvals: ApprovalsSettings;
+  memory: MemorySettings;
 }
 
 export interface TaskRecord {
@@ -295,7 +296,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return json as T;
 }
 
-export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily" | "tasks" | "trail" | "widget" | "limits" | "usage" | "approvals">> & {
+export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily" | "tasks" | "trail" | "widget" | "limits" | "usage" | "approvals" | "memory">> & {
   features?: Partial<DelegationSettings["features"]>;
   tasks?: Partial<Omit<TasksFeatureSettings, "prefixes">> & { prefixes?: Partial<TasksPrefixes> };
   daily?: Partial<Omit<DailySettings, "headings">> & { headings?: Partial<DailyHeadings> };
@@ -304,6 +305,7 @@ export type SettingsPatch = Partial<Omit<DelegationSettings, "features" | "daily
   limits?: Partial<LimitsSettings>;
   usage?: Partial<UsageSettings>;
   approvals?: Partial<ApprovalsSettings>;
+  memory?: Partial<MemorySettings>;
 };
 
 export interface ClaudeLimitWindow {

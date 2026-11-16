@@ -297,7 +297,26 @@ function officialDecision(decision) {
   return typeof decision.message === "string" && decision.message.length > 0 ? { behavior: "deny", message: decision.message } : { behavior: "deny" };
 }
 
+const HANDOFF_TIMEOUT_MS = 800;
+const HANDOFF_MAX_CHARS = 1500;
+const wantsHandoff = kind === "session_start" && input.source === "startup" && typeof input.cwd === "string" && !isHeadless && !shareLabel && process.env.HUB_DELEGATED !== "1";
+
+async function emitHandoff() {
+  if (!wantsHandoff) return;
+  try {
+    const query = `cwd=${encodeURIComponent(input.cwd)}&sessionId=${encodeURIComponent(sessionId)}`;
+    const res = await fetch(`http://${HOST}:${PORT}/delegation/memory/handoff/hook?${query}`, { signal: AbortSignal.timeout(HANDOFF_TIMEOUT_MS) });
+    if (!res.ok) return;
+    const out = await res.json();
+    const text = out && typeof out.text === "string" ? out.text.slice(0, HANDOFF_MAX_CHARS) : "";
+    if (text.trim()) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } }));
+  } catch {
+    return;
+  }
+}
+
 async function decideAndExit(observed) {
+  await emitHandoff();
   if (mayDecide && observed) {
     const decision = officialDecision(await askHub());
     if (decision) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PermissionRequest", decision } }));

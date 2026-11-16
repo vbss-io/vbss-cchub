@@ -108,6 +108,7 @@ describe("hub surface", () => {
       limits: { claude: false, codex: false, codexLive: false, refreshMinutes: 5 },
       usage: { days: 7 },
       approvals: { claudeWindowSec: 300, codexWindowSec: 20 },
+      memory: { historyIndex: true, handoffWorkspaces: [], summaryHeading: "Day summary" },
     });
     assert.equal((await http("PUT", "/delegation/settings", { body: { workspacesRoot: join(box.tmp, "nope") } })).status, 400);
     const saved = await http("PUT", "/delegation/settings", { body: { workspacesRoot: box.root, secondBrainRoot: box.brain } });

@@ -56,6 +56,7 @@ import { markCodexRolloutAfterRun } from "./codex-rollout-mark.js";
 import { watchDaily } from "./daily.js";
 import { watchTasksBoard } from "./tasks-board.js";
 import { runStartupMirror } from "./today.js";
+import { startHistoryIndexer, stopHistoryIndexer } from "./history-index.js";
 import { createShareApp } from "./share-server.js";
 import { deleteOrphanShareForks, limitOf, listAsksForSession, listForksForSession, markInterruptedShareRequests } from "./share-store.js";
 import { markShareEndpoint, stopTunnel } from "./tunnel.js";
@@ -714,6 +715,7 @@ app.listen(config.port, config.host, () => {
     runStartupMirror(settings);
     startLimitsPolling(settings);
     if (settings.features.usage) setTimeout(warmUsage, USAGE_WARMUP_DELAY_MS).unref();
+    startHistoryIndexer();
     onBroadcast((event) => {
       if (event === "settings") startLimitsPolling(getSettings());
     });
@@ -722,6 +724,7 @@ app.listen(config.port, config.host, () => {
 
 function shutdown(reason: string): void {
   stopTunnel();
+  stopHistoryIndexer();
   stopLimitsPolling();
   abortAllAsks(reason);
   abortActiveRuns(reason);

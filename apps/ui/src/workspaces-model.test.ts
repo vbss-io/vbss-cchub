@@ -61,9 +61,14 @@ describe("contextLabel", () => {
 describe("workspaceMenuEntries", () => {
   it("offers edit repos and a danger delete", () => {
     const entries = workspaceMenuEntries(false);
-    assert.deepEqual(entries.map((entry) => entry.key), ["edit", "delete"]);
+    assert.deepEqual(entries.map((entry) => entry.key), ["edit", "context", "delete"]);
     assert.equal(entries[0]?.label, "Edit repos");
-    assert.equal(entries[1]?.danger, true);
+    assert.equal(entries[2]?.danger, true);
+  });
+
+  it("labels the session context entry as a close while its panel is open", () => {
+    assert.equal(workspaceMenuEntries(false)[1]?.label, "Session context");
+    assert.equal(workspaceMenuEntries(false, true)[1]?.label, "Close session context");
   });
 
   it("labels the edit entry as a close while the editor is open", () => {
