@@ -305,7 +305,7 @@ export function BacklogPanel({ tasks, projects, projectOrder, excluded, inToday 
                   <span className="backlog__body">
                     <span className="backlog__main">
                       {task.status === "doing" && <span className="statusmark statusmark--doing" role="img" aria-label="In progress" title="In progress" />}
-                      <span className="backlog__title" onClick={() => onOpen(task)}>
+                      <span className="backlog__title" title={task.title} onClick={() => onOpen(task)}>
                         <InlineText text={task.title} />
                       </span>
                     </span>

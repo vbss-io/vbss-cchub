@@ -1,21 +1,28 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactElement } from "react";
 import { fetchSessions, focusSession, reportUiDiag, reportUiError, requestNavigate, subscribe, type ToastCard } from "../api";
 import { ApprovalsProvider, useApprovalsStore, type ApprovalsStore } from "../approvals-context";
-import { approvalToastsOn, toastQueue } from "../approvals-model";
+import { approvalKind, approvalToastsOn, toastQueue } from "../approvals-model";
 import { sessionClient } from "../clients";
 import { getTask } from "../delegation";
 import { IconClose, IconSessions, IconShare, IconTasks } from "../icons";
 import { loadNotifEventConfig, type NotifEventKind } from "../notifications";
 import {
+  ageToasts,
+  hideBehindApprovals,
+  hoverAfter,
+  pruneToasts,
   sessionToastContext,
   taskToastContext,
-  TOAST_ATTENTION_MS,
+  TOAST_AUTO_MS,
   TOAST_LOOK,
   toastLifetime,
   toastStack,
   toastTarget,
   toastView,
+  toastWaitsOnReason,
+  upsertToast,
   type ToastContext,
+  type ToastFact,
   type ToastSource,
 } from "../toast-model";
 import type { PermissionRequestRecord, SessionRecord } from "../types";
@@ -37,7 +44,7 @@ const SOURCE_ICON: Readonly<Record<ToastSource, () => ReactElement>> = {
 
 interface Card extends ToastCard {
   key: number;
-  lifetime: number;
+  lifetime: number | null;
   elapsed: number;
   context: ToastContext | null;
 }
@@ -53,16 +60,29 @@ const logToaster = (step: string, err: unknown): void => {
   void reportUiError("toaster", err instanceof Error ? new Error(`${step}: ${err.message}`) : new Error(`${step}: ${String(err)}`), null);
 };
 
-async function applyWindow(count: number, height: number): Promise<void> {
+async function applyWindow(count: number, height: number, keyboard: boolean): Promise<void> {
   if (!inTauri()) return;
   try {
-    await applyWindowUnsafe(count, height);
+    await applyWindowUnsafe(count, height, keyboard);
   } catch (err) {
     logToaster(count === 0 ? "hide" : "show", err);
   }
 }
 
-async function applyWindowUnsafe(count: number, height: number): Promise<void> {
+async function allowKeyboard(element: HTMLElement): Promise<void> {
+  if (!inTauri()) return;
+  try {
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
+    const win = getCurrentWindow();
+    await win.setFocusable(true);
+    await win.setFocus();
+    element.focus();
+  } catch (err) {
+    logToaster("keyboard", err);
+  }
+}
+
+async function applyWindowUnsafe(count: number, height: number, keyboard: boolean): Promise<void> {
   const { getCurrentWindow, currentMonitor } = await import("@tauri-apps/api/window");
   const win = getCurrentWindow();
   if (count === 0) {
@@ -93,7 +113,7 @@ async function applyWindowUnsafe(count: number, height: number): Promise<void> {
   await win.setPosition(new LogicalPosition(x, y));
   await win.setAlwaysOnTop(true);
   try {
-    await win.setFocusable(false);
+    await win.setFocusable(keyboard);
   } catch {
     /* older webview: focus:false in the window config already prevents focus steal */
   }
@@ -119,20 +139,28 @@ async function openTarget(kind: NotifEventKind, id: string): Promise<void> {
   await requestNavigate(hash);
 }
 
-async function sessionContext(id: string, cache: Map<string, SessionRecord>): Promise<ToastContext | null> {
-  if (!cache.has(id)) for (const session of await fetchSessions()) cache.set(session.sessionId, session);
-  const session = cache.get(id);
-  if (!session) return null;
-  const client = sessionClient(session);
-  return sessionToastContext(session, shortClientName(client), client.label);
+interface CardFacts {
+  context: ToastContext | null;
+  fact: ToastFact | null;
 }
 
-async function contextFor(toast: ToastCard, cache: Map<string, SessionRecord>): Promise<ToastContext | null> {
+async function sessionContext(id: string, cache: Map<string, SessionRecord>): Promise<CardFacts> {
+  if (!cache.has(id)) for (const session of await fetchSessions()) cache.set(session.sessionId, session);
+  const session = cache.get(id);
+  if (!session) return { context: null, fact: null };
+  const client = sessionClient(session);
+  return { context: sessionToastContext(session, shortClientName(client), client.label), fact: { type: "session", id, status: session.status } };
+}
+
+async function contextFor(toast: ToastCard, cache: Map<string, SessionRecord>): Promise<CardFacts> {
   const source = TOAST_LOOK[toast.kind].source;
   if (source === "session") return sessionContext(toast.id, cache);
-  if (source === "share") return null;
+  if (source === "share") return { context: null, fact: null };
   const { task } = await getTask(toast.id);
-  return taskToastContext({ workspace: task.workspace, cwd: task.cwd, runner: task.runner, isolation: task.isolation, branch: task.branch });
+  return {
+    context: taskToastContext({ workspace: task.workspace, cwd: task.cwd, runner: task.runner, isolation: task.isolation, branch: task.branch }),
+    fact: { type: "task", id: toast.id, status: task.status, archived: task.archivedAt != null },
+  };
 }
 
 export function Toaster(): ReactElement {
@@ -145,44 +173,108 @@ export function Toaster(): ReactElement {
 }
 
 function ToasterStack({ approvalsStore }: { approvalsStore: ApprovalsStore }): ReactElement {
-  const [cards, setCards] = useState<Card[]>([]);
+  const [cards, setCards] = useState<readonly Card[]>([]);
   const [dismissedApprovals, setDismissedApprovals] = useState<ReadonlySet<string>>(() => new Set());
   const approvalHandlers = approvalsStore.handlers;
   const [now, setNow] = useState(() => Date.now());
   const hoveringRef = useRef(false);
+  const shownCountRef = useRef(0);
+  const keyboardRef = useRef(false);
+  const cardsRef = useRef<readonly Card[]>([]);
+  cardsRef.current = cards;
   const seq = useRef(0);
   const stackRef = useRef<HTMLDivElement | null>(null);
   const applied = useRef<{ count: number; height: number }>({ count: -1, height: -1 });
   const sessionsRef = useRef(new Map<string, SessionRecord>());
 
-  const pushCard = useCallback((toast: ToastCard) => {
-    void reportUiDiag({ window: "toast", lastToast: toast.title, lastToastAt: new Date().toISOString() });
-    const key = seq.current++;
-    setCards((prev) => [...prev, { ...toast, key, lifetime: toastLifetime(toast.kind), elapsed: 0, context: null }]);
-    void contextFor(toast, sessionsRef.current)
-      .then((context) => {
-        if (context) setCards((prev) => prev.map((card) => (card.key === key ? { ...card, context } : card)));
-      })
-      .catch(() => undefined);
-  }, []);
+  const applyFact = useCallback((fact: ToastFact) => setCards((prev) => pruneToasts(prev, fact)), []);
 
-  const rememberSession = useCallback((session: SessionRecord) => {
-    sessionsRef.current.set(session.sessionId, session);
-  }, []);
+  const pushCard = useCallback(
+    (toast: ToastCard) => {
+      void reportUiDiag({ window: "toast", lastToast: toast.title, lastToastAt: new Date().toISOString() });
+      const key = seq.current++;
+      setCards((prev) => upsertToast(prev, { ...toast, key, lifetime: toastLifetime(toast.kind), elapsed: 0, context: null }));
+      void contextFor(toast, sessionsRef.current)
+        .then(({ context, fact }) => {
+          if (context) setCards((prev) => prev.map((card) => (card.key === key ? { ...card, context } : card)));
+          if (fact) applyFact(fact);
+        })
+        .catch(() => undefined);
+    },
+    [applyFact],
+  );
+
+  const rememberSession = useCallback(
+    (session: SessionRecord) => {
+      sessionsRef.current.set(session.sessionId, session);
+      applyFact({ type: "session", id: session.sessionId, status: session.status });
+    },
+    [applyFact],
+  );
+
+  const forgetSession = useCallback(
+    (sessionId: string) => {
+      sessionsRef.current.delete(sessionId);
+      applyFact({ type: "session", id: sessionId, status: null });
+    },
+    [applyFact],
+  );
+
+  const checkTask = useCallback(
+    (taskId: string) => {
+      if (!cardsRef.current.some((card) => card.id === taskId && TOAST_LOOK[card.kind].source === "task" && toastWaitsOnReason(card))) return;
+      void getTask(taskId)
+        .then(({ task }) => applyFact({ type: "task", id: taskId, status: task.status, archived: task.archivedAt != null }))
+        .catch(() => undefined);
+    },
+    [applyFact],
+  );
+
+  const revalidate = useCallback(() => {
+    const waiting = cardsRef.current.filter(toastWaitsOnReason);
+    if (waiting.some((card) => TOAST_LOOK[card.kind].source === "session")) {
+      void fetchSessions()
+        .then((list) => {
+          const byId = new Map(list.map((session) => [session.sessionId, session]));
+          for (const card of waiting) {
+            if (TOAST_LOOK[card.kind].source === "session") applyFact({ type: "session", id: card.id, status: byId.get(card.id)?.status ?? null });
+          }
+        })
+        .catch(() => undefined);
+    }
+    for (const card of waiting) if (TOAST_LOOK[card.kind].source === "task") checkTask(card.id);
+  }, [applyFact, checkTask]);
+
+  const onOpen = useCallback(() => {
+    approvalHandlers.reload();
+    revalidate();
+  }, [approvalHandlers, revalidate]);
 
   useEffect(
     () =>
       subscribe({
         onSession: rememberSession,
+        onRemoved: forgetSession,
+        onDelegation: checkTask,
         onToast: pushCard,
-        onOpen: approvalHandlers.reload,
+        onOpen,
         onPermissionRequest: approvalHandlers.onPermissionRequest,
         onPermissionResolved: approvalHandlers.onPermissionResolved,
       }),
-    [pushCard, rememberSession, approvalHandlers],
+    [pushCard, rememberSession, forgetSession, checkTask, onOpen, approvalHandlers],
   );
 
-  const approvalCards = useMemo(() => (approvalToastsOn(loadNotifEventConfig()) ? toastQueue(approvalsStore.list, dismissedApprovals) : []), [approvalsStore.list, dismissedApprovals]);
+  const approvalsShown = approvalToastsOn(loadNotifEventConfig());
+  const approvalCards = useMemo(() => (approvalsShown ? toastQueue(approvalsStore.list, dismissedApprovals) : []), [approvalsShown, approvalsStore.list, dismissedApprovals]);
+  const approvalSessions = useMemo(
+    () => new Set(approvalsShown ? approvalsStore.list.filter((item) => item.agent === "claude").map((item) => item.sessionId) : []),
+    [approvalsShown, approvalsStore.list],
+  );
+  const typing = approvalCards.some((request) => approvalKind(request) !== "tool");
+  const onTextFocus = useCallback((element: HTMLElement) => {
+    keyboardRef.current = true;
+    void allowKeyboard(element);
+  }, []);
   const dismissApproval = useCallback((id: string) => setDismissedApprovals((prev) => new Set(prev).add(id)), []);
   const openApprovalSession = useCallback((request: PermissionRequestRecord) => {
     if (request.agent === "claude") void openTarget("sessionNeedsYou", request.sessionId);
@@ -201,32 +293,47 @@ function ToasterStack({ approvalsStore }: { approvalsStore: ApprovalsStore }): R
     let lastTick = Date.now();
     const tick = () => {
       const current = Date.now();
-      const delta = Math.min(current - lastTick, TOAST_ATTENTION_MS);
+      const delta = Math.min(current - lastTick, TOAST_AUTO_MS);
       lastTick = current;
       setNow(current);
-      setCards((prev) => {
-        if (hoveringRef.current || prev.length === 0) return prev;
-        return prev.map((card) => ({ ...card, elapsed: card.elapsed + delta })).filter((card) => card.elapsed < card.lifetime);
-      });
+      setCards((prev) => ageToasts(prev, delta, hoveringRef.current));
     };
     const id = setInterval(tick, TICK_MS);
-    const onVisible = () => tick();
+    const onVisible = () => {
+      if (document.visibilityState === "hidden") hoveringRef.current = hoverAfter("hidden");
+      tick();
+    };
+    const onBlur = () => {
+      hoveringRef.current = hoverAfter("blur");
+    };
+    const onLeave = () => {
+      hoveringRef.current = hoverAfter("leave");
+    };
     document.addEventListener("visibilitychange", onVisible);
+    document.documentElement.addEventListener("mouseleave", onLeave);
     window.addEventListener("focus", onVisible);
+    window.addEventListener("blur", onBlur);
     return () => {
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
+      document.documentElement.removeEventListener("mouseleave", onLeave);
       window.removeEventListener("focus", onVisible);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
+  const shownCards = useMemo(() => hideBehindApprovals(cards, approvalSessions), [cards, approvalSessions]);
+
   useLayoutEffect(() => {
     const height = (stackRef.current?.offsetHeight ?? 0) + MARGIN;
-    const count = cards.length + approvalCards.length;
+    const count = shownCards.length + approvalCards.length;
+    if (count === 0 || shownCards.length < shownCountRef.current) hoveringRef.current = hoverAfter("removed");
+    shownCountRef.current = shownCards.length;
+    if (!typing) keyboardRef.current = false;
     if (applied.current.count === count && applied.current.height === height) return;
     applied.current = { count, height };
-    void applyWindow(count, Math.max(height, 1));
-  }, [cards, approvalCards]);
+    void applyWindow(count, Math.max(height, 1), keyboardRef.current);
+  }, [shownCards, approvalCards, typing]);
 
   const onCardClick = useCallback((card: Card) => {
     void openTarget(card.kind, card.id);
@@ -235,7 +342,7 @@ function ToasterStack({ approvalsStore }: { approvalsStore: ApprovalsStore }): R
 
   const dismiss = useCallback((key: number) => setCards((prev) => prev.filter((item) => item.key !== key)), []);
 
-  const { hidden, visible } = toastStack(cards);
+  const { hidden, visible } = toastStack(shownCards);
   const stop = (event: MouseEvent) => event.stopPropagation();
 
   return (
@@ -244,10 +351,13 @@ function ToasterStack({ approvalsStore }: { approvalsStore: ApprovalsStore }): R
         className="toaster__stack"
         ref={stackRef}
         onMouseEnter={() => {
-          hoveringRef.current = true;
+          hoveringRef.current = hoverAfter("enter");
+        }}
+        onMouseMove={() => {
+          hoveringRef.current = hoverAfter("move");
         }}
         onMouseLeave={() => {
-          hoveringRef.current = false;
+          hoveringRef.current = hoverAfter("leave");
         }}
       >
         {hidden > 0 && <div className="toaster__more">+{hidden} more</div>}
@@ -262,7 +372,7 @@ function ToasterStack({ approvalsStore }: { approvalsStore: ApprovalsStore }): R
                 <IconClose size={14} />
               </button>
             </div>
-            <ApprovalRequest request={request} compact reasonField={false} />
+            <ApprovalRequest request={request} compact reasonField={false} onOpenSession={openApprovalSession} onTextFocus={onTextFocus} />
             <button type="button" className="show-more__btn tcard__open" onClick={() => openApprovalSession(request)}>
               Open session
             </button>

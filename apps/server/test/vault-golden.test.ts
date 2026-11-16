@@ -865,7 +865,7 @@ describe("golden vault: today mirror", () => {
   const START = "\u{1F6EB}";
   const DONE = "\u2705";
 
-  it("migrates the real-shaped daily, schedules the linked tasks and only inserts the missing subtasks under their parents", () => {
+  it("migrates the real-shaped daily, schedules the linked tasks and adds no undated subtask under their parents", () => {
     const root = freshVault();
     const settings = settingsFor(root);
     const date = localToday();
@@ -885,15 +885,10 @@ describe("golden vault: today mirror", () => {
       "  - [x] Export legacy invoices",
       "  - [-] Map the new tax codes",
       "    - note about the rounding rules",
-      "    - [ ] Validate rounding rules",
-      "  - [ ] Cut over the webhook",
       "- [-] [[globex|Globex Rollout]] - Rollout checklist for region two",
-      "  - [-] Provision the staging cluster",
-      "  - [ ] Load test",
       "- [ ] [[acme|Acme Platform]] - Renew vendor contract #p1",
       "- [x] [[initech|Initech Sandbox]] - Confirm sandbox credentials",
       "- [ ] [[alex-personal|Alex Personal]] - Plan the quarter",
-      "  - [ ] Review last quarter",
       "- [ ] Plain note without a project",
       "",
       "",
@@ -930,7 +925,7 @@ describe("golden vault: today mirror", () => {
     assert.equal(payload.focus.length, 5);
   });
 
-  it("keeps the BOM of a daily and every line where it is, adding the missing subtasks after the note of their parent", () => {
+  it("keeps the BOM of a daily and every line where it is, adding no undated subtask after the note of their parent", () => {
     const root = freshVault();
     const settings = settingsFor(root);
     const date = "2099-01-02";
@@ -949,8 +944,6 @@ describe("golden vault: today mirror", () => {
       "- [x] [[globex|Globex Rollout]] - Staging cluster provisioned",
       "- [-] [[initech|Initech Sandbox]] - Write the integration guide",
       "  - note about the outline",
-      "  - [x] Outline",
-      "  - [ ] First draft",
       "",
     ]);
     assert.equal(keepsInOrder(before.toString("utf8"), after.toString("utf8")), true);

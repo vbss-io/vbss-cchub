@@ -703,28 +703,30 @@
 
 .backlog__body {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 4px 6px;
+  gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .backlog__main {
   display: flex;
-  flex: 1 1 6rem;
+  flex: 1 1 0;
   align-items: center;
   gap: 6px;
-  min-width: 0;
+  min-width: 2.5rem;
 }
 
 .backlog__meta {
   display: inline-flex;
   flex: none;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
   margin-left: auto;
+  white-space: nowrap;
 }
 
 .backlog__status {
@@ -746,14 +748,16 @@
   font-size: 13.5px;
   line-height: 1.4;
   text-align: left;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 
 .backlog__chips {
   display: inline-flex;
   flex: none;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
 }
@@ -908,4 +912,68 @@
 
 .today__text code.md__inline {
   font-size: 12.5px;
+}
+
+.outliner__plan {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.outliner__plan:hover,
+.outliner__plan:focus-visible {
+  color: var(--text);
+}
+
+.subtask-picker__parent {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.subtask-picker__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 50vh;
+  margin: 0 0 8px;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.subtask-picker__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+}
+
+.subtask-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.subtask-picker__row--off {
+  color: var(--muted);
+  cursor: default;
+}
+
+.subtask-picker__title {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.subtask-picker__note {
+  color: var(--muted);
+  font-size: 12px;
 }

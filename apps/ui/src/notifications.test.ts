@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildNotification, createNotifier, DEFAULT_NOTIF_EVENTS, type FiredEvent, type NotifEventConfig } from "./notifications";
+import { buildNotification, createNotifier, DEFAULT_NOTIF_EVENTS, nativeSubject, type FiredEvent, type NativeSubject, type NotifEventConfig } from "./notifications";
 import type { SoundKind } from "./notify";
 
 interface Harness {
   config: NotifEventConfig;
-  sent: { title: string; body: string }[];
+  sent: { title: string; body: string; subject: NativeSubject | null }[];
   sounds: SoundKind[];
   fired: FiredEvent[];
   clock: { value: number };
@@ -37,7 +37,7 @@ function harness(overrides: Partial<NotifEventConfig> = {}): Harness & { notify:
   };
   const { notifyEvent } = createNotifier({
     getConfig: () => state.config,
-    send: (title, body) => void state.sent.push({ title, body }),
+    send: (title, body, subject) => void state.sent.push({ title, body, subject }),
     sound: (kind) => void state.sounds.push(kind),
     now: () => state.clock.value,
     onFired: (record) => state.fired.push(record),
@@ -166,4 +166,15 @@ test("the style decides between the Windows sender and the CC Hub toast", () => 
     assert.equal(sends, expectSend, `sends under ${style}`);
     assert.equal(toasts, expectToast, `toasts under ${style}`);
   }
+});
+
+test("tags only the Windows toasts that wait on a reason, by their subject id", () => {
+  assert.deepEqual(nativeSubject("sessionNeedsYou", "s1"), { kind: "sessionNeedsYou", id: "s1" });
+  assert.deepEqual(nativeSubject("taskNeedsYou", "t1"), { kind: "taskNeedsYou", id: "t1" });
+  assert.deepEqual(nativeSubject("taskFailed", "t1"), { kind: "taskFailed", id: "t1" });
+  for (const kind of ["sessionIdle", "sessionFinished", "taskCompleted", "shareAsk", "shareImplement"] as const) assert.equal(nativeSubject(kind, "x"), null, kind);
+  const h = harness({ style: "windows" });
+  h.notify("sessionNeedsYou", { id: "s1", name: "Refactor", detail: "Claude needs your permission" });
+  h.notify("sessionIdle", { id: "s2", name: "Other", detail: "done" });
+  assert.deepEqual(h.sent.map((item) => item.subject), [{ kind: "sessionNeedsYou", id: "s1" }, null]);
 });

@@ -37,12 +37,14 @@ import {
   pipTone,
   planSections,
   sessionRowMeta,
+  panelHoldsOpen,
   sessionTone,
   splitSessions,
   taskRowMeta,
   taskTone,
   tokenLine,
   widgetSurface,
+  type PanelInputs,
   type RowMeta,
   type SectionPlan,
   type WidgetTone,
@@ -51,6 +53,17 @@ import { ApprovalList } from "./ApprovalRequest";
 import { BrandMark } from "./BrandMark";
 import { inFlight, needsYou } from "./TaskCard";
 import "../widget.css";
+
+const HOLD_RECHECK_MS = 1500;
+const TEXT_INPUT = 'input:not([type]), input[type="text"], input[type="search"], textarea';
+
+function panelInputs(): PanelInputs {
+  const active = document.activeElement;
+  return {
+    focusedText: active instanceof HTMLElement && active.matches(TEXT_INPUT),
+    otherDrafts: [...document.querySelectorAll<HTMLInputElement>(".ask__other")].map((input) => input.value),
+  };
+}
 
 const inTauri = (): boolean => "__TAURI_INTERNALS__" in window;
 
@@ -749,19 +762,27 @@ function WidgetView({ approvalsStore }: { approvalsStore: ApprovalsStore }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [open, collapse]);
 
+  const armCollapse = useCallback(
+    (ms: number) => {
+      window.clearTimeout(leaveTimer.current);
+      const check = () => {
+        if (panelHoldsOpen(panelInputs())) leaveTimer.current = window.setTimeout(check, HOLD_RECHECK_MS);
+        else void collapse();
+      };
+      leaveTimer.current = window.setTimeout(check, ms);
+    },
+    [collapse],
+  );
+
   useEffect(() => {
     if (!open || surface !== "on") return;
-    window.clearTimeout(leaveTimer.current);
-    leaveTimer.current = window.setTimeout(() => void collapse(), 3000);
+    armCollapse(3000);
     return () => window.clearTimeout(leaveTimer.current);
-  }, [open, surface, collapse]);
+  }, [open, surface, armCollapse]);
 
   const onPanelEnter = () => window.clearTimeout(leaveTimer.current);
 
-  const onPanelLeave = () => {
-    window.clearTimeout(leaveTimer.current);
-    leaveTimer.current = window.setTimeout(() => void collapse(), 1500);
-  };
+  const onPanelLeave = () => armCollapse(1500);
 
   const onTabDown = (event: MouseEvent) => {
     if (event.button !== 0 || !dragApi.current) return;

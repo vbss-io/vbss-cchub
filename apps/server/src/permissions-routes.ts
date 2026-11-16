@@ -9,6 +9,7 @@ import {
   getPermissionRequest,
   listPermissionRequests,
   openPermissionRequest,
+  updatedInputFor,
   waitForDecision,
   windowMsFor,
   withdrawPermission,
@@ -18,6 +19,7 @@ import {
 
 const DELEGATED_CLIENTS: ReadonlySet<string> = new Set(["hub", "headless", "share"]);
 const TOOL_NAME_MAX = 200;
+const NOT_PENDING = "no pending permission request with this id (answered, expired or withdrawn)";
 
 const text = (value: unknown, max = 4000): string | null => (typeof value === "string" && value.length > 0 ? value.slice(0, max) : null);
 
@@ -126,13 +128,28 @@ export function permissionsRouter(): Router {
       res.status(400).json({ error: "behavior must be allow or deny" });
       return;
     }
-    if (!getPermissionRequest(req.params.id)) {
-      res.status(404).json({ error: "no pending permission request with this id (answered, expired or withdrawn)" });
+    const pending = getPermissionRequest(req.params.id);
+    if (!pending) {
+      res.status(404).json({ error: NOT_PENDING });
+      return;
+    }
+    const updated = updatedInputFor(pending, behavior, body.answers);
+    if (!updated.ok) {
+      res.status(400).json({ error: updated.error });
       return;
     }
     const message = behavior === "deny" ? text(typeof body.message === "string" ? body.message.trim() : null) : null;
-    const record = decidePermission(req.params.id, { behavior, message });
+    const record = decidePermission(req.params.id, { behavior, message, ...(updated.updatedInput ? { updatedInput: updated.updatedInput } : {}) });
     res.json({ ok: record !== null, request: record });
+  });
+
+  router.post("/:id/release", (req, res) => {
+    if (!getPermissionRequest(req.params.id)) {
+      res.status(404).json({ error: NOT_PENDING });
+      return;
+    }
+    const record = withdrawPermission(req.params.id);
+    res.json({ ok: record !== null });
   });
 
   return router;

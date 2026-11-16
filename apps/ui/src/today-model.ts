@@ -109,7 +109,7 @@ export function describeDay(day: string, today: string): string {
   return parsed.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 }
 
-export function outlineNodeOf(task: BoardTask, depth: number): OutlineNode {
+export function outlineNodeOf(task: BoardTask, depth: number, visible: ReadonlySet<string> | null = null): OutlineNode {
   return {
     id: task.id,
     projectId: task.projectId,
@@ -120,16 +120,39 @@ export function outlineNodeOf(task: BoardTask, depth: number): OutlineNode {
     priority: task.priority,
     due: task.due ?? null,
     notes: task.noteItems.map((note) => ({ line: note.line, raw: note.raw, text: note.text })),
-    children: task.subtasks.map((subtask) => outlineNodeOf(subtask, depth + 1)),
+    children: task.subtasks.filter((subtask) => visible === null || visible.has(subtask.id)).map((subtask) => outlineNodeOf(subtask, depth + 1, visible)),
     depth,
   };
+}
+
+const PLANNABLE_STATUSES: ReadonlySet<BoardStatus> = new Set<BoardStatus>(["todo", "doing", "blocked", "hold"]);
+
+export interface SubtaskPlanSummary {
+  open: number;
+  hidden: number;
+}
+
+export function subtaskPlanOf(task: BoardTask, visible: readonly string[] | undefined): SubtaskPlanSummary {
+  const open = task.subtasks.filter((subtask) => PLANNABLE_STATUSES.has(subtask.status) && (subtask.repeat ?? null) === null);
+  const shown = new Set(visible ?? open.map((subtask) => subtask.id));
+  return { open: open.length, hidden: open.filter((subtask) => !shown.has(subtask.id)).length };
+}
+
+export function subtaskPlansOf(entries: readonly TodayEntry[]): Map<string, SubtaskPlanSummary> {
+  const plans = new Map<string, SubtaskPlanSummary>();
+  const visit = (task: BoardTask, visible: readonly string[] | undefined): void => {
+    plans.set(task.id, subtaskPlanOf(task, visible));
+    for (const subtask of task.subtasks) visit(subtask, visible);
+  };
+  for (const entry of entries) visit(entry.task, entry.visibleSubtasks);
+  return plans;
 }
 
 export function outlineGroupsOf(entries: readonly TodayEntry[]): OutlineGroup[] {
   const groups = new Map<string, OutlineGroup>();
   for (const entry of entries) {
     const existing = groups.get(entry.project.id);
-    const node = outlineNodeOf(entry.task, 0);
+    const node = outlineNodeOf(entry.task, 0, entry.visibleSubtasks === undefined ? null : new Set(entry.visibleSubtasks));
     if (existing) existing.items.push(node);
     else groups.set(entry.project.id, { project: { id: entry.project.id, title: entry.project.title }, items: [node] });
   }

@@ -44,6 +44,56 @@ export type WaitAttach = { status: "gone" } | { status: "forbidden" } | { status
 export interface PermissionDecision {
   behavior: PermissionBehavior;
   message: string | null;
+  updatedInput?: Record<string, unknown>;
+}
+
+export const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
+export const EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
+export const ANSWER_MAX = 2000;
+
+export type UpdatedInputResult = { ok: true; updatedInput: Record<string, unknown> | null } | { ok: false; error: string };
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+export function questionTexts(toolInput: unknown): string[] | null {
+  if (!isRecord(toolInput) || !Array.isArray(toolInput.questions)) return null;
+  const texts: string[] = [];
+  for (const item of toolInput.questions) {
+    if (!isRecord(item) || typeof item.question !== "string" || item.question.length === 0) return null;
+    texts.push(item.question);
+  }
+  return texts.length > 0 ? texts : null;
+}
+
+function answersFor(texts: readonly string[], answers: unknown): { ok: true; answers: Record<string, string> } | { ok: false; error: string } {
+  if (!isRecord(answers)) return { ok: false, error: "answers required: AskUserQuestion is answered with one answer per question" };
+  const known = new Set(texts);
+  for (const [key, value] of Object.entries(answers)) {
+    if (!known.has(key)) return { ok: false, error: "answers may only use the question texts of this request" };
+    if (typeof value !== "string" || value.trim().length === 0) return { ok: false, error: "every answer must be a non-empty string" };
+    if (value.length > ANSWER_MAX) return { ok: false, error: `an answer is longer than ${ANSWER_MAX} characters` };
+  }
+  const out: Record<string, string> = {};
+  for (const text of texts) {
+    const value = answers[text];
+    if (typeof value !== "string") return { ok: false, error: "every question needs an answer" };
+    out[text] = value.trim();
+  }
+  return { ok: true, answers: out };
+}
+
+export function updatedInputFor(record: Pick<PermissionRequestRecord, "agent" | "toolName" | "toolInput">, behavior: PermissionBehavior, answers: unknown): UpdatedInputResult {
+  if (behavior !== "allow" || record.agent !== "claude") return { ok: true, updatedInput: null };
+  if (record.toolName === EXIT_PLAN_MODE_TOOL) {
+    if (!isRecord(record.toolInput)) return { ok: false, error: "this request carries no plan input to approve; answer it in the session" };
+    return { ok: true, updatedInput: { ...record.toolInput } };
+  }
+  if (record.toolName !== ASK_USER_QUESTION_TOOL) return { ok: true, updatedInput: null };
+  const texts = questionTexts(record.toolInput);
+  if (!texts || !isRecord(record.toolInput)) return { ok: false, error: "this request carries no questions to answer; answer it in the session" };
+  const checked = answersFor(texts, answers);
+  if (!checked.ok) return checked;
+  return { ok: true, updatedInput: { ...record.toolInput, questions: record.toolInput.questions, answers: checked.answers } };
 }
 
 export interface PermissionResolved {
@@ -181,7 +231,8 @@ export function waitForDecision(id: string, waitToken: string | null, onDecision
 
 export function decidePermission(id: string, decision: PermissionDecision): PermissionRequestRecord | null {
   const message = decision.behavior === "deny" && decision.message ? decision.message.slice(0, DECISION_MESSAGE_MAX) : null;
-  return settle(id, decision.behavior, { behavior: decision.behavior, message });
+  const updatedInput = decision.behavior === "allow" && decision.updatedInput ? { updatedInput: decision.updatedInput } : {};
+  return settle(id, decision.behavior, { behavior: decision.behavior, message, ...updatedInput });
 }
 
 export function withdrawPermission(id: string): PermissionRequestRecord | null {

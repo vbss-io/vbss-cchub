@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { SessionRecord, SessionStatus } from "./types";
-import { splitSessions } from "./widget-model";
+import { panelHoldsOpen, splitSessions } from "./widget-model";
 
 const session = (sessionId: string, status: SessionStatus, updatedAt: number, favoriteAt: number | null = null, unread = false): SessionRecord => ({
   sessionId,
@@ -64,5 +64,14 @@ describe("splitSessions", () => {
     const input = [session("a", "idle", 1), session("b", "idle", 2)];
     splitSessions(input);
     assert.deepEqual(ids(input), ["a", "b"]);
+  });
+});
+
+describe("panelHoldsOpen", () => {
+  it("keeps the panel open while a text field has focus or an Other answer is unsent", () => {
+    assert.equal(panelHoldsOpen({ focusedText: false, otherDrafts: [] }), false);
+    assert.equal(panelHoldsOpen({ focusedText: false, otherDrafts: ["", "   "] }), false);
+    assert.equal(panelHoldsOpen({ focusedText: true, otherDrafts: [] }), true);
+    assert.equal(panelHoldsOpen({ focusedText: false, otherDrafts: ["", "SQLite"] }), true);
   });
 });

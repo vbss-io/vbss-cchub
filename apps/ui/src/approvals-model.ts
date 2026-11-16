@@ -116,12 +116,120 @@ export interface ApprovalView {
 
 const AGENT_LABEL: Readonly<Record<PermissionAgent, string>> = { claude: "Claude", codex: "Codex" };
 
+export const ASK_TOOL = "AskUserQuestion";
+export const PLAN_TOOL = "ExitPlanMode";
+
+export type ApprovalKind = "question" | "plan" | "tool";
+
+export function approvalKind(record: Pick<PermissionRequestRecord, "agent" | "toolName">): ApprovalKind {
+  if (record.agent !== "claude") return "tool";
+  if (record.toolName === ASK_TOOL) return "question";
+  if (record.toolName === PLAN_TOOL) return "plan";
+  return "tool";
+}
+
+export interface AskOption {
+  label: string;
+  description: string;
+}
+
+export interface AskQuestion {
+  question: string;
+  header: string;
+  options: AskOption[];
+  multiSelect: boolean;
+}
+
+const textOr = (value: unknown, fallback: string): string => (typeof value === "string" ? value : fallback);
+
+export function askQuestions(toolInput: unknown): AskQuestion[] {
+  if (!isObject(toolInput) || !Array.isArray(toolInput.questions)) return [];
+  const out: AskQuestion[] = [];
+  for (const item of toolInput.questions) {
+    if (!isObject(item) || typeof item.question !== "string" || item.question.length === 0) continue;
+    const options = Array.isArray(item.options)
+      ? item.options.filter(isObject).flatMap((option) => (typeof option.label === "string" && option.label.length > 0 ? [{ label: option.label, description: textOr(option.description, "") }] : []))
+      : [];
+    out.push({ question: item.question, header: textOr(item.header, ""), options, multiSelect: item.multiSelect === true });
+  }
+  return out;
+}
+
+export interface PlanView {
+  plan: string;
+  path: string | null;
+}
+
+export function planOf(toolInput: unknown): PlanView {
+  if (!isObject(toolInput)) return { plan: "", path: null };
+  return { plan: textOr(toolInput.plan, ""), path: typeof toolInput.planFilePath === "string" && toolInput.planFilePath.length > 0 ? toolInput.planFilePath : null };
+}
+
+function viewInput(record: PermissionRequestRecord): string {
+  const kind = approvalKind(record);
+  if (kind === "question") return askQuestions(record.toolInput).map((item) => item.question).join("\n");
+  if (kind === "plan") return planOf(record.toolInput).plan;
+  return inputText(record.toolInput);
+}
+
+export interface QuestionDraft {
+  selected: readonly string[];
+  other: string;
+  otherOn: boolean;
+}
+
+export const EMPTY_DRAFT: QuestionDraft = { selected: [], other: "", otherOn: false };
+
+export const ANSWER_MAX = 2_000;
+
+export function pickOption(draft: QuestionDraft, label: string, multi: boolean): QuestionDraft {
+  if (!multi) return { ...draft, selected: [label], otherOn: false };
+  const selected = draft.selected.includes(label) ? draft.selected.filter((item) => item !== label) : [...draft.selected, label];
+  return { ...draft, selected };
+}
+
+export function toggleOther(draft: QuestionDraft, multi: boolean): QuestionDraft {
+  if (!multi) return { ...draft, selected: [], otherOn: true };
+  return { ...draft, otherOn: !draft.otherOn };
+}
+
+export function setOtherText(draft: QuestionDraft, text: string): QuestionDraft {
+  return { ...draft, other: text.slice(0, ANSWER_MAX), otherOn: true };
+}
+
+export function answerOf(question: AskQuestion, draft: QuestionDraft): string | null {
+  const other = draft.otherOn ? draft.other.trim() : "";
+  if (!question.multiSelect) {
+    if (draft.otherOn) return other.length > 0 ? other : null;
+    return draft.selected[0] ?? null;
+  }
+  const labels = question.options.map((option) => option.label).filter((label) => draft.selected.includes(label));
+  const parts = other.length > 0 ? [...labels, other] : labels;
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+export interface BuiltAnswers {
+  answers: Record<string, string>;
+  complete: boolean;
+}
+
+export function buildAnswers(questions: readonly AskQuestion[], drafts: Readonly<Record<string, QuestionDraft>>): BuiltAnswers {
+  const answers: Record<string, string> = {};
+  let complete = questions.length > 0;
+  for (const question of questions) {
+    const answer = answerOf(question, drafts[question.question] ?? EMPTY_DRAFT);
+    if (answer === null) complete = false;
+    else answers[question.question] = answer;
+  }
+  return { answers, complete };
+}
+
 export function approvalView(record: PermissionRequestRecord): ApprovalView {
   return {
     id: record.id,
     title: record.title?.trim() || record.sessionId.slice(0, 8),
     tool: record.toolName,
-    input: inputText(record.toolInput),
+    input: viewInput(record),
     cwd: record.cwd,
     agentLabel: AGENT_LABEL[record.agent],
     subagent: record.agentId !== null,
@@ -131,7 +239,10 @@ export function approvalView(record: PermissionRequestRecord): ApprovalView {
 export interface DecisionBody {
   behavior: "allow" | "deny";
   message?: string;
+  answers?: Record<string, string>;
 }
+
+export const answerBody = (answers: Record<string, string>): DecisionBody => ({ behavior: "allow", answers });
 
 export function decisionBody(behavior: "allow" | "deny", reason: string): DecisionBody {
   const message = reason.trim().slice(0, REASON_MAX);

@@ -56,6 +56,8 @@ import {
   recentlyDoneTasks,
   clearedNotice,
   movesInNote,
+  subtaskPlanOf,
+  subtaskPlansOf,
   type BacklogFilters,
 } from "./today-model";
 
@@ -145,6 +147,45 @@ describe("outlineGroupsOf", () => {
 
   it("returns no groups for an empty focus", () => {
     assert.deepEqual(outlineGroupsOf([]), []);
+  });
+
+  it("shows only the subtasks the hub lists as visible, and every subtask when the list is absent", () => {
+    const parent = task("p", "a", 1, {}, [task("c1", "a", 2), task("c2", "a", 3, {}, [task("g1", "a", 4)]), task("c3", "a", 5)]);
+    const [planned] = outlineGroupsOf([{ ...entry(parent, "a", "Alpha"), visibleSubtasks: ["c2", "g1"] }]);
+    assert.deepEqual(
+      planned?.items[0]?.children.map((child) => [child.id, child.children.map((grand) => grand.id)]),
+      [["c2", ["g1"]]],
+    );
+    const [headOnly] = outlineGroupsOf([{ ...entry(parent, "a", "Alpha"), visibleSubtasks: [] }]);
+    assert.deepEqual(headOnly?.items[0]?.children, []);
+    const [legacy] = outlineGroupsOf([entry(parent, "a", "Alpha")]);
+    assert.deepEqual(
+      legacy?.items[0]?.children.map((child) => child.id),
+      ["c1", "c2", "c3"],
+    );
+  });
+});
+
+describe("subtaskPlanOf", () => {
+  const parent = task("p", "a", 1, {}, [
+    task("c1", "a", 2),
+    task("c2", "a", 3, { status: "doing" }),
+    task("c3", "a", 4, { status: "done" }),
+    task("c4", "a", 5, { status: "archived" }),
+    task("c5", "a", 6, { repeat: "every week" }),
+  ]);
+
+  it("counts the open subtasks that can be planned and the ones left out of the day", () => {
+    assert.deepEqual(subtaskPlanOf(parent, ["c2"]), { open: 2, hidden: 1 });
+    assert.deepEqual(subtaskPlanOf(parent, []), { open: 2, hidden: 2 });
+    assert.deepEqual(subtaskPlanOf(parent, undefined), { open: 2, hidden: 0 });
+    assert.deepEqual(subtaskPlanOf(task("x", "a", 9), []), { open: 0, hidden: 0 });
+  });
+
+  it("indexes every task of the focus tree with the visible list of its entry", () => {
+    const plans = subtaskPlansOf([{ ...entry(parent, "a", "Alpha"), visibleSubtasks: ["c1"] }]);
+    assert.deepEqual(plans.get("p"), { open: 2, hidden: 1 });
+    assert.deepEqual(plans.get("c1"), { open: 0, hidden: 0 });
   });
 });
 

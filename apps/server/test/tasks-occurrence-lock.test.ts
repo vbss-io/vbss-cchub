@@ -106,7 +106,7 @@ describe("finished occurrences are read-only and the recurrence day holds", () =
     const deadline = Date.now() + 20_000;
     let last = state();
     let since = Date.now();
-    while (Date.now() - since < 2500) {
+    while (Date.now() - since < 4000) {
       assert.ok(Date.now() < deadline, "the hub settles the new daily");
       await new Promise((resolve) => setTimeout(resolve, 100));
       const now = state();

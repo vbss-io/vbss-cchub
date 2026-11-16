@@ -403,6 +403,10 @@ describe("finding 6: notes nested under a task that leaves the day", () => {
     const staying = taskIn(settings, "lab", "Staying task");
     board.createBoardTask(settings, { projectId: "lab", title: "New staying sub", status: "todo", parentLine: staying.line, parentRaw: staying.raw });
     today.flushMirrors(settings);
+    assert.ok(!readFileSync(dailyPath(root), "utf8").includes("New staying sub"));
+    const sub = taskIn(settings, "lab", "New staying sub");
+    today.todayApi.planSubtask(settings, TODAY, { projectId: "lab", line: sub.line, raw: sub.raw, planned: true });
+    today.flushMirrors(settings);
     const after = readFileSync(dailyPath(root), "utf8");
     assert.ok(after.includes("## Focus\n\n- [ ] [[lab|Lab]] - Staying task\n  - note B\n  - [ ] New staying sub\n"));
   });
@@ -1315,7 +1319,7 @@ describe("fix wave 3, finding 2: subtasks whose parent carries the scheduled dat
   const CHILD_DONE = "  - [x] Child step";
 
   it("a tick on a subtask line the hub inserted reaches the project from disk and from the Note tab", () => {
-    const root = lab({ alpha: project("Alpha Project", [`- [ ] Parent job ${SCHEDULED} ${TODAY}`, "  - [ ] Child step"]) }, { [TODAY]: dailyWith(["- [ ] free"]) });
+    const root = lab({ alpha: project("Alpha Project", [`- [ ] Parent job ${SCHEDULED} ${TODAY}`, `  - [ ] Child step ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyWith(["- [ ] free"]) });
     const settings = useVault(root);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     const primed = readFileSync(dailyPath(root), "utf8");
@@ -1617,7 +1621,7 @@ describe("fix wave 4, finding 1: a moved line keeps its identity", () => {
 
 describe("fix wave 4, finding 2: add to daily schedules the task in scheduled mode", () => {
   it("writes the scheduled date on the task so a later tick on the line syncs", () => {
-    const root = lab({ alpha: project("Alpha Project", ["- [ ] Ship release", "  - [ ] Write notes", "- [ ] Other task"]) }, { [TODAY]: dailyWith(["- [ ] free"]) });
+    const root = lab({ alpha: project("Alpha Project", ["- [ ] Ship release", `  - [ ] Write notes ${SCHEDULED} ${TODAY}`, "  - [ ] Undated step", "- [ ] Other task"]) }, { [TODAY]: dailyWith(["- [ ] free"]) });
     const settings = useVault(root);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     const ship = taskIn(settings, "alpha", "Ship release");
@@ -1629,6 +1633,7 @@ describe("fix wave 4, finding 2: add to daily schedules the task in scheduled mo
     const added = readFileSync(dailyPath(root), "utf8");
     assert.equal(added.split("\n").filter((line) => line === "- [ ] [[alpha|Alpha Project]] - Ship release").length, 1);
     assert.equal(added.split("\n").filter((line) => line === "  - [ ] Write notes").length, 1);
+    assert.equal(added.includes("Undated step"), false);
     editDaily(root, (content) => content.replace("- [ ] [[alpha|Alpha Project]] - Ship release", "- [x] [[alpha|Alpha Project]] - Ship release"));
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Ship release").status, "done");

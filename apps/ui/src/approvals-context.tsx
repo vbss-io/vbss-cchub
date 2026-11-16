@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from "react";
-import { decidePermission, fetchPermissions } from "./api";
-import { approvalsOf, decisionBody, needsDetails, reduceApprovals, type ApprovalsState } from "./approvals-model";
+import { decidePermission, fetchPermissions, releasePermission } from "./api";
+import { answerBody, approvalsOf, decisionBody, needsDetails, reduceApprovals, type ApprovalsState } from "./approvals-model";
 import type { PermissionAgent, PermissionRequestRecord, PermissionRequestSummary, PermissionResolved } from "./types";
 
 const TICK_MS = 1_000;
@@ -63,9 +63,11 @@ export interface ApprovalsValue {
   now: number;
   forSession: (agent: PermissionAgent, sessionId: string) => PermissionRequestRecord[];
   decide: (id: string, behavior: "allow" | "deny", reason: string) => Promise<void>;
+  answer: (id: string, answers: Record<string, string>) => Promise<void>;
+  release: (id: string) => Promise<void>;
 }
 
-const EMPTY: ApprovalsValue = { list: [], now: 0, forSession: () => [], decide: () => Promise.resolve() };
+const EMPTY: ApprovalsValue = { list: [], now: 0, forSession: () => [], decide: () => Promise.resolve(), answer: () => Promise.resolve(), release: () => Promise.resolve() };
 
 const ApprovalsContext = createContext<ApprovalsValue>(EMPTY);
 
@@ -88,6 +90,23 @@ export function ApprovalsProvider({ store, children }: { store: ApprovalsStore; 
     },
     [settle],
   );
-  const value = useMemo<ApprovalsValue>(() => ({ list, now, forSession: (agent, sessionId) => approvalsOf(list, agent, sessionId), decide }), [list, now, decide]);
+  const answer = useCallback(
+    async (id: string, answers: Record<string, string>) => {
+      await decidePermission(id, answerBody(answers));
+      settle(id);
+    },
+    [settle],
+  );
+  const release = useCallback(
+    async (id: string) => {
+      await releasePermission(id);
+      settle(id);
+    },
+    [settle],
+  );
+  const value = useMemo<ApprovalsValue>(
+    () => ({ list, now, forSession: (agent, sessionId) => approvalsOf(list, agent, sessionId), decide, answer, release }),
+    [list, now, decide, answer, release],
+  );
   return <ApprovalsContext.Provider value={value}>{children}</ApprovalsContext.Provider>;
 }

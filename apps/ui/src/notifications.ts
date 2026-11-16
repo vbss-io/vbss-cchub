@@ -114,9 +114,18 @@ export function buildNotification(kind: NotifEventKind, payload: NotifEventPaylo
   }
 }
 
+export interface NativeSubject {
+  kind: NotifEventKind;
+  id: string;
+}
+
+const NATIVE_TAGGED: ReadonlySet<NotifEventKind> = new Set(["sessionNeedsYou", "taskNeedsYou", "taskFailed"]);
+
+export const nativeSubject = (kind: NotifEventKind, id: string): NativeSubject | null => (NATIVE_TAGGED.has(kind) ? { kind, id } : null);
+
 export interface NotifierDeps {
   getConfig: () => NotifEventConfig | null;
-  send: (title: string, body: string) => void | Promise<void>;
+  send: (title: string, body: string, subject: NativeSubject | null) => void | Promise<void>;
   toast?: (card: FiredEvent) => void | Promise<void>;
   sound: (kind: SoundKind) => void | Promise<void>;
   now: () => number;
@@ -141,7 +150,7 @@ export function createNotifier(deps: NotifierDeps): Notifier {
     const built = buildNotification(kind, payload);
     const windowsOn = cfg.style === "windows" || cfg.style === "both";
     const cchubOn = cfg.style === "cchub" || cfg.style === "both";
-    if (cfg.desktop && windowsOn) void deps.send(built.title, built.body);
+    if (cfg.desktop && windowsOn) void deps.send(built.title, built.body, nativeSubject(kind, payload.id));
     if (cfg.desktop && cchubOn) void deps.toast?.({ kind, id: payload.id, title: built.title, body: built.body, at });
     if (cfg.sound) void deps.sound(built.sound);
     deps.onFired?.({ kind, id: payload.id, title: built.title, body: built.body, at });
@@ -170,6 +179,16 @@ export function loadNotifEventConfig(): NotifEventConfig {
   }
 }
 
+async function sendNative(title: string, body: string, subject: NativeSubject | null): Promise<void> {
+  if (subject) {
+    const sent = await import("./api")
+      .then(({ sendDesktopNotification }) => sendDesktopNotification(title, body, subject))
+      .catch(() => null);
+    if (sent?.ok) return;
+  }
+  await notify(title, body);
+}
+
 const firedLog: FiredEvent[] = [];
 
 export function firedEvents(): FiredEvent[] {
@@ -182,7 +201,7 @@ export function resetFired(): void {
 
 const defaultNotifier = createNotifier({
   getConfig: () => sharedConfig,
-  send: (title, body) => void notify(title, body),
+  send: (title, body, subject) => void sendNative(title, body, subject),
   toast: (card) => void import("./api").then(({ sendToast }) => sendToast(card)),
   sound: playSound,
   now: () => Date.now(),
