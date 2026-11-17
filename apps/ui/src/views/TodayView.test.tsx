@@ -916,7 +916,9 @@ describe("TodayView", () => {
     });
 
     it("on yesterday ticks through the day of the note, not the project, and says so", async () => {
-      mocked.getToday.mockImplementation((date) => Promise.resolve(date === YESTERDAY ? dataOf({ focus: [...focusEntries(), todayEntry({ ...t3, status: "done", checkbox: "done" }, "Beta")] }) : dataOf()));
+      mocked.getToday.mockImplementation((date) =>
+        Promise.resolve(date === YESTERDAY ? dataOf({ closesDay: true, focus: [...focusEntries(), todayEntry({ ...t3, status: "done", checkbox: "done" }, "Beta")] }) : dataOf()),
+      );
       await mountReady();
       expect(screen.queryByText(/a tick closes the task on/)).toBeNull();
       click("‹ Previous");
@@ -932,6 +934,41 @@ describe("TodayView", () => {
       click("doing:t2");
       await waitFor(() => expect(mocked.tickDay).toHaveBeenLastCalledWith(YESTERDAY, { ...target(t2), status: "todo" }));
       expect(mocked.patch).not.toHaveBeenCalled();
+    });
+
+    it("on yesterday in list mode keeps ticking the project, as the payload does not close the day", async () => {
+      mocked.getToday.mockImplementation((date) => Promise.resolve(dataOf(date === YESTERDAY ? { focusSource: "list" } : {})));
+      await mountReady();
+      click("‹ Previous");
+      await waitFor(() => expect(mocked.getToday).toHaveBeenLastCalledWith(YESTERDAY));
+      await settle();
+      expect(screen.queryByText(/a tick closes the task on/)).toBeNull();
+      click("done:t1");
+      await waitFor(() => expect(mocked.patch).toHaveBeenCalledWith(target(t1), { status: "done" }));
+      click("doing:t1");
+      await waitFor(() => expect(mocked.patch).toHaveBeenLastCalledWith(target(t1), { status: "doing" }));
+      expect(mocked.tickDay).not.toHaveBeenCalled();
+    });
+
+    it("on yesterday creates without a scheduled date and enters the new task in the note of that day", async () => {
+      const created = boardTask("t9", "alpha", 7, { title: "Created", raw: "- [ ] Created" });
+      mocked.create.mockResolvedValue({ task: created, updatedAt: 1 });
+      mocked.getToday.mockImplementation((date) => Promise.resolve(dataOf(date === YESTERDAY ? { closesDay: true } : {})));
+      await mountReady();
+      click("‹ Previous");
+      await screen.findByText(/a tick closes the task on/);
+      click("create:t2");
+      await waitFor(() => expect(mocked.schedule).toHaveBeenCalledWith(YESTERDAY, { ...target(created), date: YESTERDAY }));
+      expect(mocked.create).toHaveBeenLastCalledWith({ projectId: "alpha", title: "Created", priority: 1, due: "2026-12-02", after: { line: 6, raw: "- [-] Fix bug" } });
+      click("create-plain:s1");
+      await waitFor(() =>
+        expect(mocked.create).toHaveBeenLastCalledWith({ projectId: "alpha", title: "Plain", parentLine: 2, parentRaw: "- [ ] Write docs", after: { line: 3, raw: "  - [ ] Sub one" } }),
+      );
+      expect(mocked.schedule).toHaveBeenCalledTimes(1);
+      click("tomorrow:t2");
+      await waitFor(() => expect(mocked.schedule).toHaveBeenLastCalledWith(YESTERDAY, { ...target(t2), date: DAY }));
+      click("unschedule:t2");
+      await waitFor(() => expect(mocked.schedule).toHaveBeenLastCalledWith(YESTERDAY, { ...target(t2), date: null }));
     });
 
     it("on the day before yesterday keeps ticking the project as before", async () => {
@@ -1007,6 +1044,20 @@ describe("TodayView", () => {
   describe("quick add", () => {
     const quickInput = (): HTMLInputElement => screen.getByRole("textbox", { name: "Add to focus" }) as HTMLInputElement;
     const type = (value: string) => fireEvent.change(quickInput(), { target: { value } });
+
+    it("on yesterday creates the typed task without a scheduled date and enters it in the note of that day", async () => {
+      const created = boardTask("t9", "beta", 4, { title: "Brand new", raw: "- [ ] Brand new" });
+      mocked.create.mockResolvedValue({ task: created, updatedAt: 1 });
+      mocked.getToday.mockImplementation((date) => Promise.resolve(dataOf(date === YESTERDAY ? { closesDay: true } : {})));
+      await mountReady();
+      click("‹ Previous");
+      await screen.findByText(/a tick closes the task on/);
+      fireEvent.change(screen.getByLabelText("Project for the task to add"), { target: { value: "beta" } });
+      type("Brand new #p1");
+      fireEvent.keyDown(quickInput(), { key: "Enter" });
+      await waitFor(() => expect(mocked.schedule).toHaveBeenCalledWith(YESTERDAY, { projectId: "beta", line: 4, raw: "- [ ] Brand new", date: YESTERDAY }));
+      expect(mocked.create).toHaveBeenLastCalledWith({ projectId: "beta", title: "Brand new", priority: 1 });
+    });
 
     it("creates a task scheduled for the day with parsed priority and due date and remembers the project", async () => {
       await mountReady();
@@ -1135,6 +1186,28 @@ describe("TodayView", () => {
       await mountReady();
       expect(screen.queryByText("Changed in the note - check status")).toBeNull();
       await waitFor(() => expect(JSON.parse(window.localStorage.getItem("hub.today.keptTasks") ?? "[]")).toEqual(["alpha\u0000Fix bug\u0000- [x] Fix bug"]));
+    });
+
+    it("on yesterday applies the note through the day tick and keeps the task without any write", async () => {
+      const reopen = { ...item, line: "- [ ] Carried task", taskTitle: "Carried task", projectId: "beta", dailyCheckbox: "todo" as const, projectStatus: "done" as const };
+      mocked.getToday.mockImplementation((date) => Promise.resolve(dataOf(date === YESTERDAY ? { closesDay: true, outOfSync: [item, reopen] } : {})));
+      mocked.tickDay.mockRejectedValueOnce(new Error('"Fix bug" was completed on 2026-11-14, reopen it in Tasks'));
+      const view = await mountReady();
+      click("‹ Previous");
+      await screen.findByText(/Task "Fix bug" is doing, the note says done\./);
+      const [useFirst, useSecond] = screen.getAllByRole("button", { name: "Use note" });
+      fireEvent.click(useFirst as HTMLElement);
+      await waitFor(() => expect(mocked.tickDay).toHaveBeenCalledWith(YESTERDAY, { projectId: "alpha", line: 6, raw: "- [-] Fix bug", status: "done" }));
+      await waitFor(() => expect(view.onError).toHaveBeenCalledWith('"Fix bug" was completed on 2026-11-14, reopen it in Tasks'));
+      fireEvent.click(useSecond as HTMLElement);
+      await waitFor(() => expect(mocked.tickDay).toHaveBeenLastCalledWith(YESTERDAY, { projectId: "beta", line: 2, raw: "- [ ] Carried task", status: "todo" }));
+      const calls = { schedule: mocked.schedule.mock.calls.length, tickDay: mocked.tickDay.mock.calls.length };
+      for (const button of screen.getAllByRole("button", { name: "Keep task" })) fireEvent.click(button);
+      await settle();
+      expect(screen.queryByText("Changed in the note - check status")).toBeNull();
+      expect([mocked.schedule.mock.calls.length, mocked.tickDay.mock.calls.length]).toEqual([calls.schedule, calls.tickDay]);
+      expect(mocked.patch).not.toHaveBeenCalled();
+      expect(mocked.create).not.toHaveBeenCalled();
     });
 
     it("disables Use note for a recurring task already completed and for an unknown task", async () => {

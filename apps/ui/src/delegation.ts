@@ -661,6 +661,7 @@ export interface TodayData {
   ambiguous?: TodayAmbiguous[];
   outOfSync?: TodayOutOfSync[];
   unmatched?: TodayUnmatched[];
+  closesDay?: boolean;
   summary: string | null;
   dailyExists: boolean;
   dailyUpdatedAt: number | null;

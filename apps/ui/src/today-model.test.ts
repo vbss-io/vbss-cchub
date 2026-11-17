@@ -17,7 +17,6 @@ import {
   DEFAULT_BACKLOG_FILTERS,
   decodeDragTarget,
   describeDay,
-  closesDay,
   encodeDragTarget,
   entryTaskIds,
   lineInNote,
@@ -109,15 +108,6 @@ describe("day helpers", () => {
     assert.equal(describeDay("2026-11-13", TODAY), "Tomorrow");
     assert.equal(describeDay("2026-11-11", TODAY), "Yesterday");
     assert.equal(describeDay("2026-11-20", TODAY), "Fri, Nov 20");
-  });
-
-  it("closes only the day right before today, across month and year ends", () => {
-    assert.equal(closesDay("2026-11-11", TODAY), true);
-    assert.equal(closesDay(TODAY, TODAY), false);
-    assert.equal(closesDay("2026-11-10", TODAY), false);
-    assert.equal(closesDay("2026-11-13", TODAY), false);
-    assert.equal(closesDay("2026-11-30", "2026-12-01"), true);
-    assert.equal(closesDay("2026-12-31", "2027-01-01"), true);
   });
 });
 

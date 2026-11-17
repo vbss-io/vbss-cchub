@@ -100,8 +100,6 @@ export function localDay(now: Date = new Date()): string {
 
 export const nextDay = (day: string): string => addDays(day, 1);
 
-export const closesDay = (day: string, today: string): boolean => day === addDays(today, -1);
-
 export function describeDay(day: string, today: string): string {
   if (day === today) return "Today";
   if (day === addDays(today, 1)) return "Tomorrow";

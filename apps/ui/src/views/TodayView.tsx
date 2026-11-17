@@ -100,7 +100,6 @@ import {
 import {
   ambiguityHint,
   canAddToFocus,
-  closesDay,
   decodeDragTarget,
   describeDay,
   entryTaskIds,
@@ -1121,7 +1120,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const tasksEnabled = settings?.features.tasks === true;
   const today = localDay();
   const isToday = date === today;
-  const closing = closesDay(date, today);
+  const closing = data?.closesDay === true;
   const tomorrow = nextDay(date);
   const projectOrder = settings?.daily.projectOrder ?? [];
   const { sessions: dailySessions } = useDailySessions(enabled, date);
@@ -1265,7 +1264,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const applyNote = async (item: TodayOutOfSync, task: BoardTask) => {
     markBusy(task.id, true);
     try {
-      await patchBoardItem(targetOfTask(task), { status: item.dailyCheckbox });
+      if (closing) await tickDay(date, { ...targetOfTask(task), status: item.dailyCheckbox });
+      else await patchBoardItem(targetOfTask(task), { status: item.dailyCheckbox });
     } catch (err) {
       failWith(err, "could not update the task");
     } finally {
@@ -1364,6 +1364,15 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
 
   const targetOfNode = (node: OutlineNode): BoardTarget => ({ projectId: node.projectId, line: node.line, raw: node.raw });
 
+  const createInDay = async (input: BoardCreateInput): Promise<void> => {
+    if (!closing) {
+      await createBoardItem({ ...input, scheduled: date });
+      return;
+    }
+    const created = await createBoardItem(input);
+    await scheduleTask(date, { ...targetOfTask(created.task), date });
+  };
+
   const onRename = (node: OutlineNode, title: string, fields: OutlineFields) =>
     withRefresh(async () => {
       const change: BoardChange = {};
@@ -1378,15 +1387,16 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
       const parent = parentOfTask(boardTasks, node.id);
       const covered = parent !== null && focusIds.has(parent.id);
       const after = insertAnchorOf(boardTasks, node.id);
-      await createBoardItem({
+      const input: BoardCreateInput = {
         projectId: node.projectId,
         title,
         ...(fields.priority !== undefined && fields.priority !== null ? { priority: fields.priority } : {}),
         ...(fields.due !== undefined && fields.due !== null ? { due: fields.due } : {}),
-        ...(covered ? {} : { scheduled: date }),
         ...(parent ? { parentLine: parent.line, parentRaw: parent.raw } : {}),
         ...(after ? { after } : {}),
-      });
+      };
+      if (covered) await createBoardItem(input);
+      else await createInDay(input);
     });
 
   const onIndent = (node: OutlineNode) =>
@@ -1535,10 +1545,9 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
         await scheduleTask(date, { ...targetOfTask(plan.task), date });
         onNotice(`Scheduled the existing task "${plan.task.title}"`);
       } else {
-        await createBoardItem({
+        await createInDay({
           projectId: plan.projectId,
           title: plan.input.title,
-          scheduled: date,
           ...(plan.input.priority !== undefined ? { priority: plan.input.priority } : {}),
           ...(plan.input.due !== undefined ? { due: plan.input.due } : {}),
         });
