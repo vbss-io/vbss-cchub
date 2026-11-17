@@ -10,7 +10,12 @@ import { isProcessAlive } from "./db.js";
 import { getSetting, setSetting } from "./delegation-store.js";
 import { broadcast } from "./sse.js";
 
-const run = promisify(execFile);
+const defaultRun = promisify(execFile);
+let run: typeof defaultRun = defaultRun;
+
+export function overrideTunnelRunner(next: typeof defaultRun | null): void {
+  run = next ?? defaultRun;
+}
 
 export type TunnelState = "stopped" | "installing" | "starting" | "running" | "error";
 

@@ -1,8 +1,15 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-const run = promisify(execFile);
+const defaultRun = promisify(execFile);
+let run: typeof defaultRun = defaultRun;
 const CACHE_MS = 8_000;
+
+export function overrideRuntimeRunner(next: typeof defaultRun | null): void {
+  run = next ?? defaultRun;
+  cached = null;
+  inFlight = null;
+}
 
 export interface ProcessRow {
   pid: number;
