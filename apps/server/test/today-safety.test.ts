@@ -203,13 +203,13 @@ describe("finding 2: unschedule, reschedule, rename and move keep the daily as i
     assert.deepEqual(payload.inNote, []);
   });
 
-  it("G00c: rename through the board item write keeps the custom line, adds no generated line and keeps the task in the focus", () => {
+  it("H3: rename through the board item write renames the custom line, keeps its suffix, adds no generated line and keeps the task in the focus", () => {
     const { root, settings, primed } = setup();
     const task = taskIn(settings, "alpha", "Ship release");
     board.writeBoardTaskSynced(settings, { projectId: "alpha", line: task.line, raw: task.raw, title: "Ship the new release" });
     today.flushMirrors(settings);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
-    assert.equal(readFileSync(dailyPath(root), "utf8"), primed);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), primed.replace(LINE, "- [ ] [[alpha|Alpha Project]] - Ship the new release (call Ana first, she has the keys)"));
     assert.equal(primed.includes("Ship the new release"), false);
     const payload = today.readToday(settings, TODAY);
     assert.deepEqual(payload.inNote, []);
@@ -347,7 +347,7 @@ describe("findings 3 and 4: a hub restart keeps the persisted baseline", () => {
     assert.ok(readFileSync(projectFile, "utf8").includes(`- [x] Write notes ${SCHEDULED} ${TODAY}`));
     await new Promise((resolve) => setTimeout(resolve, 300));
     const after = readFileSync(dailyFile, "utf8");
-    assert.equal(after, ticked);
+    assert.equal(after, ticked.replace("- [ ] [[alpha|Alpha Project]] - Other task\n", "- [ ] [[alpha|Alpha Project]] - Other task renamed\n"));
   });
 });
 
@@ -414,18 +414,17 @@ describe("finding 6: notes nested under a task that leaves the day", () => {
 });
 
 describe("finding 7: duplicate lines", () => {
-  it("are never removed by the first migration or by the mirror", () => {
+  it("H3: are merged into one line by the mirror after the first migration, keeping the free line", () => {
     const focus = ["- [ ] [[lab|Lab]] - Mig one", "- [ ] [[lab|Lab]] - Mig one", "- [ ] free"];
     const root = lab({ lab: project("Lab", ["- [ ] Mig one"]) }, { [TODAY]: dailyWith(focus) });
     const settings = useVault(root);
     const before = readFileSync(dailyPath(root), "utf8");
     const result = today.todayApi.migrateFocus(settings, TODAY);
     assert.equal(result.scheduled, 1);
-    assert.equal(readFileSync(dailyPath(root), "utf8"), before);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     const after = readFileSync(dailyPath(root), "utf8");
-    assert.equal(after, before);
-    assert.equal(after.split("\n").filter((line) => line === "- [ ] [[lab|Lab]] - Mig one").length, 2);
+    assert.equal(after, before.replace("- [ ] [[lab|Lab]] - Mig one\n- [ ] [[lab|Lab]] - Mig one\n", "- [ ] [[lab|Lab]] - Mig one\n"));
+    assert.equal(after.split("\n").filter((line) => line === "- [ ] [[lab|Lab]] - Mig one").length, 1);
     assert.equal(taskIn(settings, "lab", "Mig one").scheduled, TODAY);
   });
 });
@@ -572,7 +571,7 @@ function prng(seed: number): () => number {
   };
 }
 
-describe("property: every line of the daily survives any sequence of operations", () => {
+describe("property: every user line survives any sequence of operations, task lines follow their project", () => {
   const OPEN: ReadonlySet<string> = new Set(["todo", "doing", "blocked", "hold"]);
   const BOX_RE = /^(\s*[-*]\s+\[)([ xX-])(\])/;
   const checkboxOf = (line: string): "todo" | "doing" | "done" | null => {
@@ -594,6 +593,7 @@ describe("property: every line of the daily survives any sequence of operations"
         const allTasks = (): BoardTask[] => flatten(board.readBoard(settings).tasks);
         const openTasks = (): BoardTask[] => allTasks().filter((task) => task.section === "open" && task.status !== "archived");
         const identities = new Map<string, string>();
+        const taskTexts = new Set<string>();
         const copies: string[] = [];
         const renameKey = (from: string, to: string): void => {
           for (const [line, key] of identities) if (key === from) identities.set(line, to);
@@ -624,12 +624,24 @@ describe("property: every line of the daily survives any sequence of operations"
           const texts = content.split(/\r\n|\n/);
           for (const link of board.scanDaily(settings, TODAY, content, payload.projects, payload.tasks).links) {
             const key = keyOf(link.task);
+            taskTexts.add(unmarked(texts[link.line] as string));
             if (scoped.has(key)) identities.set(unmarked(texts[link.line] as string), key);
           }
         };
+        const isTaskLine = (line: string): boolean => identities.has(unmarked(line)) || taskTexts.has(unmarked(line));
+        const plainOf = (line: string): string => unmarked(line).trim();
         const check = (step: string): void => {
           const content = readContent();
-          assert.deepEqual(missingLines(expected, content), [], `${step} CONTENT ${JSON.stringify(content)} EXPECTED ${JSON.stringify(expected)}`);
+          const left = new Map<string, number>();
+          for (const line of content.split(/\r\n|\n/)) left.set(plainOf(line), (left.get(plainOf(line)) ?? 0) + 1);
+          const missing = expected.filter((line) => {
+            if (isTaskLine(line)) return false;
+            const count = left.get(plainOf(line)) ?? 0;
+            if (count === 0) return true;
+            left.set(plainOf(line), count - 1);
+            return false;
+          });
+          assert.deepEqual(missing, [], `${step} CONTENT ${JSON.stringify(content)} EXPECTED ${JSON.stringify(expected)}`);
           if (fixture.bom) assert.equal(content.startsWith(BOM), true, step);
           if (fixture.crlf) assert.equal(content.replace(/\r\n/g, "").includes("\n"), false, step);
         };
@@ -907,12 +919,22 @@ describe("property: every line of the daily survives any sequence of operations"
           if (ticks.length > 0) {
             const payload = today.readToday(settings, TODAY);
             const reported = new Set([...(payload.outOfSync ?? []).map((item) => item.line), ...payload.ambiguous.map((item) => item.text), ...(payload.unmatched ?? []).map((item) => item.line)]);
+            const keyOfId = new Map(allTasks().map((item) => [item.id, keyOf(item)]));
+            const reportedKeys = new Set([
+              ...(payload.outOfSync ?? []).map((item) => `${item.projectId}|${item.taskTitle}`),
+              ...payload.ambiguous.flatMap((item) => (item.taskId === null ? [] : [keyOfId.get(item.taskId) ?? ""])),
+            ]);
             const content = readContent();
+            const board2 = board.readBoard(settings);
+            const boxes = new Map<string, Set<string>>();
+            for (const link of board.scanDaily(settings, TODAY, content, board2.projects, board2.tasks).links) boxes.set(keyOf(link.task), (boxes.get(keyOf(link.task)) ?? new Set<string>()).add(link.checkbox));
             for (const tick of ticks) {
               const now = statusAfter.get(tick.key);
               const applied = now !== undefined && statusBox(now) === tick.checkbox;
-              assert.ok(content.split(/\r\n|\n/).includes(tick.line), `${label}: the ticked line "${tick.line}" was rewritten`);
-              assert.ok(applied || reported.has(tick.line), `${label}: tick on "${tick.line}" for ${tick.key} was dropped (status ${now ?? "missing"})`);
+              const told = reported.has(tick.line) || reportedKeys.has(tick.key);
+              const kept = content.split(/\r\n|\n/).includes(tick.line) || boxes.get(tick.key)?.has(tick.checkbox) === true;
+              assert.ok(kept || told, `${label}: the ticked line "${tick.line}" was rewritten`);
+              assert.ok(applied || told, `${label}: tick on "${tick.line}" for ${tick.key} was dropped (status ${now ?? "missing"})`);
             }
           }
           remember();
@@ -1039,41 +1061,42 @@ describe("fix wave 2, finding 3: duplicate lines added or removed", () => {
       .ambiguous.filter((item) => item.reason === "duplicate-line")
       .map((item) => item.text);
 
+  const disagreements = (settings: DelegationSettings): [string, string][] => (today.readToday(settings, TODAY).outOfSync ?? []).map((item) => [item.line, item.dailyCheckbox]);
+
   for (const where of ["above", "below"] as const) {
-    it(`an unticked copy added ${where} a ticked line reopens nothing and is reported`, () => {
+    it(`H3: an unticked copy added ${where} a ticked line reopens nothing, is merged and the copy is reported`, () => {
       const root = lab({ alpha: project("Alpha Project", [`- [x] Ship release ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyWith([TICKED]) });
       const settings = useVault(root);
       today.todayApi.regenerateFocusMirror(settings, TODAY);
       editDaily(root, (content) => content.replace(`${TICKED}\n`, where === "above" ? `${LINE}\n${TICKED}\n` : `${TICKED}\n${LINE}\n`));
-      const edited = readFileSync(dailyPath(root), "utf8");
       assert.equal(duplicateReports(settings).length, 1);
       today.flushMirrors(settings);
       today.todayApi.regenerateFocusMirror(settings, TODAY);
       assert.equal(taskIn(settings, "alpha", "Ship release").status, "done");
-      assert.equal(readFileSync(dailyPath(root), "utf8"), edited);
-      assert.equal(duplicateReports(settings).length, 1);
+      assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([TICKED]));
+      assert.deepEqual(duplicateReports(settings), []);
+      assert.deepEqual(disagreements(settings), [[TICKED, "todo"]]);
     });
   }
 
-  it("removing one of two copies ticks nothing and is reported", () => {
+  it("H3: two copies that disagree are merged with the project state, tick nothing and the copy is reported", () => {
     const root = lab({ alpha: project("Alpha Project", [`- [ ] Ship release ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyWith([LINE, TICKED]) });
     const settings = useVault(root);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
-    editDaily(root, (content) => content.replace(`${LINE}\n`, ""));
-    const edited = readFileSync(dailyPath(root), "utf8");
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Ship release").status, "todo");
-    assert.equal(readFileSync(dailyPath(root), "utf8"), edited);
-    assert.deepEqual(duplicateReports(settings), [TICKED]);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([LINE]));
+    assert.deepEqual(disagreements(settings), [[LINE, "done"]]);
   });
 
-  it("after the copy is adopted a later tick syncs again", () => {
+  it("H3: a copy added by hand is merged and a later tick on the line syncs again", () => {
     const root = lab({ alpha: project("Alpha Project", [`- [ ] Ship release ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyWith([LINE]) });
     const settings = useVault(root);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     editDaily(root, (content) => content.replace(`${LINE}\n`, `${LINE}\n${LINE}\n`));
     today.flushMirrors(settings);
-    editDaily(root, (content) => content.replace(`${LINE}\n${LINE}\n`, `${TICKED}\n${TICKED}\n`));
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([LINE]));
+    editDaily(root, (content) => content.replace(`${LINE}\n`, `${TICKED}\n`));
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Ship release").status, "done");
     assert.deepEqual(duplicateReports(settings), []);
@@ -1164,7 +1187,7 @@ describe("fix wave 3, finding 1: Note tab saves go through the tick planner", ()
       .ambiguous.filter((item) => item.reason === "duplicate-line")
       .map((item) => item.text);
 
-  it("a Note tab save that adds an unticked copy above a ticked line reopens nothing and is reported", () => {
+  it("H3: a Note tab save that adds an unticked copy above a ticked line reopens nothing, is merged and the copy is reported", () => {
     const root = lab({ alpha: project("Alpha Project", [`- [x] Ship release ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyWith([TICKED]) });
     const settings = useVault(root);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
@@ -1174,21 +1197,21 @@ describe("fix wave 3, finding 1: Note tab saves go through the tick planner", ()
     today.flushMirrors(settings);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     assert.equal(taskIn(settings, "alpha", "Ship release").status, "done");
-    assert.equal(readFileSync(dailyPath(root), "utf8"), saved);
-    assert.deepEqual(duplicateReports(settings), [LINE]);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([TICKED]));
+    assert.deepEqual(duplicateReports(settings), []);
+    assert.deepEqual((today.readToday(settings, TODAY).outOfSync ?? []).map((item) => item.dailyCheckbox), ["todo"]);
   });
 
-  it("a Note tab save that removes one of two copies ticks nothing and is reported", () => {
-    const root = lab({ alpha: project("Alpha Project", [`- [ ] Ship release ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyWith([LINE, TICKED]) });
+  it("H3: a Note tab save of two copies that disagree ticks nothing and keeps one line with the project state", () => {
+    const root = lab({ alpha: project("Alpha Project", [`- [ ] Ship release ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyWith([LINE]) });
     const settings = useVault(root);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
-    const saved = readFileSync(dailyPath(root), "utf8").replace(`${LINE}\n`, "");
+    const saved = readFileSync(dailyPath(root), "utf8").replace(`${LINE}\n`, `${LINE}\n${TICKED}\n`);
     today.saveDailyFromClient(settings, TODAY, saved);
-    assert.equal(taskIn(settings, "alpha", "Ship release").status, "todo");
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Ship release").status, "todo");
-    assert.equal(readFileSync(dailyPath(root), "utf8"), saved);
-    assert.deepEqual(duplicateReports(settings), [TICKED]);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([LINE]));
+    assert.deepEqual((today.readToday(settings, TODAY).outOfSync ?? []).map((item) => item.dailyCheckbox), ["done"]);
   });
 
   it("a plain tick saved from the Note tab still reaches the project", () => {
@@ -1202,14 +1225,15 @@ describe("fix wave 3, finding 1: Note tab saves go through the tick planner", ()
     assert.equal(readFileSync(dailyPath(root), "utf8"), saved);
   });
 
-  it("explicit Use daily and Sync to daily refuse a duplicated line in scheduled mode", () => {
+  it("H3: explicit Use daily and Sync to daily act on the one line left after the copies are merged", () => {
     const root = lab({ alpha: project("Alpha Project", [`- [x] Ship release ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyWith([LINE, TICKED]) });
     const settings = useVault(root);
     today.todayApi.regenerateFocusMirror(settings, TODAY);
     const before = readFileSync(dailyPath(root), "utf8");
-    assert.throws(() => today.syncTaskFromDailyChecked(settings, { line: before.split("\n").indexOf(LINE), date: TODAY }), board.AmbiguousDailyLineError);
+    assert.equal(before, dailyWith([TICKED]));
     const task = taskIn(settings, "alpha", "Ship release");
-    assert.throws(() => today.syncTaskToDailyChecked(settings, { projectId: "alpha", line: task.line, raw: task.raw, date: TODAY }), board.AmbiguousDailyLineError);
+    assert.equal(today.syncTaskToDailyChecked(settings, { projectId: "alpha", line: task.line, raw: task.raw, date: TODAY }).updated, 0);
+    assert.equal(today.syncTaskFromDailyChecked(settings, { line: before.split("\n").indexOf(TICKED), date: TODAY }).updated, 0);
     assert.equal(taskIn(settings, "alpha", "Ship release").status, "done");
     assert.equal(readFileSync(dailyPath(root), "utf8"), before);
   });
@@ -1273,11 +1297,11 @@ describe("fix wave 3, finding 1 over HTTP: PUT /delegation/daily in scheduled mo
     return { box, hub };
   }
 
-  async function settle(hub: RunningServer): Promise<string[]> {
+  async function settle(hub: RunningServer, merged: string): Promise<string[]> {
     const found = await waitFor(async () => {
       const payload = (await call(hub, "GET", `/delegation/today/${TODAY}`)).json;
-      const texts = (payload.ambiguous as { reason: string; text: string }[]).filter((item) => item.reason === "duplicate-line").map((item) => item.text);
-      return texts.length > 0 ? texts : null;
+      const items = (payload.outOfSync ?? []) as { line: string; dailyCheckbox: string }[];
+      return items.some((item) => item.line === merged) ? items.map((item) => item.dailyCheckbox) : null;
     }, 10000);
     await new Promise((resolve) => setTimeout(resolve, 900));
     return found;
@@ -1287,7 +1311,7 @@ describe("fix wave 3, finding 1 over HTTP: PUT /delegation/daily in scheduled mo
     return flatten((await call(hub, "GET", "/delegation/tasks-board")).json.tasks as BoardTask[]).find((task) => task.title === "Ship release")?.status;
   }
 
-  it("a duplicate unticked line added above a ticked one keeps the task done and is reported", async () => {
+  it("H3: a duplicate unticked line added above a ticked one keeps the task done, is merged and reported", async () => {
     const { box, hub } = await prepare([`- [x] Ship release ${SCHEDULED} ${TODAY}`], [TICKED]);
     const dailyFile = join(box.brain, "daily", `${TODAY}.md`);
     const current = await call(hub, "GET", `/delegation/daily/${TODAY}`);
@@ -1295,22 +1319,22 @@ describe("fix wave 3, finding 1 over HTTP: PUT /delegation/daily in scheduled mo
     const put = await call(hub, "PUT", `/delegation/daily/${TODAY}`, { content, baseUpdatedAt: current.json.updatedAt });
     assert.equal(put.status, 200);
     assert.equal(await statusOf(hub), "done");
-    assert.deepEqual(await settle(hub), [LINE]);
+    assert.deepEqual(await settle(hub, TICKED), ["todo"]);
     assert.equal(await statusOf(hub), "done");
-    assert.equal(readFileSync(dailyFile, "utf8"), content);
+    assert.equal(readFileSync(dailyFile, "utf8"), content.replace(`${LINE}\n`, ""));
   });
 
-  it("removing one of two copies keeps the task open and is reported", async () => {
-    const { box, hub } = await prepare([`- [ ] Ship release ${SCHEDULED} ${TODAY}`], [LINE, TICKED]);
+  it("H3: two copies that disagree keep the task open, are merged and reported", async () => {
+    const { box, hub } = await prepare([`- [ ] Ship release ${SCHEDULED} ${TODAY}`], [LINE]);
     const dailyFile = join(box.brain, "daily", `${TODAY}.md`);
     const current = await call(hub, "GET", `/delegation/daily/${TODAY}`);
-    const content = (current.json.content as string).replace(`${LINE}\n`, "");
+    const content = (current.json.content as string).replace(`${LINE}\n`, `${LINE}\n${TICKED}\n`);
     const put = await call(hub, "PUT", `/delegation/daily/${TODAY}`, { content, baseUpdatedAt: current.json.updatedAt });
     assert.equal(put.status, 200);
     assert.equal(await statusOf(hub), "todo");
-    assert.deepEqual(await settle(hub), [TICKED]);
+    assert.deepEqual(await settle(hub, LINE), ["done"]);
     assert.equal(await statusOf(hub), "todo");
-    assert.equal(readFileSync(dailyFile, "utf8"), content);
+    assert.equal(readFileSync(dailyFile, "utf8"), content.replace(`${TICKED}\n`, ""));
   });
 });
 
@@ -1360,12 +1384,14 @@ describe("fix wave 3, finding 3: a task renamed in the project while its line is
     return { root, settings };
   };
 
-  it("applies the tick to the renamed task when the rename came through the board first", () => {
+  it("H3: renames the line and applies the tick to the renamed task when the rename came through the board first", () => {
     const { root, settings } = setup();
     const task = taskIn(settings, "alpha", "Ship release");
     board.writeBoardTaskSynced(settings, { projectId: "alpha", line: task.line, raw: task.raw, title: "Ship the new build" });
     today.flushMirrors(settings);
-    editDaily(root, (content) => content.replace(LINE, TICKED));
+    const renamed = "- [ ] [[alpha|Alpha Project]] - Ship the new build";
+    assert.ok(readFileSync(dailyPath(root), "utf8").includes(`${renamed}\n`));
+    editDaily(root, (content) => content.replace(renamed, renamed.replace("- [ ]", "- [x]")));
     const ticked = readFileSync(dailyPath(root), "utf8");
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Ship the new build").status, "done");
@@ -1454,7 +1480,7 @@ describe("fix wave 3: more adversarial cases", () => {
     assert.equal(read(root, `daily/${DAY_BEFORE}.md`), saved);
   });
 
-  it("close yesterday on today's daily goes through the planner and a duplicate stays reported", () => {
+  it("H3: close yesterday on today's daily goes through the planner and a duplicate is merged", () => {
     const LINE = "- [ ] [[alpha|Alpha Project]] - Ship release";
     const TICKED = "- [x] [[alpha|Alpha Project]] - Ship release";
     const root = lab({ alpha: project("Alpha Project", [`- [x] Ship release ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyWith([TICKED]) });
@@ -1465,7 +1491,7 @@ describe("fix wave 3: more adversarial cases", () => {
     today.closeDailyTicks(settings, TODAY, before, after);
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Ship release").status, "done");
-    assert.equal(readFileSync(dailyPath(root), "utf8"), after);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), before);
   });
 
   it("Use daily applies an unambiguous line in scheduled mode", () => {
@@ -1478,7 +1504,7 @@ describe("fix wave 3: more adversarial cases", () => {
     assert.equal(taskIn(settings, "alpha", "Ship release").status, "todo");
   });
 
-  it("a renamed subtask and a subtask under a renamed parent keep their ticks", () => {
+  it("H3: a renamed subtask and a subtask under a renamed parent are renamed and keep their ticks", () => {
     const PARENT = "- [ ] [[alpha|Alpha Project]] - Parent job";
     const root = lab(
       { alpha: project("Alpha Project", [`- [ ] Parent job ${SCHEDULED} ${TODAY}`, "  - [ ] Child one", "  - [ ] Child two"]) },
@@ -1489,7 +1515,8 @@ describe("fix wave 3: more adversarial cases", () => {
     const child = taskIn(settings, "alpha", "Child one");
     board.writeBoardTaskSynced(settings, { projectId: "alpha", line: child.line, raw: child.raw, title: "First child renamed" });
     today.flushMirrors(settings);
-    editDaily(root, (content) => content.replace("  - [ ] Child one", "  - [x] Child one"));
+    assert.ok(readFileSync(dailyPath(root), "utf8").includes("\n  - [ ] First child renamed\n"));
+    editDaily(root, (content) => content.replace("  - [ ] First child renamed", "  - [x] First child renamed"));
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "First child renamed").status, "done");
     const parent = taskIn(settings, "alpha", "Parent job");
@@ -1555,36 +1582,36 @@ describe("fix wave 4, finding 1: a moved line keeps its identity", () => {
     return { root, settings };
   };
 
-  it("a subtask moved under another parent keeps syncing when it is ticked later", () => {
+  it("H3: a subtask moved under another parent goes back under its project parent and keeps syncing", () => {
     const { root, settings } = nested();
     const moved = dailyWith([PA, PB, "  - [ ] Other child", "  - [ ] Child step"]);
     today.saveDailyFromClient(settings, TODAY, moved);
     today.flushMirrors(settings);
-    assert.equal(readFileSync(dailyPath(root), "utf8"), moved);
-    editDaily(root, () => dailyWith([PA, PB, "  - [ ] Other child", "  - [x] Child step"]));
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([PA, "  - [ ] Child step", PB, "  - [ ] Other child"]));
+    editDaily(root, () => dailyWith([PA, "  - [x] Child step", PB, "  - [ ] Other child"]));
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Child step").status, "done");
     assert.equal(taskIn(settings, "alpha", "Other child").status, "todo");
-    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([PA, PB, "  - [ ] Other child", "  - [x] Child step"]));
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([PA, "  - [x] Child step", PB, "  - [ ] Other child"]));
   });
 
-  it("a subtask moved under another parent and ticked in the same save reaches the project", () => {
+  it("H3: a subtask moved under another parent and ticked in the same save reaches the project and goes back", () => {
     const { root, settings } = nested();
     const saved = dailyWith([PA, PB, "  - [ ] Other child", "  - [x] Child step"]);
     editDaily(root, () => saved);
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Child step").status, "done");
-    assert.equal(readFileSync(dailyPath(root), "utf8"), saved);
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([PA, "  - [x] Child step", PB, "  - [ ] Other child"]));
   });
 
-  it("an outdented subtask ticked in the same save and later keeps its identity", () => {
+  it("H3: an outdented subtask ticked in the same save goes back under its parent and keeps its identity", () => {
     const { root, settings } = nested();
     const outdented = dailyWith([PA, PB, "  - [ ] Other child", "- [x] Child step"]);
     today.saveDailyFromClient(settings, TODAY, outdented);
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Child step").status, "done");
-    assert.equal(readFileSync(dailyPath(root), "utf8"), outdented);
-    editDaily(root, () => dailyWith([PA, PB, "  - [ ] Other child", "- [ ] Child step"]));
+    assert.equal(readFileSync(dailyPath(root), "utf8"), dailyWith([PA, "  - [x] Child step", PB, "  - [ ] Other child"]));
+    editDaily(root, () => dailyWith([PA, "  - [ ] Child step", PB, "  - [ ] Other child"]));
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Child step").status, "todo");
     assert.equal(taskIn(settings, "alpha", "Parent A").status, "todo");

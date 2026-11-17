@@ -367,6 +367,7 @@ const AMBIGUITY_HINT: Record<TodayAmbiguityReason, string> = {
   "several-lines": "Its parent appears more than once in the note, so it was not placed.",
   "several-tasks": "This line matches more than one task, so its checkbox is not synced.",
   "duplicate-line": "This line was copied or removed, so its checkbox was not synced. Check the task status.",
+  moved: "It moved in its project and its line in the note could mean another task, so nothing was added.",
 };
 
 export const ambiguityHint = (item: Pick<TodayAmbiguous, "reason">): string => AMBIGUITY_HINT[item.reason];

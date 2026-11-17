@@ -1246,7 +1246,7 @@ describe("G00c fix wave 4, finding 3: lines appended after the hub filled an emp
     assertSettled(settings, root, [TODAY], ["projects/alpha.md", dailyRel(TODAY)]);
   });
 
-  it("never removes a hub line the user edited or wrote a note under, nor a line the user typed", () => {
+  it("H3: merges a copy the skill appended into the line the user edited, keeping its note, every typed line and the recurring copies", () => {
     const { root, settings } = firstSight();
     editDaily(root, TODAY, (content) => content.replace(alphaLine("Dated today"), alphaLine("**Dated today**")).replace(alphaLine("Daily standup"), `${alphaLine("Daily standup")}\n  - my own note`));
     settle(settings, TODAY);
@@ -1254,11 +1254,16 @@ describe("G00c fix wave 4, finding 3: lines appended after the hub filled an emp
     editDaily(root, TODAY, (content) => content + SKILL);
     settle(settings, TODAY);
     const after = read(root, dailyRel(TODAY));
-    assert.equal(after, edited + SKILL);
+    const merged = (edited + SKILL)
+      .replace(`${alphaLine("Dated today")}\n  - skill note: first thing\n`, "")
+      .replace(`${alphaLine("**Dated today**")}\n`, `${alphaLine("**Dated today**")}\n  - skill note: first thing\n`);
+    assert.equal(after, merged);
     assert.equal(count(after, alphaLine("Daily standup")), 2);
     editDaily(root, TODAY, (content) => content.replace("- free reminder from the skill", `${alphaLine("Undated pick")}\n- free reminder from the skill`));
     settle(settings, TODAY);
-    assert.equal(count(read(root, dailyRel(TODAY)), alphaLine("Undated pick")), 2);
+    const typed = read(root, dailyRel(TODAY));
+    assert.equal(count(typed, alphaLine("Undated pick")), 1);
+    assert.ok(typed.includes("- free reminder from the skill\n"));
   });
 });
 

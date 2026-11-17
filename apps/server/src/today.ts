@@ -23,11 +23,13 @@ import {
   type OrganizeDailyFocusResult,
 } from "./daily.js";
 import { BadRequestError, NotFoundError } from "./delegation-launch.js";
+import { noStructure, restructureFocus, type EngineLink, type StructureResult } from "./focus-structure.js";
 import { deleteTodayBaseline, getSetting, getSettings, getTodayBaseline, saveTodayBaseline, setSetting } from "./delegation-store.js";
 import type { DelegationSettings, FocusSource } from "./delegation-types.js";
 import { localDate } from "./second-brain.js";
 import {
   addTaskToDaily,
+  AlreadyInDailyError,
   applyStatusChange,
   BOARD_STATUSES,
   checkboxForStatus,
@@ -105,7 +107,7 @@ export interface TodayCapture {
   promotedTo: string | null;
 }
 
-export type AmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks" | "duplicate-line";
+export type AmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks" | "duplicate-line" | "moved";
 
 export type OutOfSyncReason = "recurring-done" | "recurring";
 
@@ -1131,6 +1133,7 @@ function insertMissing(
   hints: ReadonlySet<string>,
   allowHeading = false,
   carried: ReadonlySet<string> = new Set<string>(),
+  moved: ReadonlySet<string> = new Set<string>(),
 ): InsertResult {
   const result: InsertResult = { inserted: [], renamed: [], ambiguous: [] };
   const parents = parentMap(data.tasks);
@@ -1162,7 +1165,12 @@ function insertMissing(
     return true;
   };
   const planned = (task: BoardTask): boolean => carried.has(task.id) || entersDayWith(task, date);
-  const skip = (task: BoardTask): boolean => !planned(task) || isPresent(presence, task) || presence.unclear.has(task.id) || known(task);
+  const isMoved = (task: BoardTask): boolean => {
+    if (!moved.has(task.id)) return false;
+    ambiguous(task, "moved");
+    return true;
+  };
+  const skip = (task: BoardTask): boolean => !planned(task) || isPresent(presence, task) || presence.unclear.has(task.id) || isMoved(task) || known(task);
   const settle = (lines: TreeLine[], check: (lines: TreeLine[]) => number[]): TreeLine[] | null => {
     let current = lines;
     for (;;) {
@@ -1229,6 +1237,7 @@ function insertMissing(
         ambiguous(subtask, "unclear-line");
         continue;
       }
+      if (isMoved(subtask)) continue;
       if (known(subtask)) continue;
       placeUnder(task, subtask);
     }
@@ -1285,7 +1294,7 @@ function insertMissing(
       ambiguous(task, "unclear-line");
       continue;
     }
-    if (known(task)) continue;
+    if (isMoved(task) || known(task)) continue;
     const parent = parents.get(task.id) ?? null;
     if (parent !== null && (presence.lines.get(parent.id)?.length ?? 0) > 0) {
       placeUnder(parent, task);
@@ -2733,6 +2742,35 @@ function heldRecurringTicks(scan: FocusScan, plan: TickPlan): { line: number; ta
   });
 }
 
+function engineLinks(plan: TickPlan, lines: readonly DocLine[]): Map<DocLine, EngineLink> {
+  const out = new Map<DocLine, EngineLink>();
+  for (const link of plan.links) {
+    const line = lines[link.line];
+    if (line === undefined) continue;
+    const memo = link.base === undefined ? null : (plan.identityAt(link.base)?.memo ?? null);
+    out.set(line, { task: link.task, title: memo?.title ?? null });
+  }
+  return out;
+}
+
+const movedIds = (structure: StructureResult): Set<string> => new Set(structure.unclear.map((task) => task.id));
+
+function movedAmbiguities(data: BoardData, structure: StructureResult, reported: readonly TodayAmbiguous[]): TodayAmbiguous[] {
+  const seen = new Set(reported.flatMap((item) => (item.taskId === null ? [] : [item.taskId])));
+  const projects = new Map(data.projects.map((project) => [project.id, project]));
+  return structure.unclear.flatMap((task): TodayAmbiguous[] => {
+    if (seen.has(task.id)) return [];
+    const project = projects.get(task.projectId);
+    return [{ kind: "task", text: project ? `${project.title} - ${task.title}` : task.title, line: null, taskId: task.id, reason: "moved" }];
+  });
+}
+
+function structuredDoc(settings: DelegationSettings, date: string, content: string, data: BoardData): { doc: ParsedDoc; structure: StructureResult } {
+  const doc = openDoc(content);
+  const structure = isCurrentOrFuture(date) ? restructureFocus(settings, date, doc, data) : noStructure();
+  return { doc, structure };
+}
+
 function runMirror(settings: DelegationSettings, date: string, options: MirrorOptions = {}): MirrorResult {
   const skip = (skipped: MirrorSkip, applied = 0): MirrorResult => ({ changed: false, skipped, applied });
   if (!settings.features.daily || !settings.features.tasks) return skip("disabled");
@@ -2852,11 +2890,12 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
     }
     const drops = [...reconciled.drop, ...pruned];
     dropBlocks(doc, daily.content, drops, mirrorLines(members, drops));
+    const structure = closing ? noStructure() : restructureFocus(settings, date, doc, data, engineLinks(plan, originals));
     const allowed = renderDoc(doc);
     const present = presenceOf(scanDaily(settings, date, allowed, data.projects, data.tasks)).lines;
     const wanted = computeFocus(settings, data, date).filter((entry) => reconciled.insert.has(entry.task.id) || present.has(entry.task.id));
     const prior = new Set(doc.lines);
-    const insertion = closing ? noInsertion() : insertMissing(settings, date, doc, data, wanted, baseline.state, reconciled.insert);
+    const insertion = closing ? noInsertion() : insertMissing(settings, date, doc, data, wanted, baseline.state, reconciled.insert, false, new Set<string>(), movedIds(structure));
     const added = doc.lines.filter((line) => !prior.has(line)).map((line) => line.text);
     const next = renderDoc(doc);
     if (!keepsEveryLine(allowed, next)) {
@@ -2908,8 +2947,13 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
       }),
     };
     for (const line of plan.owned) owned.add(line);
+    for (const item of structure.divergent) {
+      const stored = storedOutOfSync(item.line.text, item.task, null, item.checkbox);
+      if (stored !== null) unsynced.push(stored);
+    }
     const outOfSync = nextOutOfSync(baseline.state.outOfSync, [...storedFound(plan, texts), ...unsynced], finalTexts, prints);
-    const duplicates = nextDuplicates(baseline.state.duplicates, plan.copies, finalTexts);
+    const merged = new Set(structure.merges.map((line) => unmarkedText(line.text)));
+    const duplicates = nextDuplicates(baseline.state.duplicates, plan.copies, finalTexts).filter((item) => !merged.has(item.text));
     const unresolved = nextUnresolved(baseline.state.unresolved, plan.unresolved, finalTexts, finalScan, texts);
     const dismissed = baseline.state.dismissed.filter((line) => finalTexts.includes(line));
     const found = findUnmatched(plan, owned, texts, scan, data, baseline.state).flatMap((item) => {
@@ -3180,8 +3224,22 @@ export function syncTaskToDailyChecked(settings: DelegationSettings, input: Sync
   return result;
 }
 
+function presentAfterStructure(settings: DelegationSettings, date: string, input: AddToDailyInput): boolean {
+  const data = loadBoardData(settings);
+  const daily = readDailySafe(settings, date);
+  if (data === null || daily === null || !daily.exists) return false;
+  const task = flattenTasks(data.tasks).find((item) => item.projectId === input.projectId && item.line === input.line && item.raw === input.raw);
+  if (task === undefined) return false;
+  const { doc } = structuredDoc(settings, date, daily.content, data);
+  return presenceOf(scanDaily(settings, date, renderDoc(doc), data.projects, data.tasks)).lines.has(task.id);
+}
+
 export function addTaskToDailyChecked(settings: DelegationSettings, input: AddToDailyInput): AddToDailyResult {
   const date = input.date ?? localDate();
+  if (usesMirror(settings, date) && presentAfterStructure(settings, date, input)) {
+    runMirror(settings, date, { source: "api" });
+    throw new AlreadyInDailyError();
+  }
   const result = addTaskToDaily(settings, input);
   if (!usesMirror(settings, date)) return result;
   const data = loadBoardData(settings);
@@ -3378,7 +3436,9 @@ function noteView(settings: DelegationSettings, date: string, daily: DailyReadRe
   if (scheduled && isCurrentOrFuture(date)) {
     const dated = computeFocus(settings, data, date);
     const memory: InsertMemory = loadBaseline(date, daily.path)?.state ?? { seen: mergeSeen([], linkedTasks(scan)), focus: focusMemory(dated) };
-    ambiguous.push(...insertMissing(settings, date, openDoc(content), data, dated, memory, new Set<string>()).ambiguous);
+    const { doc, structure } = structuredDoc(settings, date, content, data);
+    const inserted = insertMissing(settings, date, doc, data, dated, memory, new Set<string>(), false, new Set<string>(), movedIds(structure)).ambiguous;
+    ambiguous.push(...inserted, ...movedAmbiguities(data, structure, inserted));
   }
   const range = focusRange(texts, settings);
   if (!range) return { inNote: [], inNoteLinks: [], noteBlocks: [], unlinked: [], ambiguous };
@@ -3640,17 +3700,23 @@ function enterDaily(settings: DelegationSettings, date: string, task: BoardTask,
   if (daily === null || !daily.exists || data === null) return false;
   const fresh = flattenTasks(data.tasks).find((candidate) => candidate.id === task.id && candidate.raw === task.raw);
   if (fresh === undefined) return false;
-  if (presenceOf(scanDaily(settings, date, daily.content, data.projects, data.tasks)).lines.has(fresh.id)) return true;
+  const { doc } = structuredDoc(settings, date, daily.content, data);
+  const structured = renderDoc(doc);
+  if (presenceOf(scanDaily(settings, date, structured, data.projects, data.tasks)).lines.has(fresh.id)) {
+    writeFocusDoc(settings, date, daily, structured, "enter");
+    return true;
+  }
   const entry = entryOf(data, fresh);
   if (entry === null) return false;
   return placeInDaily(settings, date, daily, data, entry, carried, "enter");
 }
 
 function placeInDaily(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData, entry: TodayEntry, carried: ReadonlySet<string>, tag: string): boolean {
-  const doc = openDoc(daily.content);
-  insertMissing(settings, date, doc, data, [entry], { seen: [], focus: [] }, new Set([entry.task.id]), false, carried);
+  const { doc, structure } = structuredDoc(settings, date, daily.content, data);
+  const structured = renderDoc(doc);
+  insertMissing(settings, date, doc, data, [entry], { seen: [], focus: [] }, new Set([entry.task.id]), false, carried, movedIds(structure));
   const next = renderDoc(doc);
-  if (!keepsEveryLine(daily.content, next)) return false;
+  if (!keepsEveryLine(structured, next)) return false;
   writeFocusDoc(settings, date, daily, next, tag);
   return isPresent(presenceOf(scanDaily(settings, date, next, data.projects, data.tasks)), entry.task);
 }
@@ -3786,29 +3852,37 @@ function subtaskOptions(settings: DelegationSettings, date: string, target: Subt
 }
 
 function enterSubtask(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData, task: BoardTask, parent: BoardTask): void {
-  if (linesOfTask(settings, date, daily.content, data, task).length > 0) return;
-  const parentLines = linesOfTask(settings, date, daily.content, data, parent).length;
+  const { doc, structure } = structuredDoc(settings, date, daily.content, data);
+  const structured = renderDoc(doc);
+  if (linesOfTask(settings, date, structured, data, task).length > 0) {
+    writeFocusDoc(settings, date, daily, structured, "plan");
+    return;
+  }
+  const parentLines = linesOfTask(settings, date, structured, data, parent).length;
   if (parentLines === 0) throw new BadRequestError(`"${parent.title}" is not in this daily, add it to Today first`);
   if (parentLines > 1) throw new BadRequestError(`"${parent.title}" appears more than once in this daily, keep one line to plan its subtasks`);
   const entry = entryOf(data, task);
   if (entry === null) throw new NotFoundError("project not found");
-  const doc = openDoc(daily.content);
-  insertMissing(settings, date, doc, data, [entry], { seen: [], focus: [] }, new Set([task.id]));
+  insertMissing(settings, date, doc, data, [entry], { seen: [], focus: [] }, new Set([task.id]), false, new Set<string>(), movedIds(structure));
   const next = renderDoc(doc);
-  if (next === daily.content || linesOfTask(settings, date, next, data, task).length !== 1 || !keepsEveryLine(daily.content, next)) {
+  if (next === structured || linesOfTask(settings, date, next, data, task).length !== 1 || !keepsEveryLine(structured, next)) {
     throw new BadRequestError(`the hub could not place "${task.title}" under its parent without confusing it with another line, nothing was changed`);
   }
   writeFocusDoc(settings, date, daily, next, "plan");
 }
 
 function leaveSubtask(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData, task: BoardTask): void {
-  const lines = linesOfTask(settings, date, daily.content, data, task);
+  const { doc } = structuredDoc(settings, date, daily.content, data);
+  const structured = renderDoc(doc);
+  const lines = linesOfTask(settings, date, structured, data, task);
   if (lines.length > 1) throw new BadRequestError(`"${task.title}" appears more than once in this daily, nothing was removed`);
   const at = lines[0];
-  if (at === undefined) return;
-  if (checkboxOfLine(splitLines(daily.content)[at] ?? "") === "done") throw new BadRequestError(`"${task.title}" is ticked in this daily, nothing was removed`);
-  const doc = openDoc(daily.content);
-  dropBlocks(doc, daily.content, [at], new Map([[at, new Set<number>()]]));
+  if (at === undefined) {
+    writeFocusDoc(settings, date, daily, structured, "unplan");
+    return;
+  }
+  if (checkboxOfLine(splitLines(structured)[at] ?? "") === "done") throw new BadRequestError(`"${task.title}" is ticked in this daily, nothing was removed`);
+  dropBlocks(doc, structured, [at], new Map([[at, new Set<number>()]]));
   writeFocusDoc(settings, date, daily, renderDoc(doc), "unplan");
 }
 

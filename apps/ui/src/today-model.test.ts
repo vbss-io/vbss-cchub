@@ -379,7 +379,7 @@ describe("note lines and ambiguity", () => {
   });
 
   it("gives a short hint for every reason", () => {
-    for (const reason of ["same-title", "unclear-line", "several-lines", "several-tasks", "duplicate-line"] as const) {
+    for (const reason of ["same-title", "unclear-line", "several-lines", "several-tasks", "duplicate-line", "moved"] as const) {
       const hint = ambiguityHint({ reason });
       assert.ok(hint.length > 10 && hint.length < 100, reason);
     }
