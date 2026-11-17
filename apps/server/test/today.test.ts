@@ -934,6 +934,20 @@ describe("today routes", () => {
     assert.equal((await http("POST", `/delegation/today/${PAST}/migrate`)).status, 400);
     assert.equal((await http("POST", `/delegation/today/${TODAY}/schedule`, { projectId: "lab", line: -1, raw: "x", date: TODAY })).status, 400);
   });
+
+  it("H2: ticks a line of yesterday and refuses other days, bad bodies and stale lines", async () => {
+    write(box.brain, `daily/${YESTERDAY}.md`, dailyWith(YESTERDAY, ["- [ ] [[lab|Lab Project]] - Other task"]));
+    const other = flatten((await http("GET", "/delegation/tasks-board")).json.tasks as BoardTask[]).find((task) => task.title === "Other task") as BoardTask;
+    const body = { projectId: other.projectId, line: other.line, raw: other.raw, status: "done" };
+    assert.equal((await http("POST", `/delegation/today/${YESTERDAY}/tick`, { ...body, status: "closed" })).status, 400);
+    assert.equal((await http("POST", `/delegation/today/${YESTERDAY}/tick`, { ...body, line: -1 })).status, 400);
+    assert.equal((await http("POST", `/delegation/today/${TODAY}/tick`, body)).status, 400);
+    assert.equal((await http("POST", `/delegation/today/${YESTERDAY}/tick`, { ...body, raw: "- [ ] stale" })).status, 409);
+    const ticked = await http("POST", `/delegation/today/${YESTERDAY}/tick`, body);
+    assert.equal(ticked.status, 200);
+    assert.equal((ticked.json.task as BoardTask).doneAt, YESTERDAY);
+    assert.ok(read(box.brain, `daily/${YESTERDAY}.md`).includes("- [x] [[lab|Lab Project]] - Other task"));
+  });
 });
 
 describe("note blocks", () => {

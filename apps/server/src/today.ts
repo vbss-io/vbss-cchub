@@ -35,6 +35,7 @@ import {
   composeBoardFrom,
   createBoardTask,
   dailySyncBaseline,
+  draftBoardTask,
   docLine,
   effectiveProjectOrder,
   entersDayWith,
@@ -68,6 +69,7 @@ import {
   type AddToDailyInput,
   type AddToDailyResult,
   type BoardCheckbox,
+  type BoardCreateInput,
   type BoardProject,
   type BoardStatus,
   type TextFold,
@@ -105,7 +107,7 @@ export interface TodayCapture {
 
 export type AmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks" | "duplicate-line";
 
-export type OutOfSyncReason = "recurring-done";
+export type OutOfSyncReason = "recurring-done" | "recurring";
 
 export interface TodayOutOfSync {
   line: string;
@@ -187,6 +189,7 @@ export interface TodayPayload {
   ambiguous: TodayAmbiguous[];
   outOfSync?: TodayOutOfSync[];
   unmatched?: TodayUnmatched[];
+  closesDay?: boolean;
   summary: string | null;
   dailyExists: boolean;
   dailyUpdatedAt: number | null;
@@ -241,6 +244,27 @@ export interface TodaySubtaskOption {
 export interface SubtaskOptionsResult {
   parentId: string;
   subtasks: TodaySubtaskOption[];
+}
+
+export interface DayTickInput {
+  projectId: string;
+  line: number;
+  raw: string;
+  status: BoardCheckbox;
+}
+
+export interface DayTickResult {
+  task: BoardTask;
+}
+
+export interface DayCreateInput {
+  projectId: string;
+  title: string;
+  priority?: number | null;
+  due?: string | null;
+  parentLine?: number;
+  parentRaw?: string;
+  after?: { line: number; raw: string };
 }
 
 export interface ClearTodayResult {
@@ -319,6 +343,8 @@ export interface TodayApi {
   reorderFocus(settings: DelegationSettings, date: string, input: ReorderInput): ReorderResult;
   subtaskOptions(settings: DelegationSettings, date: string, target: SubtaskTarget): SubtaskOptionsResult;
   planSubtask(settings: DelegationSettings, date: string, input: PlanSubtaskInput): SubtaskOptionsResult;
+  tickDay(settings: DelegationSettings, date: string, input: DayTickInput): DayTickResult;
+  createInDay(settings: DelegationSettings, date: string, input: DayCreateInput): { task: BoardTask };
 }
 
 export class StaleCaptureError extends Error {
@@ -375,6 +401,22 @@ function isScheduledMode(settings: DelegationSettings): boolean {
 
 function isCurrentOrFuture(date: string): boolean {
   return date >= localDate();
+}
+
+function isYesterday(date: string): boolean {
+  return date === daysBefore(localDate(), 1);
+}
+
+function isMirrorDay(date: string): boolean {
+  return isCurrentOrFuture(date) || isYesterday(date);
+}
+
+function isClosingDate(settings: DelegationSettings, date: string): boolean {
+  return isScheduledMode(settings) && isYesterday(date);
+}
+
+function closesDay(settings: DelegationSettings, date: string): boolean {
+  return isClosingDate(settings, date) && readDailySafe(settings, date)?.exists === true;
 }
 
 function goneDates(): string[] {
@@ -713,7 +755,7 @@ function parseOutOfSync(value: unknown): StoredOutOfSync[] {
             checkbox: item.checkbox,
             ...(typeof item.title === "string" ? { title: item.title } : {}),
             ...(isStatus(item.status) ? { status: item.status } : {}),
-            ...(item.reason === "recurring-done" ? { reason: item.reason } : {}),
+            ...(item.reason === "recurring-done" || item.reason === "recurring" ? { reason: item.reason } : {}),
           },
         ]
       : [],
@@ -819,6 +861,20 @@ function memoFor(task: BoardTask, checkbox: BoardCheckbox, lineage: Lineage, loo
   };
 }
 
+function closedDayLines(settings: DelegationSettings, date: string, scan: FocusScan, known: ReadonlySet<string>): ReadonlySet<number> | null {
+  return isYesterday(date) ? confidentLines(settings, date, scan, known) : null;
+}
+
+function confidentLines(settings: DelegationSettings, date: string, scan: FocusScan, known: ReadonlySet<string>): Set<number> {
+  const out = new Set<number>();
+  for (const member of memberLines(settings, date, scan, null, known)) {
+    out.add(member.line);
+    if (member.entry.recurring) continue;
+    for (const child of member.entry.children) if (child.task !== null) out.add(child.line);
+  }
+  return out;
+}
+
 function inScope(task: BoardTask, date: string, lineage: Lineage): boolean {
   for (let current: BoardTask | null = task; current !== null; current = lineage.parents.get(current.id) ?? null) {
     if (current.scheduled === date || inFocus(current, date)) return true;
@@ -833,12 +889,12 @@ function knownPrints(data: BoardData, marks: Record<string, MarkMemo>): string[]
   return [...new Set(flattenTasks(data.tasks).filter((task) => projects.has(task.projectId)).map(fingerprint))];
 }
 
-function memoMarks(content: string, scan: FocusScan, date: string, lineage: Lineage): Record<string, MarkMemo> {
+function memoMarks(content: string, scan: FocusScan, date: string, lineage: Lineage, closed: ReadonlySet<number> | null = null): Record<string, MarkMemo> {
   const keys = lineKeys(splitLines(content));
   const marks: Record<string, MarkMemo> = {};
   for (const link of linkedLinesOf(scan)) {
     const key = keys[link.line];
-    if (key === undefined || link.effective === null || !inScope(link.task, date, lineage)) continue;
+    if (key === undefined || link.effective === null || !(inScope(link.task, date, lineage) || closed?.has(link.line) === true)) continue;
     marks[key] = memoFor(link.task, link.effective, lineage);
   }
   return marks;
@@ -877,7 +933,7 @@ function focusMemory(focus: TodayEntry[]): SeenTask[] {
 
 function adoptBaseline(settings: DelegationSettings, date: string, path: string, content: string, data: BoardData, outside = false): Baseline {
   const scan = scanDaily(settings, date, content, data.projects, data.tasks);
-  const marks = memoMarks(content, scan, date, lineageOf(data));
+  const marks = memoMarks(content, scan, date, lineageOf(data), closedDayLines(settings, date, scan, new Set<string>()));
   const state: BaselineState = {
     marks,
     seen: mergeSeen([], linkedTasks(scan)),
@@ -1034,6 +1090,8 @@ interface InsertMemory {
   seen: SeenTask[];
   focus: SeenTask[];
 }
+
+const noInsertion = (): InsertResult => ({ inserted: [], renamed: [], ambiguous: [] });
 
 interface TopItem {
   task: BoardTask;
@@ -1576,6 +1634,7 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
     date,
   };
   const baseScan = scanDaily(settings, date, baseline.content, data.projects, data.tasks);
+  const closed = closedDayLines(settings, date, scan, new Set(baseline.state.sync?.linked ?? []));
   const baseLinked = new Map(
     linkedLinesOf(baseScan)
       .filter((link) => link.userSynced)
@@ -1648,7 +1707,7 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
     }
     if (link) {
       const memo = base === undefined ? null : memoAt(base);
-      const scoped = inScope(link.task, date, lineage);
+      const scoped = inScope(link.task, date, lineage) || closed?.has(line) === true;
       const remembered = memo !== null && isSameTask(memo, link.task);
       const tracked = scoped || remembered;
       if (remembered && !scoped) plan.continued.set(line, link.task);
@@ -1765,7 +1824,7 @@ function reportOutOfSync(items: StoredOutOfSync[], prints: PrintIndex): TodayOut
 }
 
 function storedOutOfSync(line: string, task: BoardTask | null, memo: MarkMemo | null, checkbox: BoardCheckbox, reason?: OutOfSyncReason): StoredOutOfSync | null {
-  if (task !== null && reason !== undefined) return { line, task: fingerprint(task), checkbox, title: task.title, status: "done", reason };
+  if (task !== null && reason !== undefined) return { line, task: fingerprint(task), checkbox, title: task.title, status: reason === "recurring-done" ? "done" : task.status, reason };
   if (task !== null) return { line, task: fingerprint(task), checkbox, title: task.title, status: task.status };
   if (memo === null) return null;
   return { line, task: memo.task, checkbox, title: memo.title ?? memo.task.split(KEY_SEPARATOR)[1] ?? "", status: memo.checkbox };
@@ -2116,6 +2175,8 @@ interface Reconciled {
   yielded: StoredYield[];
   projects: Set<string>;
 }
+
+const keptDay = (): Reconciled => ({ schedule: [], unschedule: [], restore: [], removed: 0, drop: [], insert: new Set<string>(), yielded: [], projects: new Set<string>() });
 
 interface RenameCredit {
   projects: Map<string, number>;
@@ -2662,11 +2723,22 @@ interface UserTick {
   lines: { line: number; checkbox: BoardCheckbox; key: string }[];
 }
 
+function heldRecurringTicks(scan: FocusScan, plan: TickPlan): { line: number; task: BoardTask; checkbox: BoardCheckbox }[] {
+  return scan.entries.flatMap((entry) => {
+    const task = entry.match.task;
+    const base = plan.pairs.get(entry.line);
+    if (task === null || !entry.held || entry.recurred || base === undefined) return [];
+    const old = checkboxOfLine(plan.baseTexts[base] as string);
+    return old === entry.checkbox || projectCheckbox(task) === entry.checkbox ? [] : [{ line: entry.line, task, checkbox: entry.checkbox }];
+  });
+}
+
 function runMirror(settings: DelegationSettings, date: string, options: MirrorOptions = {}): MirrorResult {
   const skip = (skipped: MirrorSkip, applied = 0): MirrorResult => ({ changed: false, skipped, applied });
   if (!settings.features.daily || !settings.features.tasks) return skip("disabled");
   if (focusSourceOf(settings) !== "scheduled") return skip("list");
-  if (!isCurrentOrFuture(date)) return skip("past");
+  if (!isMirrorDay(date)) return skip("past");
+  const closing = isYesterday(date);
   let applied = 0;
   try {
     const daily = readDailySafe(settings, date);
@@ -2698,8 +2770,8 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
       const memo = memos.get(print);
       return memo === undefined ? null : resolveMemo(memo, resolver);
     };
-    const reconciled = reconcile(date, base, synced, datedNow, data, options.hints ?? new Set<string>(), new Set(held.keys()), resolve);
-    const pruned = hubCopies(daily.content, texts, firstPlan, synced, baseline.state.inserted ?? []).filter((line) => !reconciled.drop.includes(line));
+    const reconciled = closing ? keptDay() : reconcile(date, base, synced, datedNow, data, options.hints ?? new Set<string>(), new Set(held.keys()), resolve);
+    const pruned = closing ? [] : hubCopies(daily.content, texts, firstPlan, synced, baseline.state.inserted ?? []).filter((line) => !reconciled.drop.includes(line));
     const projectPart = reconciled.projects.size === 0 ? "" : projectsKey(settings, reconciled.projects);
     if (projectPart === null || !isSettled(settings, date, daily.content, reconciled, projectPart, options, pruned.length > 0)) return skip("unsettled");
     if (applyDates(settings, date, reconciled) > 0) {
@@ -2712,8 +2784,8 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
     const touched = new Set<number>();
     const ticks = new Map<string, UserTick>();
     const unsynced: StoredOutOfSync[] = [];
-    const report = (line: number, task: BoardTask, checkbox: BoardCheckbox): void => {
-      const stored = storedOutOfSync(texts[line] as string, task, null, checkbox);
+    const report = (line: number, task: BoardTask, checkbox: BoardCheckbox, reason?: OutOfSyncReason): void => {
+      const stored = storedOutOfSync(texts[line] as string, task, null, checkbox, reason);
       if (stored !== null) unsynced.push(stored);
     };
     for (const link of syncableLinks(plan, texts)) {
@@ -2742,18 +2814,20 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
         continue;
       }
       const status = statusFromCheckbox(tick.task.status, target);
-      if (status === null) {
-        if (!SYNCED_STATUSES.has(tick.task.status)) for (const item of tick.lines) report(item.line, tick.task, target);
+      const refused = closing && status !== null && closedElsewhere(tick.task, status, date) !== null;
+      if (status === null || refused) {
+        if (status !== null || !SYNCED_STATUSES.has(tick.task.status)) for (const item of tick.lines) report(item.line, tick.task, target);
         continue;
       }
       try {
-        applyStatusChange(settings, { task: tick.task, status });
+        applyStatusChange(settings, { task: tick.task, status, ...(closing ? { doneOn: date } : {}) });
         applied += 1;
       } catch (err) {
         console.error(`focus mirror could not apply a tick for ${tick.task.id}: ${errorText(err)}`);
         keepOld();
       }
     }
+    if (closing) for (const held of heldRecurringTicks(scan, plan)) report(held.line, held.task, held.checkbox, "recurring");
     const owned = new Set(plan.owned);
     if (applied > 0) {
       data = loadBoardData(settings) ?? data;
@@ -2767,7 +2841,7 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
       const line = originals[index];
       if (line) retryLines.set(line, retried);
     }
-    for (const link of syncableLinks(plan, texts)) {
+    for (const link of closing ? [] : syncableLinks(plan, texts)) {
       if (touched.has(link.line) || link.effective === null) continue;
       const old = oldCheckbox(link);
       const memo = baseMemo(link);
@@ -2782,7 +2856,7 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
     const present = presenceOf(scanDaily(settings, date, allowed, data.projects, data.tasks)).lines;
     const wanted = computeFocus(settings, data, date).filter((entry) => reconciled.insert.has(entry.task.id) || present.has(entry.task.id));
     const prior = new Set(doc.lines);
-    const insertion = insertMissing(settings, date, doc, data, wanted, baseline.state, reconciled.insert);
+    const insertion = closing ? noInsertion() : insertMissing(settings, date, doc, data, wanted, baseline.state, reconciled.insert);
     const added = doc.lines.filter((line) => !prior.has(line)).map((line) => line.text);
     const next = renderDoc(doc);
     if (!keepsEveryLine(allowed, next)) {
@@ -2801,7 +2875,7 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
     const lineage = lineageOf(data);
     const finalScan = scanDaily(settings, date, next, data.projects, data.tasks);
     const finalTexts = splitLines(next);
-    const marks = memoMarks(next, finalScan, date, lineage);
+    const marks = memoMarks(next, finalScan, date, lineage, closedDayLines(settings, date, finalScan, new Set(base.linked)));
     const finalKeys = lineKeys(finalTexts);
     const prints = printIndex(data);
     const positions = new Map(doc.lines.map((line, index) => [line, index]));
@@ -2857,16 +2931,18 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
         unresolved,
         unmatched: nextUnmatched(baseline.state.unmatched, found, finalTexts, unmatchedFilter(finalTexts, finalScan, data, { outOfSync, duplicates, unresolved, dismissed })),
         dismissed,
-        sync: syncSetsAfter(
-          settings,
-          date,
-          next,
-          data,
-          new Set(printsOf(synced.filter((member) => !reconciled.drop.includes(member.entry.line)).map((member) => member.task))),
-          held,
-          reconciled.yielded,
-          movesAfter(settings, base, reconciled, data, date),
-        ),
+        sync: closing
+          ? base
+          : syncSetsAfter(
+              settings,
+              date,
+              next,
+              data,
+              new Set(printsOf(synced.filter((member) => !reconciled.drop.includes(member.entry.line)).map((member) => member.task))),
+              held,
+              reconciled.yielded,
+              movesAfter(settings, base, reconciled, data, date),
+            ),
       },
     });
     return { changed, skipped: null, applied };
@@ -2882,7 +2958,7 @@ function delayFor(source: MirrorSource): number {
 }
 
 function scheduleMirror(date: string, source: MirrorSource): void {
-  if (!isCurrentOrFuture(date)) return;
+  if (!isMirrorDay(date)) return;
   pending.set(date, source);
   const existing = timers.get(date);
   if (existing) clearTimeout(existing);
@@ -2991,7 +3067,7 @@ function rebaseBaseline(baseline: Baseline, previous: string, content: string): 
 }
 
 function onDailyWritten(settings: DelegationSettings, date: string, content: string, origin: DailyWriteOrigin, previous: string | null, unseen = false): void {
-  if (!isScheduledMode(settings) || !isCurrentOrFuture(date)) return;
+  if (!isScheduledMode(settings) || !isMirrorDay(date)) return;
   if (origin === "client") {
     scheduleMirror(date, "client");
     return;
@@ -3070,7 +3146,7 @@ export function saveDailyFromClient(settings: DelegationSettings, date: string, 
 }
 
 export function closeDailyTicks(settings: DelegationSettings, date: string, before: string, after: string): DailyWriteResult {
-  if (usesMirror(settings, date)) return writeDaily(settings, date, after, undefined, null, "client");
+  if (usesMirror(settings, date) || closesDay(settings, date)) return writeDaily(settings, date, after, undefined, null, "client");
   const written = writeDaily(settings, date, after);
   syncTasksFromDaily(settings, date, before, after);
   return written;
@@ -3272,13 +3348,16 @@ function dailyFocus(settings: DelegationSettings, date: string, daily: DailyRead
   return { entries: memberEntries(settings, data, date, members).map((item) => item.entry), lines: new Set(members.map((member) => member.line)) };
 }
 
+function mirroredFocus(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData): DailyFocus | null {
+  if (usesMirror(settings, date)) return dailyFocus(settings, date, daily, data);
+  return isClosingDate(settings, date) ? dailyFocus(settings, date, daily, data) : null;
+}
+
 function focusFor(settings: DelegationSettings, date: string): TodayEntry[] {
   const data = loadBoardData(settings);
-  if (data !== null && usesMirror(settings, date)) {
-    const daily = readDailySafe(settings, date);
-    if (daily !== null && daily.exists) return dailyFocus(settings, date, daily, data).entries;
-  }
-  return computeFocus(settings, data, date);
+  const daily = data === null ? null : readDailySafe(settings, date);
+  const mirrored = data !== null && daily !== null && daily.exists ? mirroredFocus(settings, date, daily, data) : null;
+  return mirrored?.entries ?? computeFocus(settings, data, date);
 }
 
 interface NoteView {
@@ -3357,7 +3436,7 @@ interface SyncReport {
 const EMPTY_REPORT: SyncReport = { outOfSync: [], duplicates: [], unresolved: [], unmatched: [] };
 
 function syncReport(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData): SyncReport {
-  const baseline = isScheduledMode(settings) && isCurrentOrFuture(date) ? loadBaseline(date, daily.path) : null;
+  const baseline = isScheduledMode(settings) && isMirrorDay(date) ? loadBaseline(date, daily.path) : null;
   if (baseline === null) return EMPTY_REPORT;
   const texts = splitLines(daily.content);
   const scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
@@ -3555,24 +3634,88 @@ function entryOf(data: BoardData, task: BoardTask): TodayEntry | null {
   return { task, project: { id: project.id, title: project.title, name: project.name }, parentTitle: parentMap(data.tasks).get(task.id)?.title ?? null };
 }
 
-function enterDaily(settings: DelegationSettings, date: string, task: BoardTask, carried: ReadonlySet<string> = new Set<string>()): void {
+function enterDaily(settings: DelegationSettings, date: string, task: BoardTask, carried: ReadonlySet<string> = new Set<string>()): boolean {
   const daily = readDailySafe(settings, date);
   const data = loadBoardData(settings);
-  if (daily === null || !daily.exists || data === null) return;
+  if (daily === null || !daily.exists || data === null) return false;
   const fresh = flattenTasks(data.tasks).find((candidate) => candidate.id === task.id && candidate.raw === task.raw);
-  if (fresh === undefined) return;
-  if (presenceOf(scanDaily(settings, date, daily.content, data.projects, data.tasks)).lines.has(fresh.id)) return;
+  if (fresh === undefined) return false;
+  if (presenceOf(scanDaily(settings, date, daily.content, data.projects, data.tasks)).lines.has(fresh.id)) return true;
   const entry = entryOf(data, fresh);
-  if (entry === null) return;
+  if (entry === null) return false;
+  return placeInDaily(settings, date, daily, data, entry, carried, "enter");
+}
+
+function placeInDaily(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData, entry: TodayEntry, carried: ReadonlySet<string>, tag: string): boolean {
   const doc = openDoc(daily.content);
-  insertMissing(settings, date, doc, data, [entry], { seen: [], focus: [] }, new Set([fresh.id]), false, carried);
+  insertMissing(settings, date, doc, data, [entry], { seen: [], focus: [] }, new Set([entry.task.id]), false, carried);
   const next = renderDoc(doc);
-  if (keepsEveryLine(daily.content, next)) writeFocusDoc(settings, date, daily, next, "enter");
+  if (!keepsEveryLine(daily.content, next)) return false;
+  writeFocusDoc(settings, date, daily, next, tag);
+  return isPresent(presenceOf(scanDaily(settings, date, next, data.projects, data.tasks)), entry.task);
+}
+
+function closedDayDaily(settings: DelegationSettings, date: string): DailyReadResult {
+  const daily = readDaily(settings, date);
+  if (!daily.exists) throw new BadRequestError(`the note of ${date} does not exist, create it first`);
+  if (focusRange(splitLines(daily.content), settings) === null) throw new BadRequestError(`the note of ${date} has no ${settings.daily.headings.focus} section, add it first`);
+  return daily;
+}
+
+const unplaced = (task: { title: string }, date: string): BadRequestError =>
+  new BadRequestError(`"${task.title}" could not be placed in the focus of ${date}, add its line to that note by hand`);
+
+function enterClosedDay(settings: DelegationSettings, date: string, input: ScheduleInput): { task: BoardTask } {
+  const data = boardOrFail(settings);
+  const task = flattenTasks(data.tasks).find((candidate) => candidate.projectId === input.projectId && candidate.line === input.line);
+  if (task === undefined || task.raw !== input.raw) throw new TaskConflictError(task ?? null);
+  closedDayDaily(settings, date);
+  if (!enterDaily(settings, date, task, new Set([task.id]))) throw unplaced(task, date);
+  runMirror(settings, date, { source: "api" });
+  return { task };
+}
+
+function draftParent(data: BoardData, input: DayCreateInput): BoardTask | null {
+  const own = flattenTasks(data.tasks).filter((task) => task.projectId === input.projectId);
+  const at = (line: number | undefined): BoardTask | null => own.find((task) => task.line === line) ?? null;
+  if (input.parentLine !== undefined) return at(input.parentLine);
+  const anchor = at(input.after?.line);
+  return anchor === null ? null : (parentMap(data.tasks).get(anchor.id) ?? null);
+}
+
+function withDraft(tasks: BoardTask[], draft: BoardTask, parentId: string | null): BoardTask[] {
+  if (parentId === null) return [...tasks, draft];
+  return tasks.map((task) => (task.id === parentId ? { ...task, subtasks: [...task.subtasks, draft] } : { ...task, subtasks: withDraft(task.subtasks, draft, parentId) }));
+}
+
+function createInDay(settings: DelegationSettings, date: string, input: DayCreateInput): { task: BoardTask } {
+  requireDailyFeature(settings);
+  validateDate(date);
+  if (!isClosingDate(settings, date)) throw new BadRequestError("only the focus of yesterday creates its tasks here, other days create them in Tasks with a scheduled date");
+  const daily = closedDayDaily(settings, date);
+  const data = boardOrFail(settings);
+  const create: BoardCreateInput = {
+    projectId: input.projectId,
+    title: input.title,
+    ...(input.priority !== undefined ? { priority: input.priority } : {}),
+    ...(input.due !== undefined ? { due: input.due } : {}),
+    ...(input.parentLine !== undefined ? { parentLine: input.parentLine, parentRaw: input.parentRaw as string } : {}),
+    ...(input.after !== undefined ? { after: input.after } : {}),
+  };
+  const drafted = draftBoardTask(settings, create);
+  const draft: BoardTask = { ...drafted, id: `${drafted.projectId}#draft`, subtasks: [] };
+  const ghost: BoardData = { ...data, tasks: withDraft(data.tasks, draft, draftParent(data, input)?.id ?? null) };
+  const entry = entryOf(ghost, draft);
+  if (entry === null || !placeInDaily(settings, date, daily, ghost, entry, new Set([draft.id]), "create")) throw unplaced(draft, date);
+  const created = createBoardTask(settings, create);
+  runMirror(settings, date, { source: "api" });
+  return { task: created.task };
 }
 
 function schedule(settings: DelegationSettings, input: ScheduleInput): { task: BoardTask } {
   if (input.date !== null) validateDate(input.date);
   if (input.from !== undefined) validateDate(input.from);
+  if (input.date !== null && closesDay(settings, input.date)) return enterClosedDay(settings, input.date, input);
   const manual = scheduledManualReason(input.raw, settings.tasks);
   if (manual !== null) throw new BadRequestError(manual);
   const before = loadBoardData(settings);
@@ -3923,6 +4066,47 @@ function migrateFocus(settings: DelegationSettings, date: string): MigrationResu
   return result;
 }
 
+function closedElsewhere(task: BoardTask, status: BoardStatus, date: string): string | null {
+  return status !== "done" && task.status === "done" && task.doneAt !== null && task.doneAt !== date ? task.doneAt : null;
+}
+
+function taskAfterSettle(settings: DelegationSettings, task: BoardTask): BoardTask {
+  const data = boardOrFail(settings);
+  const same = flattenTasks(data.tasks).find((candidate) => candidate.projectId === task.projectId && candidate.line === task.line && candidate.raw === task.raw);
+  const fresh = same ?? taskOfPrint(printIndex(data), fingerprint(task));
+  if (fresh === null) throw new TaskConflictError(null);
+  return fresh;
+}
+
+function tickDay(settings: DelegationSettings, date: string, input: DayTickInput): DayTickResult {
+  requireDailyFeature(settings);
+  validateDate(date);
+  if (!isClosingDate(settings, date)) throw new BadRequestError("only the focus of yesterday is ticked here, use Tasks for other days");
+  const found = flattenTasks(boardOrFail(settings).tasks).find((candidate) => candidate.projectId === input.projectId && candidate.line === input.line);
+  if (found === undefined || found.raw !== input.raw) throw new TaskConflictError(found ?? null);
+  if (isRecurringTask(found)) throw new BadRequestError("recurring tasks are completed in Tasks, their dates move on completion");
+  if (!readDaily(settings, date).exists) throw new NotFoundError("daily not found");
+  runMirror(settings, date, { source: "api" });
+  const task = taskAfterSettle(settings, found);
+  const status = explicitStatus(task.status, input.status);
+  const doneOn = status === null ? null : closedElsewhere(task, status, date);
+  if (doneOn !== null) throw new BadRequestError(`"${task.title}" was completed on ${doneOn}, reopen it in Tasks`);
+  const daily = readDaily(settings, date);
+  const data = boardOrFail(settings);
+  const scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
+  const closed = confidentLines(settings, date, scan, new Set(loadBaseline(date, daily.path)?.state.sync?.linked ?? []));
+  const lines = scan.links.filter((link) => link.task.id === task.id && closed.has(link.line));
+  if (lines.length === 0) throw new BadRequestError(`"${task.title}" has no line in the focus of yesterday, add it to that focus first or complete it in Tasks`);
+  const doc = openDoc(daily.content);
+  for (const link of lines) {
+    const line = doc.lines[link.line] as DocLine;
+    line.text = withCheckbox(line.text, input.status);
+  }
+  writeFocusDoc(settings, date, daily, renderDoc(doc), "tick");
+  if (status === null) return { task };
+  return { task: writeBoardTask(settings, { projectId: task.projectId, line: task.line, raw: task.raw, status }, { doneOn: date }).task };
+}
+
 function regenerateFocusMirror(settings: DelegationSettings, date: string, options?: MirrorOptions): MirrorResult {
   validateDate(date);
   return runMirror(settings, date, options);
@@ -4000,9 +4184,11 @@ function linkTick(settings: DelegationSettings, date: string, input: LinkTickInp
   return { task, unmatched: currentUnmatched(settings, date) };
 }
 
-function withVisibleSubtasks(settings: DelegationSettings, date: string, content: string | null, data: BoardData, focus: TodayEntry[]): TodayEntry[] {
+function withVisibleSubtasks(settings: DelegationSettings, date: string, content: string | null, data: BoardData, focus: TodayEntry[], closing: boolean): TodayEntry[] {
   const presence = content === null ? null : presenceOf(scanDaily(settings, date, content, data.projects, data.tasks));
-  const visible = (task: BoardTask): boolean => presence?.lines.has(task.id) === true || presence?.listed.has(task.id) === true || entersDayWith(task, date) || task.subtasks.some(visible);
+  const inNote = (task: BoardTask): boolean => presence?.lines.has(task.id) === true;
+  const visible = (task: BoardTask): boolean =>
+    closing ? inNote(task) : inNote(task) || presence?.listed.has(task.id) === true || entersDayWith(task, date) || task.subtasks.some(visible);
   return focus.map((entry) => ({ ...entry, visibleSubtasks: flattenTasks(entry.task.subtasks).filter(visible).map((task) => task.id) }));
 }
 
@@ -4030,12 +4216,13 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
   const content = exists ? (daily as DailyReadResult).content : "";
   const lines = exists ? content.split(LINE_SPLIT_RE) : [];
   const scheduledFocus = focusSource === "scheduled";
-  const mirrored = exists && data !== null && usesMirror(settings, date) ? dailyFocus(settings, date, daily as DailyReadResult, data) : null;
+  const mirrored = exists && data !== null ? mirroredFocus(settings, date, daily as DailyReadResult, data) : null;
   const focus = mirrored !== null ? mirrored.entries : scheduledFocus ? computeFocus(settings, data, date) : exists && data ? listModeFocus(settings, date, daily as DailyReadResult, data) : [];
   const view: NoteView =
     exists && data ? noteView(settings, date, daily as DailyReadResult, data, focus, scheduledFocus, mirrored?.lines ?? new Set<number>()) : { inNote: [], inNoteLinks: [], noteBlocks: [], unlinked: [], ambiguous: [] };
   const report: SyncReport = exists && data ? syncReport(settings, date, daily as DailyReadResult, data) : EMPTY_REPORT;
-  const shown = scheduledFocus && data !== null && isCurrentOrFuture(date) ? withVisibleSubtasks(settings, date, exists ? content : null, data, focus) : focus;
+  const closing = exists && isClosingDate(settings, date);
+  const shown = scheduledFocus && data !== null && (isCurrentOrFuture(date) || closing) ? withVisibleSubtasks(settings, date, exists ? content : null, data, focus, closing) : focus;
   return {
     date,
     focusSource,
@@ -4050,6 +4237,7 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
     ambiguous: [...view.ambiguous, ...report.duplicates, ...report.unresolved],
     ...(report.outOfSync.length > 0 ? { outOfSync: report.outOfSync } : {}),
     ...(report.unmatched.length > 0 ? { unmatched: report.unmatched } : {}),
+    ...(closing ? { closesDay: true } : {}),
     summary: summaryOf(lines),
     dailyExists: exists,
     dailyUpdatedAt: exists ? ((daily as DailyReadResult).updatedAt ?? null) : null,
@@ -4072,4 +4260,6 @@ export const todayApi: TodayApi = {
   reorderFocus,
   subtaskOptions,
   planSubtask,
+  tickDay,
+  createInDay,
 };

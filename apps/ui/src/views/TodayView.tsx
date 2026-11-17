@@ -47,6 +47,7 @@ import {
   BoardConflictError,
   clearToday,
   createBoardItem,
+  createDayTask,
   createTodayNote,
   delegateBoardTask,
   deleteBoardNote,
@@ -62,6 +63,7 @@ import {
   reorderFocus,
   reparentBoardTask,
   scheduleTask,
+  tickDay,
   TodayUnavailableError,
   undoClearToday,
   type BoardChange,
@@ -1119,6 +1121,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const tasksEnabled = settings?.features.tasks === true;
   const today = localDay();
   const isToday = date === today;
+  const closing = data?.closesDay === true;
   const tomorrow = nextDay(date);
   const projectOrder = settings?.daily.projectOrder ?? [];
   const { sessions: dailySessions } = useDailySessions(enabled, date);
@@ -1262,7 +1265,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
   const applyNote = async (item: TodayOutOfSync, task: BoardTask) => {
     markBusy(task.id, true);
     try {
-      await patchBoardItem(targetOfTask(task), { status: item.dailyCheckbox });
+      if (closing) await tickDay(date, { ...targetOfTask(task), status: item.dailyCheckbox });
+      else await patchBoardItem(targetOfTask(task), { status: item.dailyCheckbox });
     } catch (err) {
       failWith(err, "could not update the task");
     } finally {
@@ -1361,6 +1365,11 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
 
   const targetOfNode = (node: OutlineNode): BoardTarget => ({ projectId: node.projectId, line: node.line, raw: node.raw });
 
+  const createInDay = async (input: BoardCreateInput): Promise<void> => {
+    if (closing) await createDayTask(date, input);
+    else await createBoardItem({ ...input, scheduled: date });
+  };
+
   const onRename = (node: OutlineNode, title: string, fields: OutlineFields) =>
     withRefresh(async () => {
       const change: BoardChange = {};
@@ -1375,15 +1384,16 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
       const parent = parentOfTask(boardTasks, node.id);
       const covered = parent !== null && focusIds.has(parent.id);
       const after = insertAnchorOf(boardTasks, node.id);
-      await createBoardItem({
+      const input: BoardCreateInput = {
         projectId: node.projectId,
         title,
         ...(fields.priority !== undefined && fields.priority !== null ? { priority: fields.priority } : {}),
         ...(fields.due !== undefined && fields.due !== null ? { due: fields.due } : {}),
-        ...(covered ? {} : { scheduled: date }),
         ...(parent ? { parentLine: parent.line, parentRaw: parent.raw } : {}),
         ...(after ? { after } : {}),
-      });
+      };
+      if (covered && !closing) await createBoardItem(input);
+      else await createInDay(input);
     });
 
   const onIndent = (node: OutlineNode) =>
@@ -1419,7 +1429,12 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
 
   const onToggleDone = (node: OutlineNode) =>
     withRefresh(async () => {
-      const result = await patchBoardItem(targetOfNode(node), { status: node.status === "done" ? "todo" : "done" });
+      const status = node.status === "done" ? "todo" : "done";
+      if (closing) {
+        await tickDay(date, { ...targetOfNode(node), status });
+        return;
+      }
+      const result = await patchBoardItem(targetOfNode(node), { status });
       if (result.recurred === true) onNotice(recurrenceNotice(result.task));
     });
 
@@ -1427,7 +1442,8 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
     withRefresh(async () => {
       const next = doingTarget(node.status);
       if (next === null) return;
-      await patchBoardItem(targetOfNode(node), { status: next });
+      if (closing) await tickDay(date, { ...targetOfNode(node), status: next });
+      else await patchBoardItem(targetOfNode(node), { status: next });
     });
 
   const toggleDoing = async (task: BoardTask) => {
@@ -1526,10 +1542,9 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
         await scheduleTask(date, { ...targetOfTask(plan.task), date });
         onNotice(`Scheduled the existing task "${plan.task.title}"`);
       } else {
-        await createBoardItem({
+        await createInDay({
           projectId: plan.projectId,
           title: plan.input.title,
-          scheduled: date,
           ...(plan.input.priority !== undefined ? { priority: plan.input.priority } : {}),
           ...(plan.input.due !== undefined ? { due: plan.input.due } : {}),
         });
@@ -1827,6 +1842,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                     />
                   )}
                 </header>
+                {closing && <p className="muted small today__closing">Yesterday: a tick closes the task on {date} and writes this note first; scheduled dates stay as they are.</p>}
                 {clearUndo !== null && clearUndo.date === date && (
                   <div className="today__undo" role="status">
                     <span className="today__undo-text">{clearUndo.text}</span>
@@ -1919,6 +1935,7 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                       const task = taskOfOutOfSync(boardTasks, item);
                       const busy = task !== null && busyIds.has(task.id);
                       const recurring = item.reason === "recurring-done";
+                      const held = item.reason === "recurring";
                       return (
                         <li key={outOfSyncKey(item)} className="today__row">
                           <span className="today__text">
@@ -1926,14 +1943,16 @@ export function TodayView({ settings, workspaces, onOpenSession, onOpenTask, sub
                             <span className="muted small">
                               {recurring
                                 ? `Recurring task "${item.taskTitle}" was already completed today; reopen it from Tasks if needed.`
-                                : `Task "${item.taskTitle}" is ${item.projectStatus}, the note says ${item.dailyCheckbox}.`}
+                                : held
+                                  ? `Recurring task "${item.taskTitle}" is completed in Tasks, its dates move on completion; the note of ${date} cannot close it.`
+                                  : `Task "${item.taskTitle}" is ${item.projectStatus}, the note says ${item.dailyCheckbox}.`}
                             </span>
                           </span>
                           <span className="today__actions">
                             <button
                               type="button"
                               className="act"
-                              disabled={task === null || busy || recurring}
+                              disabled={task === null || busy || recurring || held}
                               onClick={() => {
                                 if (task) void applyNote(item, task);
                               }}

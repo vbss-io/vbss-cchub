@@ -1,5 +1,29 @@
 [
   {
+    "version": "2.0.0",
+    "date": "2026-11-17",
+    "highlights": [
+      "Plugins: every area (Today, Tasks, Delegated, Usage, Limits, Workspaces, Reports, Share, Trail) is a plugin you turn on or off in Settings › Plugins, with a configurable, collapsible sidebar and resizable panels",
+      "Sessions in one place: Claude, Codex and delegated runs share one screen with List, Flow, Search and Routines modes, Needs you on top and calmer cards",
+      "Approve or deny Claude and Codex permission requests from the hub, the toast or the widget, with the full command visible; questions with options and plan approvals are answered from the hub too",
+      "Open session jumps to the terminal or app of any session, and the hub can reply to Codex threads it started",
+      "Today: the daily note is the source of truth for the day; lines you add or remove schedule or unschedule the task, hub actions write the note first, and Clear today has Undo",
+      "Today: a task enters with only the subtasks dated for the day, and Plan subtasks picks the others; the Backlog shows one line per item",
+      "Close yesterday from the hub: ticking an item in yesterday's note completes the task with yesterday's date, without moving any scheduled date",
+      "History search across Claude and Codex sessions (Ctrl+K and Sessions › Search), with secrets redacted in a local index",
+      "Opt-in context handoff: a new Claude session in a workspace starts with a short summary of the previous ones and the project open loops",
+      "Day summary writes the day's sessions, finished tasks, reports and commits into the daily note without using tokens",
+      "Routines: scheduled prompts for Claude or Codex with a results inbox, one catch-up run after downtime and a failure-only notification",
+      "Review the diff of a run, comment on lines and send the review back to the agent; PR and CI status through gh, read only",
+      "Cost per run, task and routine, and a forecast of when the current limit window runs out",
+      "Settings › Health shows hooks, MCP, statusline, Codex app-server, tunnel and search index with a fix button for each",
+      "Notifications: informative toasts close after 6 s, Needs you and Failed stay until the reason ends, and Windows toasts are removed when resolved",
+      "Safety: database backup and vault copy before every write, atomic writes to the second brain, restore from the CLI",
+      "Quality: 90/80/90/90 test coverage on the app (UI, server, hooks, desktop and the VS Code extension), checked before every release",
+      "Security: updated express, vite and other dependencies flagged by audit"
+    ]
+  },
+  {
     "version": "1.4.0",
     "date": "2026-10-27",
     "highlights": [

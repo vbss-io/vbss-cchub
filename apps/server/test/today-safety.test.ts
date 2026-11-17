@@ -60,6 +60,7 @@ function shift(date: string, days: number): string {
 
 const TODAY = dayOf(new Date());
 const YESTERDAY = shift(TODAY, -1);
+const DAY_BEFORE = shift(TODAY, -2);
 const TOMORROW = shift(TODAY, 1);
 
 const TEMPLATE = ["---", "type: daily", "---", "", "# {{date}}", "", "## Focus", "", "- [ ]", "", "## Meetings", "", "-", "", "## Captures", "", "-", "", "## Sessions", "", "-", ""].join("\n");
@@ -1441,16 +1442,16 @@ describe("fix wave 3, finding 5: a reworded line keeps its identity", () => {
 });
 
 describe("fix wave 3: more adversarial cases", () => {
-  it("a Note tab save of a past daily in scheduled mode syncs nothing", () => {
+  it("a Note tab save of a daily older than yesterday in scheduled mode syncs nothing", () => {
     const line = "- [ ] [[alpha|Alpha Project]] - Ship release";
-    const yesterdayDaily = dailyWith([line]).replace(`# ${TODAY}`, `# ${YESTERDAY}`);
-    const root = lab({ alpha: project("Alpha Project", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`]) }, { [YESTERDAY]: yesterdayDaily });
+    const olderDaily = dailyWith([line]).replace(`# ${TODAY}`, `# ${DAY_BEFORE}`);
+    const root = lab({ alpha: project("Alpha Project", [`- [ ] Ship release ${SCHEDULED} ${DAY_BEFORE}`]) }, { [DAY_BEFORE]: olderDaily });
     const settings = useVault(root);
-    const saved = yesterdayDaily.replace(line, "- [x] [[alpha|Alpha Project]] - Ship release");
-    today.saveDailyFromClient(settings, YESTERDAY, saved);
+    const saved = olderDaily.replace(line, "- [x] [[alpha|Alpha Project]] - Ship release");
+    today.saveDailyFromClient(settings, DAY_BEFORE, saved);
     today.flushMirrors(settings);
     assert.equal(taskIn(settings, "alpha", "Ship release").status, "todo");
-    assert.equal(read(root, `daily/${YESTERDAY}.md`), saved);
+    assert.equal(read(root, `daily/${DAY_BEFORE}.md`), saved);
   });
 
   it("close yesterday on today's daily goes through the planner and a duplicate stays reported", () => {
