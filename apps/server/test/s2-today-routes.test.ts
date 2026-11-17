@@ -105,6 +105,13 @@ describe("today validation", () => {
       ["POST", "/link-tick", { lineIndex: -1 }, /lineIndex must be a non-negative integer/],
       ["POST", "/link-tick", { lineIndex: 1, action: "ignore" }, /action must be apply or dismiss/],
       ["POST", "/link-tick", { lineIndex: 1, action: "apply", raw: "x", target: 5 }, /target must be an object or null/],
+      ["POST", "/task", {}, /projectId required/],
+      ["POST", "/task", { projectId: "lab" }, /title required/],
+      ["POST", "/task", { projectId: "lab", title: "x", priority: "high" }, /priority must be a number or null/],
+      ["POST", "/task", { projectId: "lab", title: "x", due: 5 }, /due must be a YYYY-MM-DD string or null/],
+      ["POST", "/task", { projectId: "lab", title: "x", after: 5 }, /after must be an object with line and raw/],
+      ["POST", "/task", { projectId: "lab", title: "x", parentLine: 1 }, /raw required/],
+      ["POST", "/task", { projectId: "lab", title: "x" }, /only the focus of yesterday creates its tasks here/],
     ];
     for (const [method, path, body, message] of cases) {
       const res = await hub.http(method, url(path), body);
@@ -171,6 +178,18 @@ describe("today flow", () => {
     assert.equal(planned.status, 200, planned.text);
     const unplanned = await hub.http("POST", url("/subtasks"), { ...target(await find("Alpha child")), planned: false });
     assert.equal(unplanned.status, 200, unplanned.text);
+  });
+
+  it("creates a task on yesterday through its note", async () => {
+    const created = await hub.http("POST", url("/task", YESTERDAY), { projectId: "lab", title: "Made yesterday", priority: null, due: null, parentLine: null, after: null });
+    assert.equal(created.status, 201, created.text);
+    assert.equal((created.json as { task: { title: string; scheduled: string | null } }).task.scheduled, null);
+    assert.match(readFileSync(dayPath(YESTERDAY), "utf8"), /- \[ \] \[\[lab\|Lab\]\] - Made yesterday/);
+    const delta = await find("Delta");
+    const placed = await hub.http("POST", url("/task", YESTERDAY), { projectId: "lab", title: "After delta", priority: 2, due: TODAY, after: target(delta) });
+    assert.equal(placed.status, 201, placed.text);
+    const missing = await hub.http("POST", url("/task", "2026-02-30"), { projectId: "lab", title: "x" });
+    assert.equal(missing.status, 400);
   });
 
   it("migrates the focus and resolves link ticks", async () => {

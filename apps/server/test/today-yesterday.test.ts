@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, afterEach, before, beforeEach, describe, it, mock } from "node:test";
@@ -111,6 +111,8 @@ function taskIn(settings: DelegationSettings, projectId: string, title: string):
 }
 
 const dailyRel = (date: string): string => `daily/${date}.md`;
+
+const bareDaily = (date: string): string => ["---", "type: daily", "---", "", `# ${date}`, "", "## Meetings", "", "- 10:00 Standup", ""].join("\n");
 
 function editDaily(root: string, date: string, change: (content: string) => string): string {
   const file = join(root, dailyRel(date));
@@ -364,7 +366,7 @@ describe("H2: hub actions on the day of yesterday", () => {
     assert.equal(read(root, dailyRel(YESTERDAY)), edited);
     assert.deepEqual(today.readToday(settings, YESTERDAY).outOfSync, [
       { line: line("Stand up"), taskTitle: "Stand up", projectId: "alpha", dailyCheckbox: "todo", projectStatus: "done", reason: "recurring-done" },
-      { line: line("Daily review", "x"), taskTitle: "Daily review", projectId: "alpha", dailyCheckbox: "done", projectStatus: "todo" },
+      { line: line("Daily review", "x"), taskTitle: "Daily review", projectId: "alpha", dailyCheckbox: "done", projectStatus: "todo", reason: "recurring" },
     ]);
   });
 
@@ -390,8 +392,116 @@ describe("H2: hub actions on the day of yesterday", () => {
     assert.equal(read(root, "projects/alpha.md"), projectText);
     assert.deepEqual(focusTitles(settings, YESTERDAY), ["Ship release", "Loose", "Later"]);
     assert.throws(() => today.todayApi.schedule(settings, { projectId: "alpha", line: loose.line, raw: "- [ ] stale", date: YESTERDAY, from: YESTERDAY }), board.TaskConflictError);
-    rmSync(join(root, dailyRel(YESTERDAY)));
-    assert.throws(() => today.todayApi.schedule(settings, { projectId: "alpha", line: loose.line, raw: loose.raw, date: YESTERDAY, from: YESTERDAY }), /create the daily first/);
+    assert.equal(read(root, "projects/alpha.md"), projectText);
+  });
+
+  it("Add to focus on yesterday refuses a note without its Focus section and a line it cannot place, writing nothing", () => {
+    const projectText = project("Alpha", ["- [ ] Twin", "- [ ] Twin", "- [ ] Loose"]);
+    const root = lab({ alpha: projectText }, { [YESTERDAY]: dailyOf(YESTERDAY, []) });
+    const settings = useVault(root);
+    const twin = taskIn(settings, "alpha", "Twin");
+    const loose = taskIn(settings, "alpha", "Loose");
+    assert.throws(
+      () => today.todayApi.schedule(settings, { projectId: "alpha", line: twin.line, raw: twin.raw, date: YESTERDAY, from: YESTERDAY }),
+      { message: `"Twin" could not be placed in the focus of ${YESTERDAY}, add its line to that note by hand` },
+    );
+    assert.equal(read(root, dailyRel(YESTERDAY)), dailyOf(YESTERDAY, []));
+    write(root, dailyRel(YESTERDAY), bareDaily(YESTERDAY));
+    assert.throws(
+      () => today.todayApi.schedule(settings, { projectId: "alpha", line: loose.line, raw: loose.raw, date: YESTERDAY, from: YESTERDAY }),
+      { message: `the note of ${YESTERDAY} has no Focus section, add it first` },
+    );
+    assert.equal(read(root, dailyRel(YESTERDAY)), bareDaily(YESTERDAY));
+    assert.equal(read(root, "projects/alpha.md"), projectText);
+  });
+
+  it("without its note, yesterday stays history like the day before yesterday", () => {
+    const projectText = project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`, `  - [ ] Dated sub ${SCHEDULED} ${YESTERDAY}`, "- [ ] Loose"]);
+    const root = lab({ alpha: projectText });
+    const settings = useVault(root);
+    const payload = today.readToday(settings, YESTERDAY);
+    assert.deepEqual([payload.closesDay, payload.dailyExists], [undefined, false]);
+    assert.deepEqual(
+      payload.focus.map((entry) => [entry.task.title, entry.visibleSubtasks]),
+      [["Ship release", undefined]],
+    );
+    assert.throws(() => today.todayApi.tickDay(settings, YESTERDAY, tick(taskIn(settings, "alpha", "Loose"), "done")), /daily not found/);
+    assert.throws(() => today.todayApi.createInDay(settings, YESTERDAY, { projectId: "alpha", title: "Fresh idea" }), { message: `the note of ${YESTERDAY} does not exist, create it first` });
+    assert.equal(read(root, "projects/alpha.md"), projectText);
+    const loose = taskIn(settings, "alpha", "Loose");
+    today.todayApi.schedule(settings, { projectId: "alpha", line: loose.line, raw: loose.raw, date: YESTERDAY, from: YESTERDAY });
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "Loose").scheduled, YESTERDAY);
+    assert.equal(existsSync(join(root, dailyRel(YESTERDAY))), false);
+  });
+
+  it("lists on yesterday only the subtasks that have a line in its note", () => {
+    const root = lab(
+      { alpha: project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`, "  - [ ] In the note", `  - [ ] Dated sub ${SCHEDULED} ${YESTERDAY}`, "  - [ ] Other sub"]) },
+      { [YESTERDAY]: dailyOf(YESTERDAY, [line("Ship release"), "  - [ ] In the note"]) },
+    );
+    const settings = useVault(root);
+    const [entry] = today.readToday(settings, YESTERDAY).focus;
+    assert.deepEqual(entry?.visibleSubtasks, [taskIn(settings, "alpha", "In the note").id]);
+    assert.throws(() => today.todayApi.tickDay(settings, YESTERDAY, tick(taskIn(settings, "alpha", "Dated sub"), "done")), /has no line in the focus of yesterday/);
+  });
+});
+
+describe("H2: creating a task on the day of yesterday", () => {
+  const beta = (title: string, mark = " "): string => `- [${mark}] [[beta|Beta]] - ${title}`;
+
+  it("writes the line in the focus of yesterday first, then creates the task without a scheduled date and links them", () => {
+    const root = lab(
+      { alpha: project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`]), beta: project("Beta", ["- [ ] Beta work"]) },
+      { [YESTERDAY]: dailyOf(YESTERDAY, [line("Ship release"), beta("Beta work")]) },
+    );
+    const settings = useVault(root);
+    today.todayApi.regenerateFocusMirror(settings, YESTERDAY);
+    const created = today.todayApi.createInDay(settings, YESTERDAY, { projectId: "alpha", title: "Fresh idea", priority: 1, due: TOMORROW });
+    assert.deepEqual([created.task.title, created.task.scheduled, created.task.priority, created.task.due], ["Fresh idea", null, 1, TOMORROW]);
+    assert.equal(created.task.raw.includes(SCHEDULED), false);
+    assert.equal(read(root, dailyRel(YESTERDAY)), dailyOf(YESTERDAY, [line("Ship release"), line("Fresh idea"), beta("Beta work")]));
+    assert.ok(statSync(join(root, dailyRel(YESTERDAY))).mtimeMs <= statSync(join(root, "projects/alpha.md")).mtimeMs);
+    today.flushMirrors(settings);
+    const payload = today.readToday(settings, YESTERDAY);
+    assert.deepEqual(payload.focus.map((entry) => entry.task.title), ["Ship release", "Fresh idea", "Beta work"]);
+    assert.deepEqual([payload.inNote, payload.unlinked, payload.unmatched], [[], [], undefined]);
+    const done = today.todayApi.tickDay(settings, YESTERDAY, tick(taskIn(settings, "alpha", "Fresh idea"), "done"));
+    assert.equal(done.task.doneAt, YESTERDAY);
+    assert.equal(read(root, dailyRel(YESTERDAY)), dailyOf(YESTERDAY, [line("Ship release"), line("Fresh idea", "x"), beta("Beta work")]));
+  });
+
+  it("enters a new subtask under its parent line in the note of yesterday", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`, "  - [ ] Sub one"]) }, { [YESTERDAY]: dailyOf(YESTERDAY, [line("Ship release"), "  - [ ] Sub one"]) });
+    const settings = useVault(root);
+    const parent = taskIn(settings, "alpha", "Ship release");
+    const one = taskIn(settings, "alpha", "Sub one");
+    today.todayApi.createInDay(settings, YESTERDAY, { projectId: "alpha", title: "Sub two", parentLine: parent.line, parentRaw: parent.raw, after: { line: one.line, raw: one.raw } });
+    const two = taskIn(settings, "alpha", "Sub two");
+    today.todayApi.createInDay(settings, YESTERDAY, { projectId: "alpha", title: "Sub three", after: { line: two.line, raw: two.raw } });
+    assert.equal(read(root, dailyRel(YESTERDAY)), dailyOf(YESTERDAY, [line("Ship release"), "  - [ ] Sub one", "  - [ ] Sub two", "  - [ ] Sub three"]));
+    assert.equal(read(root, "projects/alpha.md"), project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`, "  - [ ] Sub one", "  - [ ] Sub two", "  - [ ] Sub three"]));
+    today.flushMirrors(settings);
+    const [entry] = today.readToday(settings, YESTERDAY).focus;
+    assert.deepEqual(
+      entry?.visibleSubtasks,
+      ["Sub one", "Sub two", "Sub three"].map((title) => taskIn(settings, "alpha", title).id),
+    );
+  });
+
+  it("refuses with nothing written when the note has no Focus section, the line cannot be placed, the task is invalid or the day is not yesterday", () => {
+    const projectText = project("Alpha", ["- [ ] Twin", "- [ ] Loose"]);
+    const root = lab({ alpha: projectText }, { [YESTERDAY]: bareDaily(YESTERDAY) });
+    const settings = useVault(root);
+    assert.throws(() => today.todayApi.createInDay(settings, YESTERDAY, { projectId: "alpha", title: "Fresh idea" }), { message: `the note of ${YESTERDAY} has no Focus section, add it first` });
+    assert.equal(read(root, dailyRel(YESTERDAY)), bareDaily(YESTERDAY));
+    write(root, dailyRel(YESTERDAY), dailyOf(YESTERDAY, []));
+    assert.throws(() => today.todayApi.createInDay(settings, YESTERDAY, { projectId: "alpha", title: "Twin" }), { message: `"Twin" could not be placed in the focus of ${YESTERDAY}, add its line to that note by hand` });
+    assert.throws(() => today.todayApi.createInDay(settings, YESTERDAY, { projectId: "alpha", title: "Loose", parentLine: 99, parentRaw: "- [ ] gone" }), board.TaskConflictError);
+    for (const date of [TODAY, BEFORE]) {
+      assert.throws(() => today.todayApi.createInDay(settings, date, { projectId: "alpha", title: "Fresh idea" }), /only the focus of yesterday creates its tasks here/);
+    }
+    assert.equal(read(root, dailyRel(YESTERDAY)), dailyOf(YESTERDAY, []));
     assert.equal(read(root, "projects/alpha.md"), projectText);
   });
 });

@@ -4,7 +4,7 @@ import { BadRequestError, NotFoundError } from "./delegation-launch.js";
 import { delegationGuard } from "./delegation-security.js";
 import { getSettings } from "./delegation-store.js";
 import { TaskConflictError } from "./tasks-board.js";
-import { installTodayHooks, readToday, StaleCaptureError, StaleTodayLineError, todayApi, type LinkTickTarget } from "./today.js";
+import { installTodayHooks, readToday, StaleCaptureError, StaleTodayLineError, todayApi, type DayCreateInput, type LinkTickTarget } from "./today.js";
 
 type Body = Record<string, unknown>;
 
@@ -38,6 +38,30 @@ function linkTarget(value: unknown): LinkTickTarget | null {
   if (typeof value !== "object" || Array.isArray(value)) throw new BadRequestError("target must be an object or null");
   const target = value as Body;
   return { projectId: requireString(target, "projectId"), line: requireLine(target), raw: requireString(target, "raw") };
+}
+
+function lineTarget(value: unknown, key: string): { line: number; raw: string } | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw new BadRequestError(`${key} must be an object with line and raw`);
+  const target = value as Body;
+  return { line: requireLine(target), raw: requireString(target, "raw") };
+}
+
+function dayCreateInput(body: Body): DayCreateInput {
+  const priority = body.priority;
+  if (priority !== undefined && priority !== null && typeof priority !== "number") throw new BadRequestError("priority must be a number or null");
+  const due = body.due;
+  if (due !== undefined && due !== null && typeof due !== "string") throw new BadRequestError("due must be a YYYY-MM-DD string or null");
+  const parent = lineTarget(body.parentLine === undefined || body.parentLine === null ? null : { line: body.parentLine, raw: body.parentRaw }, "parent");
+  const after = lineTarget(body.after, "after");
+  return {
+    projectId: requireString(body, "projectId"),
+    title: requireString(body, "title"),
+    ...(priority !== undefined ? { priority } : {}),
+    ...(due !== undefined ? { due } : {}),
+    ...(parent ? { parentLine: parent.line, parentRaw: parent.raw } : {}),
+    ...(after ? { after } : {}),
+  };
 }
 
 export function todayRouter(): Router {
@@ -192,6 +216,15 @@ export function todayRouter(): Router {
       const status = body.status;
       if (status !== "todo" && status !== "doing" && status !== "done") throw new BadRequestError("status must be todo, doing or done");
       res.json(todayApi.tickDay(getSettings(), date, { projectId: requireString(body, "projectId"), line: requireLine(body), raw: requireString(body, "raw"), status }));
+    } catch (err) {
+      sendTodayError(res, err);
+    }
+  });
+
+  router.post("/:date/task", (req, res) => {
+    try {
+      const date = dateOf(req.params.date);
+      res.status(201).json(todayApi.createInDay(getSettings(), date, dayCreateInput((req.body ?? {}) as Body)));
     } catch (err) {
       sendTodayError(res, err);
     }

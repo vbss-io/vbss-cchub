@@ -1978,7 +1978,13 @@ function insertAfterAnchor(doc: ParsedDoc, content: string, file: WalkedFile, co
   return { at, parent: parentTaskOf(tasks, anchor.line)?.line ?? null, section: anchor.section };
 }
 
-export function createBoardTask(settings: DelegationSettings, input: BoardCreateInput): BoardCreateResult {
+interface CreatedDraft {
+  file: WalkedFile;
+  next: string;
+  task: BoardTask;
+}
+
+function draftCreated(settings: DelegationSettings, input: BoardCreateInput): CreatedDraft {
   const title = cleanTitle(validateTitle(input.title), settings.tasks);
   const status = input.status ?? "todo";
   if (!(BOARD_STATUSES as readonly string[]).includes(status)) throw new BadRequestError(`status must be one of: ${BOARD_STATUSES.join(", ")}`);
@@ -2010,7 +2016,15 @@ export function createBoardTask(settings: DelegationSettings, input: BoardCreate
     placement = { at: insertIntoOpenEnd(doc, [docLine(composeTaskLine("", status, title, reason, priority, dates, config))], config), parent: null, section: null };
   }
   const next = renderDoc(doc);
-  const task = ensureCreatedInPlace(next, file, config, placement);
+  return { file, next, task: ensureCreatedInPlace(next, file, config, placement) };
+}
+
+export function draftBoardTask(settings: DelegationSettings, input: BoardCreateInput): BoardTask {
+  return draftCreated(settings, input).task;
+}
+
+export function createBoardTask(settings: DelegationSettings, input: BoardCreateInput): BoardCreateResult {
+  const { file, next, task } = draftCreated(settings, input);
   const updatedAt = commitFile(file, next);
   return { task, updatedAt };
 }
