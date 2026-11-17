@@ -713,6 +713,8 @@ export interface TodayTickInput {
 
 export const tickDay = (date: string, input: TodayTickInput): Promise<{ task: BoardTask }> => call("POST", todayPath(date, "tick"), input);
 
+export const createDayTask = (date: string, input: BoardCreateInput): Promise<{ task: BoardTask }> => call("POST", todayPath(date, "task"), input);
+
 export const migrateToday = (date: string): Promise<{ scheduled: number }> => call("POST", todayPath(date, "migrate"));
 
 export interface TodayReorderInput {
