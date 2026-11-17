@@ -703,6 +703,15 @@ export const createTodayNote = (date: string): Promise<{ dailyExists: true }> =>
 
 export const linkTick = (date: string, input: TodayLinkTickInput): Promise<unknown> => call("POST", todayPath(date, "link-tick"), input);
 
+export interface TodayTickInput {
+  projectId: string;
+  line: number;
+  raw: string;
+  status: "todo" | "doing" | "done";
+}
+
+export const tickDay = (date: string, input: TodayTickInput): Promise<{ task: BoardTask }> => call("POST", todayPath(date, "tick"), input);
+
 export const migrateToday = (date: string): Promise<{ scheduled: number }> => call("POST", todayPath(date, "migrate"));
 
 export interface TodayReorderInput {
