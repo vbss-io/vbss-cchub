@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { buildNotification, createNotifier, DEFAULT_NOTIF_EVENTS, nativeSubject, type FiredEvent, type NativeSubject, type NotifEventConfig } from "./notifications";
 import type { SoundKind } from "./notify";
 

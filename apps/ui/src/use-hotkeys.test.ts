@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { findBinding, isEditableTarget, matchCombo, parseCombo, type EditableTargetLike, type HotkeyBinding, type KeyEventLike } from "./use-hotkeys";
 
 const event = (key: string, mods: Partial<Omit<KeyEventLike, "key">> = {}): KeyEventLike => ({

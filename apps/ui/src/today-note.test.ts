@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import type { BoardProject, BoardTask, TodayData, TodayUnmatched } from "./delegation";
 import { canCreateFromNoMatch, canLinkNoMatch, lineCheckbox, lineContent, matchingOpenTasks, noteBlocksOf, noteSections, planFocusAdd, splitNoteLine, titleKey } from "./today-note";
 

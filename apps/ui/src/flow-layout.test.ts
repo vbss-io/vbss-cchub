@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import type { TaskRecord, WorkspaceRecord } from "./delegation";
 import { buildFlow, fitNodeText, OUTSIDE_LABEL, relatives, type FlowInput } from "./flow-layout";
 import type { AgentRecord, CodexSessionRecord, GroupRecord, SessionRecord, SessionStatus } from "./types";

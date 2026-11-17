@@ -4,29 +4,18 @@ import { App } from "./App";
 import { Toaster } from "./components/Toaster";
 import { Widget } from "./components/Widget";
 import { reportUiDiag } from "./api";
+import { bridgeNavigation, prepareDocument } from "./boot";
 import "./styles.css";
 import "./responsive.css";
 import "./nav-rail.css";
 import "./toaster.css";
 
-document.documentElement.dataset.theme = localStorage.getItem("hub.theme") === "midnight" ? "midnight" : "dracula";
-const params = new URLSearchParams(location.search);
-const isWidget = params.get("widget") === "1";
-const isToast = params.get("toast") === "1";
-void reportUiDiag({ window: isToast ? "toast" : isWidget ? "widget" : "main", loaded: true, href: location.href, tauri: "__TAURI_INTERNALS__" in window, visibility: document.visibilityState });
-if (isToast) document.documentElement.classList.add("toast-window");
-if (isWidget) document.documentElement.classList.add("widget-window");
+const flags = prepareDocument(window, document, reportUiDiag);
 const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
-    <StrictMode>{isWidget ? <Widget /> : isToast ? <Toaster /> : <App />}</StrictMode>,
+    <StrictMode>{flags.widget ? <Widget /> : flags.toast ? <Toaster /> : <App />}</StrictMode>,
   );
 }
 
-if (!isWidget && !isToast && "__TAURI_INTERNALS__" in window) {
-  void import("@tauri-apps/api/event").then(({ listen }) => {
-    void listen<string>("hub:navigate", (event) => {
-      window.dispatchEvent(new CustomEvent<string>("cchub:goto-hash", { detail: event.payload }));
-    });
-  });
-}
+bridgeNavigation(window, flags, () => import("@tauri-apps/api/event").then((module) => module.listen));

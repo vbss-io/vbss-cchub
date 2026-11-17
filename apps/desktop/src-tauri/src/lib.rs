@@ -1,16 +1,15 @@
+mod app;
+
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{
-    menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
-    Emitter, Manager, RunEvent,
-};
+
+pub use app::run;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const BACKOFF_SECS: [u64; 5] = [2, 5, 15, 30, 60];
@@ -23,8 +22,38 @@ struct SidecarConfig {
     app_exe: String,
 }
 
+trait Process: Send {
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>>;
+    fn kill(&mut self) -> std::io::Result<()>;
+    fn wait(&mut self) -> std::io::Result<ExitStatus>;
+}
+
+impl Process for Child {
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        Child::try_wait(self)
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        Child::kill(self)
+    }
+
+    fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        Child::wait(self)
+    }
+}
+
+trait Host: Send + Sync {
+    fn now(&self) -> Instant;
+    fn spawn(&self, config: &SidecarConfig) -> Result<Box<dyn Process>, String>;
+    fn log(&self, line: &str);
+}
+
+struct SystemHost {
+    profile: Option<String>,
+}
+
 struct SupervisorState {
-    child: Option<Child>,
+    child: Option<Box<dyn Process>>,
     started_at: Option<Instant>,
     restarts: Vec<Instant>,
     next_restart_at: Option<Instant>,
@@ -33,6 +62,7 @@ struct SupervisorState {
 
 pub struct Supervisor {
     config: Option<SidecarConfig>,
+    host: Arc<dyn Host>,
     state: Mutex<SupervisorState>,
     shutting_down: AtomicBool,
 }
@@ -44,7 +74,9 @@ enum Poll {
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn strip_verbatim(path: &str) -> String {
@@ -64,11 +96,13 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
-fn iso_now() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+fn epoch_secs(time: SystemTime) -> i64 {
+    time.duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+fn format_iso(secs: i64) -> String {
     let (year, month, day) = civil_from_days(secs.div_euclid(86_400));
     let rem = secs.rem_euclid(86_400);
     format!(
@@ -79,52 +113,66 @@ fn iso_now() -> String {
     )
 }
 
-fn data_dir() -> Option<PathBuf> {
-    let profile = std::env::var("USERPROFILE").ok()?;
-    let dir = PathBuf::from(profile).join(".vbss-cchub");
+fn iso_now() -> String {
+    format_iso(epoch_secs(SystemTime::now()))
+}
+
+fn data_dir_for(profile: Option<&str>) -> Option<PathBuf> {
+    let dir = PathBuf::from(profile?).join(".vbss-cchub");
     fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }
 
-fn append_exit_log(line: &str) {
-    let Some(dir) = data_dir() else { return };
+fn append_exit_log_in(dir: &Path, stamp: &str, line: &str) {
     if let Ok(mut file) = OpenOptions::new()
         .create(true)
         .append(true)
         .open(dir.join("sidecar-exits.log"))
     {
-        let _ = writeln!(file, "{} {}", iso_now(), line);
+        let _ = writeln!(file, "{stamp} {line}");
     }
 }
 
-fn resolve_config(handle: &tauri::AppHandle) -> Option<SidecarConfig> {
-    let resource_dir = handle.path().resource_dir().ok()?;
+fn resolve_config_from(
+    resource_dir: &Path,
+    current_exe: std::io::Result<PathBuf>,
+) -> Option<SidecarConfig> {
     // Tauri returns an extended-length (\\?\) path on Windows; Node/better-sqlite3 cannot
     // resolve it (fs.lstat fails), so strip the verbatim prefix before spawning.
-    let sidecar_dir = PathBuf::from(strip_verbatim(&resource_dir.to_string_lossy())).join("sidecar");
+    let sidecar_dir =
+        PathBuf::from(strip_verbatim(&resource_dir.to_string_lossy())).join("sidecar");
     if !sidecar_dir.join("node.exe").exists() || !sidecar_dir.join("server.cjs").exists() {
         return None;
     }
-    let app_exe = std::env::current_exe()
+    let app_exe = current_exe
         .map(|p| strip_verbatim(&p.to_string_lossy()))
         .unwrap_or_default();
-    Some(SidecarConfig { sidecar_dir, app_exe })
+    Some(SidecarConfig {
+        sidecar_dir,
+        app_exe,
+    })
 }
 
-fn open_server_log() -> Option<fs::File> {
-    let dir = data_dir()?;
+fn open_server_log_in(dir: &Path, stamp: &str) -> Option<fs::File> {
     let path = dir.join("server.log");
-    if fs::metadata(&path).map(|m| m.len() > LOG_ROTATE_BYTES).unwrap_or(false) {
+    if fs::metadata(&path)
+        .map(|m| m.len() > LOG_ROTATE_BYTES)
+        .unwrap_or(false)
+    {
         let rotated = dir.join("server.log.1");
         let _ = fs::remove_file(&rotated);
         let _ = fs::rename(&path, &rotated);
     }
-    let mut file = OpenOptions::new().create(true).append(true).open(&path).ok()?;
-    let _ = writeln!(file, "--- sidecar start {} ---", iso_now());
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
+    let _ = writeln!(file, "--- sidecar start {stamp} ---");
     Some(file)
 }
 
-fn spawn_child(config: &SidecarConfig) -> Result<Child, String> {
+fn spawn_child(config: &SidecarConfig, log_dir: Option<&Path>) -> Result<Child, String> {
     let mut cmd = Command::new(config.sidecar_dir.join("node.exe"));
     cmd.arg("--use-system-ca")
         .arg(config.sidecar_dir.join("server.cjs"))
@@ -132,7 +180,7 @@ fn spawn_child(config: &SidecarConfig) -> Result<Child, String> {
         .env("HUB_DELEGATION", "1")
         .env("HUB_APP_EXE", &config.app_exe)
         .env("HUB_PARENT_PID", std::process::id().to_string());
-    if let Some(log) = open_server_log() {
+    if let Some(log) = log_dir.and_then(|dir| open_server_log_in(dir, &iso_now())) {
         if let Ok(log2) = log.try_clone() {
             cmd.stdout(log).stderr(log2);
         }
@@ -145,10 +193,45 @@ fn spawn_child(config: &SidecarConfig) -> Result<Child, String> {
     cmd.spawn().map_err(|e| e.to_string())
 }
 
+impl SystemHost {
+    fn new() -> Self {
+        Self::with_profile(std::env::var("USERPROFILE").ok())
+    }
+
+    fn with_profile(profile: Option<String>) -> Self {
+        SystemHost { profile }
+    }
+
+    fn data_dir(&self) -> Option<PathBuf> {
+        data_dir_for(self.profile.as_deref())
+    }
+}
+
+impl Host for SystemHost {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn spawn(&self, config: &SidecarConfig) -> Result<Box<dyn Process>, String> {
+        let dir = self.data_dir();
+        spawn_child(config, dir.as_deref()).map(|child| Box::new(child) as Box<dyn Process>)
+    }
+
+    fn log(&self, line: &str) {
+        let Some(dir) = self.data_dir() else { return };
+        append_exit_log_in(&dir, &iso_now(), line);
+    }
+}
+
 impl Supervisor {
     fn new(config: Option<SidecarConfig>) -> Self {
+        Self::with_host(config, Arc::new(SystemHost::new()))
+    }
+
+    fn with_host(config: Option<SidecarConfig>, host: Arc<dyn Host>) -> Self {
         Supervisor {
             config,
+            host,
             state: Mutex::new(SupervisorState {
                 child: None,
                 started_at: None,
@@ -165,7 +248,9 @@ impl Supervisor {
     }
 
     fn schedule_or_give_up(state: &mut SupervisorState, now: Instant) -> String {
-        state.restarts.retain(|t| now.duration_since(*t) < RESTART_WINDOW);
+        state
+            .restarts
+            .retain(|t| now.duration_since(*t) < RESTART_WINDOW);
         match BACKOFF_SECS.get(state.restarts.len()) {
             Some(secs) => {
                 state.next_restart_at = Some(now + Duration::from_secs(*secs));
@@ -184,8 +269,10 @@ impl Supervisor {
     }
 
     fn start(&self, state: &mut SupervisorState, now: Instant, is_restart: bool) {
-        let Some(config) = self.config.as_ref() else { return };
-        match spawn_child(config) {
+        let Some(config) = self.config.as_ref() else {
+            return;
+        };
+        match self.host.spawn(config) {
             Ok(child) => {
                 state.child = Some(child);
                 state.started_at = Some(now);
@@ -199,7 +286,8 @@ impl Supervisor {
                     state.restarts.push(now);
                 }
                 let action = Self::schedule_or_give_up(state, now);
-                append_exit_log(&format!("spawn failed error={error} {action}"));
+                self.host
+                    .log(&format!("spawn failed error={error} {action}"));
             }
         }
     }
@@ -215,7 +303,7 @@ impl Supervisor {
             state.restarts.clear();
         }
         let action = Self::schedule_or_give_up(state, now);
-        append_exit_log(&format!(
+        self.host.log(&format!(
             "sidecar exited status={status} uptime={}s {action}",
             uptime.as_secs()
         ));
@@ -226,7 +314,7 @@ impl Supervisor {
             return;
         }
         let mut state = lock(&self.state);
-        let now = Instant::now();
+        let now = self.host.now();
         let polled = match state.child.as_mut() {
             Some(child) => match child.try_wait() {
                 Ok(None) => Poll::Running,
@@ -243,7 +331,7 @@ impl Supervisor {
         match polled {
             Poll::Running => {}
             Poll::Exited(status) => self.handle_exit(&mut state, now, status),
-            Poll::Failed(error) => append_exit_log(&format!("try_wait failed error={error}")),
+            Poll::Failed(error) => self.host.log(&format!("try_wait failed error={error}")),
         }
     }
 
@@ -252,7 +340,7 @@ impl Supervisor {
             return;
         }
         let mut state = lock(&self.state);
-        self.start(&mut state, Instant::now(), false);
+        self.start(&mut state, self.host.now(), false);
     }
 
     pub fn restart(&self) -> Result<(), String> {
@@ -271,8 +359,8 @@ impl Supervisor {
         state.restarts.clear();
         state.next_restart_at = None;
         state.gave_up = false;
-        append_exit_log("manual restart requested");
-        self.start(&mut state, Instant::now(), false);
+        self.host.log("manual restart requested");
+        self.start(&mut state, self.host.now(), false);
         if state.child.is_some() {
             Ok(())
         } else {
@@ -290,99 +378,60 @@ impl Supervisor {
     }
 }
 
-fn supervise(supervisor: Arc<Supervisor>) {
+fn spawn_supervision(supervisor: Arc<Supervisor>, interval: Duration) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         while !supervisor.is_shutting_down() {
-            thread::sleep(POLL_INTERVAL);
+            thread::sleep(interval);
             supervisor.tick();
         }
-    });
+    })
 }
 
-#[tauri::command]
-fn restart_sidecar(supervisor: tauri::State<'_, Arc<Supervisor>>) -> Result<(), String> {
-    supervisor.restart()
+fn supervise(supervisor: Arc<Supervisor>) {
+    spawn_supervision(supervisor, POLL_INTERVAL);
 }
 
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-        }))
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![restart_sidecar])
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
-            }
-        })
-        .setup(|app| {
-            let supervisor = Arc::new(Supervisor::new(resolve_config(app.handle())));
-            supervisor.begin();
-            supervise(Arc::clone(&supervisor));
-            app.manage(supervisor);
+const MAIN_WINDOW: &str = "main";
+const WIDGET_WINDOW: &str = "widget";
+const WIDGET_SHOWN_EVENT: &str = "widget:shown";
+const TRAY_OPEN: &str = "open";
+const TRAY_WIDGET: &str = "widget";
+const TRAY_QUIT: &str = "quit";
 
-            let open_item = MenuItem::with_id(app, "open", "Open Hub", true, None::<&str>)?;
-            let widget_item =
-                MenuItem::with_id(app, "widget", "Show/hide widget", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open_item, &widget_item, &quit_item])?;
+#[derive(Debug, PartialEq, Eq)]
+enum TrayAction {
+    ShowMain,
+    ToggleWidget,
+    Quit,
+    Ignore,
+}
 
-            TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap().clone())
-                .menu(&menu)
-                .tooltip("VBSS CCHUB")
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
-                    }
-                    "widget" => {
-                        if let Some(window) = app.get_webview_window("widget") {
-                            if window.is_visible().unwrap_or(false) {
-                                let _ = window.hide();
-                            } else {
-                                let _ = window.show();
-                                let _ = window.set_focus();
-                                let _ = app.emit("widget:shown", ());
-                            }
-                        }
-                    }
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .build(app)?;
+fn tray_action(id: &str) -> TrayAction {
+    match id {
+        TRAY_OPEN => TrayAction::ShowMain,
+        TRAY_WIDGET => TrayAction::ToggleWidget,
+        TRAY_QUIT => TrayAction::Quit,
+        _ => TrayAction::Ignore,
+    }
+}
 
-            Ok(())
-        })
-        .build(tauri::generate_context!())
-        .expect("error while starting VBSS CCHUB")
-        .run(|app_handle, event| {
-            if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
-                if let Some(supervisor) = app_handle.try_state::<Arc<Supervisor>>() {
-                    supervisor.shutdown();
-                }
-            }
-        });
+#[derive(Debug, PartialEq, Eq)]
+enum WidgetToggle {
+    Hide,
+    ShowAndAnnounce,
+}
+
+fn widget_toggle(visible: Option<bool>) -> WidgetToggle {
+    if visible.unwrap_or(false) {
+        WidgetToggle::Hide
+    } else {
+        WidgetToggle::ShowAndAnnounce
+    }
+}
+
+fn hides_on_close(label: &str) -> bool {
+    label == MAIN_WINDOW
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn civil_from_days_matches_known_dates() {
-        assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(20_000), (2024, 10, 4));
-        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
-    }
-}
+mod tests;

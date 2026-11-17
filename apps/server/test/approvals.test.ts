@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "nod
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fixtures, freePort, makeSandbox, serverDir, startServer, waitFor, type RunningServer } from "./helpers.js";
+import { fakeProfileEnv } from "./helpers/fake-profile.js";
 
 const box = makeSandbox("cchub-g1-approvals-");
 const fakeUser = join(box.tmp, "user");
@@ -40,6 +41,7 @@ function hookEnv(port: number, extra: Record<string, string>): NodeJS.ProcessEnv
     ...process.env,
     HOME: fakeUser,
     USERPROFILE: fakeUser,
+    ...fakeProfileEnv(fakeUser),
     CLAUDE_CONFIG_DIR: claudeDir,
     CODEX_HOME: box.codexHome,
     HUB_HOST_TARGET: "127.0.0.1",

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { checksLine, checksTone, ghVisible, noPrLine, prState, runState, runTitle, runTone, safeUrl } from "./gh-model";
 import type { GhChecks, GhStatus } from "./types";
 

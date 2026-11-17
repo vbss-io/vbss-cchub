@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import type { FirewallStatus, ShareState, TunnelStatus } from "./delegation";
 import { activitySummary, filterShares, isShareFilter, reachItems, reachMenuEntries, reachProblems, shareCounts, shareMenuEntries, tunnelIsUp } from "./share-model";
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import type { BoardProject, BoardTask, WorkspaceRecord } from "./delegation";
 import { buildCaptureItems, buildCommandItems, buildHistoryItems, buildSessionItems, buildTaskItems, buildViewItems, buildWorkspaceItems, CAPTURE_PREFILL, PALETTE_SESSION_CAP, parseCaptureQuery, type SessionActions } from "./palette-items";
 import { settingsTabs } from "./settings-sections";

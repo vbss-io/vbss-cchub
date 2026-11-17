@@ -19,7 +19,9 @@ const VALUE_NAME = "VBSS CCHUB";
 
 const psLiteral = (value: string): string => `'${value.replace(/'/g, "''")}'`;
 
-const powershell = (command: string): Promise<{ stdout: string }> =>
+export type PowerShell = (command: string) => Promise<{ stdout: string }>;
+
+const powershell: PowerShell = (command) =>
   run("powershell", ["-NoProfile", "-NonInteractive", "-Command", command], { timeout: 15_000, windowsHide: true });
 
 export function appExecutable(): string | null {
@@ -32,11 +34,11 @@ export function appExecutable(): string | null {
   return null;
 }
 
-export async function autostartStatus(): Promise<AutostartStatus> {
+export async function autostartStatus(shell: PowerShell = powershell, os: () => string = platform): Promise<AutostartStatus> {
   const exe = appExecutable();
-  if (platform() !== "win32") return { supported: false, enabled: false, exe, error: null };
+  if (os() !== "win32") return { supported: false, enabled: false, exe, error: null };
   try {
-    const { stdout } = await powershell(`(Get-ItemProperty -Path ${psLiteral(RUN_KEY)} -Name ${psLiteral(VALUE_NAME)} -ErrorAction SilentlyContinue).${psLiteral(VALUE_NAME)}`);
+    const { stdout } = await shell(`(Get-ItemProperty -Path ${psLiteral(RUN_KEY)} -Name ${psLiteral(VALUE_NAME)} -ErrorAction SilentlyContinue).${psLiteral(VALUE_NAME)}`);
     const value = stdout.trim().replace(/^"|"$/g, "").toLowerCase();
     const enabled = value.length > 0 && (exe === null || value === exe.toLowerCase());
     return { supported: exe !== null, enabled, exe, error: null };
@@ -45,20 +47,20 @@ export async function autostartStatus(): Promise<AutostartStatus> {
   }
 }
 
-export async function setAutostart(enabled: boolean): Promise<AutostartStatus> {
+export async function setAutostart(enabled: boolean, shell: PowerShell = powershell, os: () => string = platform): Promise<AutostartStatus> {
   const exe = appExecutable();
-  if (platform() !== "win32") return { supported: false, enabled: false, exe, error: "start with the OS is only wired for Windows" };
+  if (os() !== "win32") return { supported: false, enabled: false, exe, error: "start with the OS is only wired for Windows" };
   if (enabled && !exe) return { supported: false, enabled: false, exe, error: "the app executable was not found; use the installed app" };
   try {
     if (enabled) {
-      await powershell(
+      await shell(
         `if (-not (Test-Path ${psLiteral(RUN_KEY)})) { New-Item -Path ${psLiteral(RUN_KEY)} | Out-Null }; Set-ItemProperty -Path ${psLiteral(RUN_KEY)} -Name ${psLiteral(VALUE_NAME)} -Value ${psLiteral(`"${exe}"`)}`,
       );
     } else {
-      await powershell(`Remove-ItemProperty -Path ${psLiteral(RUN_KEY)} -Name ${psLiteral(VALUE_NAME)} -ErrorAction SilentlyContinue`);
+      await shell(`Remove-ItemProperty -Path ${psLiteral(RUN_KEY)} -Name ${psLiteral(VALUE_NAME)} -ErrorAction SilentlyContinue`);
     }
   } catch (err) {
     return { supported: true, enabled: false, exe, error: err instanceof Error ? err.message : "registry write failed" };
   }
-  return autostartStatus();
+  return autostartStatus(shell, os);
 }

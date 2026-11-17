@@ -5,7 +5,9 @@ import { promisify } from "node:util";
 import { config } from "./config.js";
 import { getSettings } from "./delegation-store.js";
 
-const run = promisify(execFile);
+export type HooksExec = (file: string, args: string[], options?: { timeout: number }) => Promise<{ stdout: string }>;
+
+const run: HooksExec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
 const hooksDir = config.resourceDir ? join(config.resourceDir, "hooks") : join(here, "..", "hooks");
 const configureScript = join(hooksDir, "configure.mjs");
@@ -43,14 +45,14 @@ function parseLastJson(stdout: string): Record<string, unknown> {
   return {};
 }
 
-async function configure(action: HookAction, extra: string[] = []): Promise<Record<string, unknown>> {
-  const { stdout } = await run(config.nodeBin, [configureScript, action, ...extra]);
+async function configure(exec: HooksExec, action: HookAction, extra: string[] = []): Promise<Record<string, unknown>> {
+  const { stdout } = await exec(config.nodeBin, [configureScript, action, ...extra]);
   return parseLastJson(stdout);
 }
 
-async function listWslDistros(): Promise<string[]> {
+async function listWslDistros(exec: HooksExec): Promise<string[]> {
   try {
-    const { stdout } = await run("wsl", ["-l", "-q"], { timeout: 8000 });
+    const { stdout } = await exec("wsl", ["-l", "-q"], { timeout: 8000 });
     return clean(stdout)
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -61,22 +63,22 @@ async function listWslDistros(): Promise<string[]> {
   }
 }
 
-async function wslUser(distro: string): Promise<string | null> {
+async function wslUser(exec: HooksExec, distro: string): Promise<string | null> {
   try {
-    const { stdout } = await run("wsl", ["-d", distro, "whoami"], { timeout: 25000 });
+    const { stdout } = await exec("wsl", ["-d", distro, "whoami"], { timeout: 25000 });
     return clean(stdout).trim() || null;
   } catch {
     return null;
   }
 }
 
-async function configureWsl(action: HookAction, distro: string): Promise<WslResult> {
-  const user = await wslUser(distro);
+async function configureWsl(exec: HooksExec, action: HookAction, distro: string): Promise<WslResult> {
+  const user = await wslUser(exec, distro);
   if (!user) return { distro, error: "user not found" };
   const settings = `\\\\wsl$\\${distro}\\home\\${user}\\.claude\\settings.json`;
   const notify = winToWsl(notifyShScript);
   try {
-    const result = await configure(action, [
+    const result = await configure(exec, action, [
       "--settings",
       settings,
       "--notify",
@@ -102,13 +104,13 @@ export function permissionHookTimeoutSec(windowSec: number): number {
 
 const permissionArgs = (): string[] => ["--permission-timeout", String(permissionHookTimeoutSec(getSettings().approvals.claudeWindowSec))];
 
-export async function windowsHooks(action: HookAction): Promise<Record<string, unknown>> {
-  return configure(action, [...(config.resourceDir ? ["--runner", config.nodeBin] : []), ...permissionArgs()]);
+export async function windowsHooks(action: HookAction, exec: HooksExec = run): Promise<Record<string, unknown>> {
+  return configure(exec, action, [...(config.resourceDir ? ["--runner", config.nodeBin] : []), ...permissionArgs()]);
 }
 
-export async function wslHooks(action: HookAction): Promise<WslResult[]> {
-  const distros = await listWslDistros();
-  return Promise.all(distros.map((distro) => configureWsl(action, distro)));
+export async function wslHooks(action: HookAction, exec: HooksExec = run): Promise<WslResult[]> {
+  const distros = await listWslDistros(exec);
+  return Promise.all(distros.map((distro) => configureWsl(exec, action, distro)));
 }
 
 export function mergeHooks(

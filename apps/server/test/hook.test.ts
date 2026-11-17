@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
+import { fakeProfileEnv } from "./helpers/fake-profile.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const hook = join(here, "..", "hooks", "notify.mjs");
@@ -60,7 +61,7 @@ function runHook(env: Record<string, string>, input: Record<string, unknown>): P
   return new Promise((resolve) => {
     const started = Date.now();
     const child = spawn(process.execPath, [hook], {
-      env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, HUB_HOST_TARGET: "127.0.0.1", HUB_PORT: String(port), HUB_SKIP: "0", ...env },
+      env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome, ...fakeProfileEnv(fakeHome), HUB_HOST_TARGET: "127.0.0.1", HUB_PORT: String(port), HUB_SKIP: "0", ...env },
       stdio: ["pipe", "pipe", "ignore"],
     });
     let stdout = "";

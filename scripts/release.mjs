@@ -63,6 +63,13 @@ if (!Array.isArray(entry.highlights) || entry.highlights.length === 0) {
 }
 const notes = entry.highlights.map((line) => `- ${line}`).join("\n");
 
+console.log("release: running coverage gate");
+try {
+  run("npm run coverage");
+} catch {
+  fail("coverage gate failed; fix coverage before publishing");
+}
+
 console.log(`release: bumping ${current} -> ${version}`);
 for (const dir of ["", ...workspaces]) {
   const path = join(root, dir, "package.json");

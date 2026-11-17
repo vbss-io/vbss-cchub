@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { attentionCount, codexAttentionCount, needsYou, sessionsBadge, sessionsBadgeTitle } from "./attention";
 import type { TaskStatus } from "./delegation";
 import type { SessionStatus } from "./types";

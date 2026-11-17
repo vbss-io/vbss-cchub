@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { costLabel, costTitle, formatTokenCount, formatUsd, hasCost, mergeCostMaps, missingCostIds, sumCosts, tokensLabel } from "./cost-model";
 import type { CostTotals, RunCostFields } from "./types";
 

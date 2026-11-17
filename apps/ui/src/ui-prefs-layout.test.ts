@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import { layoutSize, mergeLayoutPatch, withLayoutSize, type UiLayout } from "./ui-prefs-layout";
 
 const layout: UiLayout = { today: { backlog: 380 }, note: { side: 300, other: 120 } };

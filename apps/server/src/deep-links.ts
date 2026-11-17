@@ -16,9 +16,9 @@ export const vscodeSessionUrl = (sessionId: string): string => `vscode://anthrop
 
 export const codexThreadUrl = (threadId: string): string => `codex://threads/${encodeURIComponent(threadId)}`;
 
-function platformOpener(): string[] {
-  if (process.platform === "win32") return ["rundll32", "url.dll,FileProtocolHandler"];
-  if (process.platform === "darwin") return ["open"];
+export function platformOpener(platform: NodeJS.Platform = process.platform): string[] {
+  if (platform === "win32") return ["rundll32", "url.dll,FileProtocolHandler"];
+  if (platform === "darwin") return ["open"];
   return ["xdg-open"];
 }
 

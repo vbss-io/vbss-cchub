@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import type { HubFeatures } from "./delegation";
 import { defaultSidebarPrefs, isPluginEnabled, pluginById, sidebarModel } from "./plugins/registry";
 import type { PluginId } from "./plugins/types";

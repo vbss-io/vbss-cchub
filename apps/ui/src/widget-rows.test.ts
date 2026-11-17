@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it } from "vitest";
 import type { SessionRecord, SessionStatus } from "./types";
 import { compactRect, type Rect } from "./widget-layout";
 import {
