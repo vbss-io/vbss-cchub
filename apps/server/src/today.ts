@@ -3331,15 +3331,9 @@ function dailyFocus(settings: DelegationSettings, date: string, daily: DailyRead
   return { entries: memberEntries(settings, data, date, members).map((item) => item.entry), lines: new Set(members.map((member) => member.line)) };
 }
 
-function closedDayFocus(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData): DailyFocus {
-  const own = dailyFocus(settings, date, daily, data);
-  const ids = new Set(own.entries.flatMap((entry) => flattenTasks([entry.task]).map((task) => task.id)));
-  return { entries: [...own.entries, ...computeFocus(settings, data, date).filter((entry) => !ids.has(entry.task.id))], lines: own.lines };
-}
-
 function mirroredFocus(settings: DelegationSettings, date: string, daily: DailyReadResult, data: BoardData): DailyFocus | null {
   if (usesMirror(settings, date)) return dailyFocus(settings, date, daily, data);
-  return closesDay(settings, date) ? closedDayFocus(settings, date, daily, data) : null;
+  return closesDay(settings, date) ? dailyFocus(settings, date, daily, data) : null;
 }
 
 function focusFor(settings: DelegationSettings, date: string): TodayEntry[] {

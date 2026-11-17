@@ -196,7 +196,7 @@ describe("H2: the day of yesterday syncs its checkboxes", () => {
     for (let round = 0; round < 3; round += 1) today.todayApi.regenerateFocusMirror(settings, YESTERDAY);
     assert.equal(read(root, "projects/alpha.md"), projectText);
     assert.equal(read(root, dailyRel(YESTERDAY)), edited);
-    assert.deepEqual(focusTitles(settings, YESTERDAY), ["Moved", "Loose", "Ship release", "Missing"]);
+    assert.deepEqual(focusTitles(settings, YESTERDAY), ["Moved", "Loose"]);
     assert.deepEqual(today.readToday(settings, YESTERDAY).carriedOver, []);
   });
 
@@ -287,7 +287,7 @@ describe("H2: hub actions on the day of yesterday", () => {
     const projectText = project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`, `- [ ] Not in the note ${SCHEDULED} ${YESTERDAY}`, "- [ ] Loose"]);
     const root = lab({ alpha: projectText }, { [YESTERDAY]: dailyOf(YESTERDAY, [line("Ship release")]) });
     const settings = useVault(root);
-    assert.deepEqual(focusTitles(settings, YESTERDAY), ["Ship release", "Not in the note"]);
+    assert.deepEqual(focusTitles(settings, YESTERDAY), ["Ship release"]);
     for (const title of ["Not in the note", "Loose"]) {
       assert.throws(
         () => today.todayApi.tickDay(settings, YESTERDAY, tick(taskIn(settings, "alpha", title), "done")),
