@@ -185,6 +185,18 @@ export function todayRouter(): Router {
     }
   });
 
+  router.post("/:date/tick", (req, res) => {
+    try {
+      const date = dateOf(req.params.date);
+      const body = (req.body ?? {}) as Body;
+      const status = body.status;
+      if (status !== "todo" && status !== "doing" && status !== "done") throw new BadRequestError("status must be todo, doing or done");
+      res.json(todayApi.tickDay(getSettings(), date, { projectId: requireString(body, "projectId"), line: requireLine(body), raw: requireString(body, "raw"), status }));
+    } catch (err) {
+      sendTodayError(res, err);
+    }
+  });
+
   router.post("/:date/migrate", (req, res) => {
     try {
       const date = dateOf(req.params.date);

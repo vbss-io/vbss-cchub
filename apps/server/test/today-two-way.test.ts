@@ -58,7 +58,7 @@ function shift(date: string, days: number): string {
 }
 
 const TODAY = dayOf(new Date());
-const YESTERDAY = shift(TODAY, -1);
+const DAY_BEFORE = shift(TODAY, -2);
 const TOMORROW = shift(TODAY, 1);
 const LATER = shift(TODAY, 4);
 
@@ -343,19 +343,19 @@ describe("G00c D4: a scheduled date changed in the project mirrors into the dail
     assert.deepEqual(focusTitles(settings, LATER), ["Task four"]);
   });
 
-  it("a past daily is never written and its lines never change a date", () => {
-    const past = dailyOf(YESTERDAY, ["- [ ] [[alpha|Alpha]] - Task four"]);
-    const root = lab({ alpha: ALPHA(YESTERDAY), beta: BETA(TODAY) }, { [YESTERDAY]: past });
+  it("a daily older than yesterday is never written and its lines never change a date", () => {
+    const past = dailyOf(DAY_BEFORE, ["- [ ] [[alpha|Alpha]] - Task four"]);
+    const root = lab({ alpha: ALPHA(DAY_BEFORE), beta: BETA(TODAY) }, { [DAY_BEFORE]: past });
     const settings = useVault(root);
     const before = read(root, "projects/alpha.md");
-    assert.deepEqual(today.todayApi.regenerateFocusMirror(settings, YESTERDAY), { changed: false, skipped: "past", applied: 0 });
-    editDaily(root, YESTERDAY, (content) => content.replace("- [ ] [[alpha|Alpha]] - Task four\n", ""));
-    editProject(root, "alpha", (content) => content.replace(`- [ ] Task one ${SCHEDULED} ${YESTERDAY}`, "- [ ] Task one"));
+    assert.deepEqual(today.todayApi.regenerateFocusMirror(settings, DAY_BEFORE), { changed: false, skipped: "past", applied: 0 });
+    editDaily(root, DAY_BEFORE, (content) => content.replace("- [ ] [[alpha|Alpha]] - Task four\n", ""));
+    editProject(root, "alpha", (content) => content.replace(`- [ ] Task one ${SCHEDULED} ${DAY_BEFORE}`, "- [ ] Task one"));
     today.flushMirrors(settings);
-    today.todayApi.regenerateFocusMirror(settings, YESTERDAY);
-    assert.equal(read(root, dailyRel(YESTERDAY)), past.replace("- [ ] [[alpha|Alpha]] - Task four\n", ""));
-    assert.equal(read(root, "projects/alpha.md"), before.replace(`- [ ] Task one ${SCHEDULED} ${YESTERDAY}`, "- [ ] Task one"));
-    assert.throws(() => today.todayApi.clearToday(settings, YESTERDAY), /scheduled focus of today or a later day/);
+    today.todayApi.regenerateFocusMirror(settings, DAY_BEFORE);
+    assert.equal(read(root, dailyRel(DAY_BEFORE)), past.replace("- [ ] [[alpha|Alpha]] - Task four\n", ""));
+    assert.equal(read(root, "projects/alpha.md"), before.replace(`- [ ] Task one ${SCHEDULED} ${DAY_BEFORE}`, "- [ ] Task one"));
+    assert.throws(() => today.todayApi.clearToday(settings, DAY_BEFORE), /scheduled focus of today or a later day/);
   });
 });
 

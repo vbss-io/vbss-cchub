@@ -1822,7 +1822,11 @@ export function replaceProjectFile(settings: DelegationSettings, projectId: stri
   if (next !== content) commitFile(file, next);
 }
 
-export function writeBoardTask(settings: DelegationSettings, input: BoardWriteInput): BoardWriteResult {
+export interface BoardWriteOptions {
+  doneOn?: string;
+}
+
+export function writeBoardTask(settings: DelegationSettings, input: BoardWriteInput, options: BoardWriteOptions = {}): BoardWriteResult {
   validateChange(input, settings.tasks);
   const file = locateProject(settings, input.projectId);
   const content = readProjectFile(file);
@@ -1838,7 +1842,7 @@ export function writeBoardTask(settings: DelegationSettings, input: BoardWriteIn
   if (input.status === "done") {
     const top = parseBoardTasks(renderDoc(doc), file.id, config).find((task) => task.line === input.line);
     if (top && isPendingRecurrence(top)) {
-      line = recurBlock(doc, config, top, localDate());
+      line = recurBlock(doc, config, top, options.doneOn ?? localDate());
       recurred = true;
       moved = true;
     }
@@ -1846,7 +1850,7 @@ export function writeBoardTask(settings: DelegationSettings, input: BoardWriteIn
   if (!recurred && input.status !== undefined && doneSectionName(config) !== null) {
     const top = topLevelOf(parseBoardTasks(renderDoc(doc), file.id, config), input.line);
     if (top && current.section === "open" && !isPendingRecurrence(top) && isFinished(top)) {
-      line = moveBlockToDone(doc, config, top.line, localDate()) + (input.line - top.line);
+      line = moveBlockToDone(doc, config, top.line, options.doneOn ?? localDate()) + (input.line - top.line);
       moved = true;
     } else if (top && current.section === "done" && input.status !== "done" && current.status !== input.status) {
       line = moveBlockToOpen(doc, config, top.line) + (input.line - top.line);
@@ -3281,6 +3285,7 @@ export function syncTaskToDaily(settings: DelegationSettings, input: SyncDailyIn
 export interface DailyStatusChange {
   task: BoardTask;
   status: BoardStatus;
+  doneOn?: string;
 }
 
 const unmarkedLine = (raw: string): string => raw.replace(DAILY_MARK_RE, "$1$3");
@@ -3307,7 +3312,7 @@ function relocatedTask(settings: DelegationSettings, task: BoardTask): BoardTask
 
 export function applyStatusChange(settings: DelegationSettings, change: DailyStatusChange): void {
   const task = relocatedTask(settings, change.task);
-  writeBoardTask(settings, { projectId: task.projectId, line: task.line, raw: task.raw, status: change.status });
+  writeBoardTask(settings, { projectId: task.projectId, line: task.line, raw: task.raw, status: change.status }, change.doneOn === undefined ? {} : { doneOn: change.doneOn });
 }
 
 function errorMessage(err: unknown): string {
