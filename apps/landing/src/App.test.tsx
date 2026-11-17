@@ -13,6 +13,10 @@ const respondWith = (body: unknown, ok = true) => {
   return fetchMock;
 };
 
+const RELEASES_URL = "https://github.com/vbss-io/vbss-cchub/releases/latest";
+
+const whatsNew = () => screen.getByRole("region", { name: "What's new" });
+
 const downloadHrefs = () =>
   screen.getAllByRole("link", { name: /^Download/ }).map((link) => link.getAttribute("href"));
 
@@ -30,7 +34,8 @@ describe("App download links", () => {
     expect(screen.getByRole("link", { name: "Download" })).toHaveProperty("href", LATEST_MSI);
     expect(screen.getAllByRole("link", { name: "Download for Windows" })).toHaveLength(2);
     expect(downloadHrefs()).toEqual([LATEST_MSI, LATEST_MSI, LATEST_MSI]);
-    expect(screen.queryByText(/What's new/)).toBeNull();
+    expect(whatsNew().getAttribute("aria-busy")).toBe("true");
+    expect(within(whatsNew()).queryAllByRole("listitem")).toHaveLength(0);
   });
 
   it("asks GitHub for the latest release once", async () => {
@@ -58,24 +63,23 @@ describe("App download links", () => {
     expect(screen.getAllByRole("link", { name: "Download for Windows · v1.5.0" })).toHaveLength(2);
     expect(downloadHrefs()).toEqual([VERSIONED_MSI, VERSIONED_MSI, VERSIONED_MSI]);
 
-    const summary = screen.getByText("What's new in v1.5.0");
-    const notes = summary.closest("details");
-    expect(notes).not.toBeNull();
-    const items = within(notes as HTMLElement).getAllByRole("listitem");
+    expect(within(whatsNew()).getByText("v1.5.0")).toBeTruthy();
+    const items = within(whatsNew()).getAllByRole("listitem");
     expect(items.map((item) => item.textContent)).toEqual(["Tasks board", "Timeline zoom"]);
   });
 
-  it("opens the release notes when the summary is clicked", async () => {
-    respondWith({ tag_name: "v1.5.0", body: "- Tasks board" });
+  it("expands the release notes in the What's new card", async () => {
+    respondWith({ tag_name: "v2.0.0", body: ["- Plugins: on or off", "- Sessions: one place", "- Today: the note", "- Search", "- Routines: scheduled"].join("\n") });
     const user = userEvent.setup();
 
     render(<App />);
-    const summary = await screen.findByText("What's new in v1.5.0");
-    const notes = summary.closest("details") as HTMLDetailsElement;
+    const toggle = await screen.findByRole("button", { name: "Show all 5 changes" });
+    expect(within(whatsNew()).getAllByRole("listitem")).toHaveLength(4);
 
-    expect(notes.open).toBe(false);
-    await user.click(summary);
-    expect(notes.open).toBe(true);
+    await user.click(toggle);
+
+    expect(within(whatsNew()).getAllByRole("listitem")).toHaveLength(5);
+    expect(within(whatsNew()).getByText("Routines").tagName).toBe("STRONG");
   });
 
   it("accepts a tag without the v prefix", async () => {
@@ -83,7 +87,7 @@ describe("App download links", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("What's new in v1.6.0")).toBeTruthy();
+    expect(await screen.findByText("v1.6.0")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Download · v1.6.0" })).toHaveProperty("href", LATEST_MSI);
   });
 
@@ -106,7 +110,7 @@ describe("App download links", () => {
     render(<App />);
 
     expect(await screen.findByRole("link", { name: "Download · v1.5.0" })).toHaveProperty("href", LATEST_MSI);
-    expect(screen.queryByText(/What's new/)).toBeNull();
+    expect(within(whatsNew()).getByText(/release notes on GitHub/)).toBeTruthy();
   });
 
   it("shows the version without release notes when the body has no bullets", async () => {
@@ -115,7 +119,7 @@ describe("App download links", () => {
     render(<App />);
 
     expect(await screen.findByRole("link", { name: "Download · v1.5.0" })).toBeTruthy();
-    expect(screen.queryByText(/What's new/)).toBeNull();
+    expect(within(whatsNew()).queryAllByRole("listitem")).toHaveLength(0);
   });
 
   it.each([
@@ -140,11 +144,21 @@ describe("App download links", () => {
 
     expect(screen.getByRole("link", { name: "Download" })).toHaveProperty("href", LATEST_MSI);
     expect(downloadHrefs()).toEqual([LATEST_MSI, LATEST_MSI, LATEST_MSI]);
-    expect(screen.queryByText(/What's new/)).toBeNull();
+    expect(whatsNew().getAttribute("aria-busy")).toBe("false");
+    expect(within(whatsNew()).getByText(/release notes on GitHub/)).toBeTruthy();
+    expect(within(whatsNew()).getByRole("link", { name: /Full release notes/ }).getAttribute("href")).toBe(RELEASES_URL);
   });
 });
 
 describe("App content", () => {
+  it("draws the particle background behind the page without exposing it", () => {
+    const { container } = render(<App />);
+
+    const canvas = container.querySelector("canvas.particles");
+    expect(canvas?.getAttribute("aria-hidden")).toBe("true");
+    expect(HTMLCanvasElement.prototype.getContext).toHaveBeenCalledWith("2d");
+  });
+
   it("links the nav to the page sections and GitHub in a new tab", () => {
     render(<App />);
 
@@ -154,6 +168,7 @@ describe("App content", () => {
       .map((link) => [link.textContent, link.getAttribute("href")]);
     expect(hrefs).toEqual([
       ["Features", "#features"],
+      ["Plugins", "#plugins"],
       ["Tour", "#tour"],
       ["Get started", "#start"],
       ["GitHub", "https://github.com/vbss-io/vbss-cchub"],
@@ -163,27 +178,49 @@ describe("App content", () => {
     expect(github.getAttribute("target")).toBe("_blank");
     expect(github.getAttribute("rel")).toBe("noopener noreferrer");
     expect(document.getElementById("features")).not.toBeNull();
+    expect(document.getElementById("plugins")).not.toBeNull();
     expect(document.getElementById("tour")).not.toBeNull();
     expect(document.getElementById("start")).not.toBeNull();
   });
 
-  it("lists every feature and tags only the opt-in ones", () => {
+  it("lists the features", () => {
     render(<App />);
 
-    const features = document.querySelectorAll("#features article.feature");
-    expect(features).toHaveLength(10);
-    expect(document.querySelectorAll("#features .feature__tag")).toHaveLength(4);
-    const optIn = Array.from(features)
-      .filter((feature) => feature.querySelector(".feature__tag")?.textContent === "opt-in")
-      .map((feature) => feature.querySelector("h3")?.firstChild?.textContent);
-    expect(optIn).toEqual([
-      "Usage: what burns tokens",
-      "Plan limits",
-      "Tasks from your notes",
-      "Daily note & session trail",
+    const titles = Array.from(document.querySelectorAll("#features article.feature h3")).map((title) => title.textContent);
+    expect(titles).toEqual([
+      "Every session, one place",
+      "Approve without switching windows",
+      "Pick up where you left off",
+      "Routines and review",
+      "See the limit coming",
+      "Calm, healthy, safe",
     ]);
-    const plain = within(features[0] as HTMLElement).getByRole("heading", { level: 3 });
-    expect(plain.textContent).toBe("Every session, one board");
+  });
+
+  it("presents every plugin with an icon, a purpose and its capabilities", () => {
+    render(<App />);
+
+    const plugins = within(document.getElementById("plugins") as HTMLElement);
+    const cards = Array.from(document.querySelectorAll("#plugins li.plugin"));
+    expect(cards.map((item) => item.querySelector("h3")?.textContent)).toEqual([
+      "Sessions",
+      "Today",
+      "Tasks",
+      "Flow",
+      "Delegated",
+      "Usage",
+      "Limits",
+      "Workspaces",
+      "Reports",
+      "Share",
+      "Session trail",
+      "Widget",
+    ]);
+    expect(cards.every((item) => item.querySelector(".plugin__icon svg[aria-hidden='true']") !== null)).toBe(true);
+    expect(cards.every((item) => item.querySelectorAll(".plugin__points li").length >= 2)).toBe(true);
+    expect(cards.filter((item) => item.querySelector(".plugin__tag")).map((item) => item.querySelector("h3")?.textContent)).toEqual(["Sessions"]);
+    expect(plugins.getByText(/Settings › Plugins, then arrange/)).toBeTruthy();
+    expect(plugins.getByText("A forecast of when the current window runs out")).toBeTruthy();
   });
 
   it("alternates the tour rows and gives each screenshot its alt text", () => {
@@ -212,8 +249,8 @@ describe("App content", () => {
     const steps = within(document.getElementById("start") as HTMLElement).getAllByRole("listitem");
     expect(steps.map((step) => [step.querySelector(".step__n")?.textContent, step.querySelector("h3")?.textContent])).toEqual([
       ["1", "Install"],
-      ["2", "Install the hooks"],
-      ["3", "Connect your agents"],
+      ["2", "Connect your agents"],
+      ["3", "Pick your plugins"],
     ]);
   });
 
@@ -221,6 +258,7 @@ describe("App content", () => {
     render(<App />);
 
     expect(screen.getByText("Run many. Forget none.")).toBeTruthy();
+    expect(screen.getByText("Approve from anywhere.")).toBeTruthy();
     expect(screen.getByText("Make every token count.")).toBeTruthy();
     expect(screen.getByText("Delegate, don't babysit.")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Read the code" }).getAttribute("href")).toBe("https://github.com/vbss-io/vbss-cchub");
