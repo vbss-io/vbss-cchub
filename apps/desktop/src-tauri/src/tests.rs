@@ -894,3 +894,26 @@ fn new_builds_a_supervisor_on_the_system_host() {
     supervisor.begin();
     assert!(lock(&supervisor.state).child.is_none());
 }
+
+#[test]
+fn tray_action_maps_each_menu_id() {
+    assert_eq!(tray_action("open"), TrayAction::ShowMain);
+    assert_eq!(tray_action("widget"), TrayAction::ToggleWidget);
+    assert_eq!(tray_action("quit"), TrayAction::Quit);
+    assert_eq!(tray_action("other"), TrayAction::Ignore);
+    assert_eq!(tray_action(""), TrayAction::Ignore);
+}
+
+#[test]
+fn widget_toggle_hides_a_visible_widget_and_shows_otherwise() {
+    assert_eq!(widget_toggle(Some(true)), WidgetToggle::Hide);
+    assert_eq!(widget_toggle(Some(false)), WidgetToggle::ShowAndAnnounce);
+    assert_eq!(widget_toggle(None), WidgetToggle::ShowAndAnnounce);
+}
+
+#[test]
+fn only_the_main_window_hides_on_close() {
+    assert!(hides_on_close("main"));
+    assert!(!hides_on_close("widget"));
+    assert!(!hides_on_close("toast"));
+}

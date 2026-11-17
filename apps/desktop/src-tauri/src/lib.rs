@@ -391,5 +391,47 @@ fn supervise(supervisor: Arc<Supervisor>) {
     spawn_supervision(supervisor, POLL_INTERVAL);
 }
 
+const MAIN_WINDOW: &str = "main";
+const WIDGET_WINDOW: &str = "widget";
+const WIDGET_SHOWN_EVENT: &str = "widget:shown";
+const TRAY_OPEN: &str = "open";
+const TRAY_WIDGET: &str = "widget";
+const TRAY_QUIT: &str = "quit";
+
+#[derive(Debug, PartialEq, Eq)]
+enum TrayAction {
+    ShowMain,
+    ToggleWidget,
+    Quit,
+    Ignore,
+}
+
+fn tray_action(id: &str) -> TrayAction {
+    match id {
+        TRAY_OPEN => TrayAction::ShowMain,
+        TRAY_WIDGET => TrayAction::ToggleWidget,
+        TRAY_QUIT => TrayAction::Quit,
+        _ => TrayAction::Ignore,
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WidgetToggle {
+    Hide,
+    ShowAndAnnounce,
+}
+
+fn widget_toggle(visible: Option<bool>) -> WidgetToggle {
+    if visible.unwrap_or(false) {
+        WidgetToggle::Hide
+    } else {
+        WidgetToggle::ShowAndAnnounce
+    }
+}
+
+fn hides_on_close(label: &str) -> bool {
+    label == MAIN_WINDOW
+}
+
 #[cfg(test)]
 mod tests;
