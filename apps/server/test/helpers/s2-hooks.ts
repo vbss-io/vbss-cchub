@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fakeProfileEnv } from "./fake-profile.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const hooksDir = join(here, "..", "..", "hooks");
@@ -116,7 +117,7 @@ const SCRUBBED = ["CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PI
 
 export function runScript(script: string, options: HookOptions = {}): Promise<HookRun> {
   const home = options.home ?? tmpdir();
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, ...fakeProfileEnv(home) };
   for (const key of SCRUBBED) delete env[key];
   env.HUB_SKIP = "0";
   env.HUB_HOST_TARGET = "127.0.0.1";

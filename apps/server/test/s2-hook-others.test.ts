@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { codexNotifyScript, configureScript, guardScript, makeFakeHome, parseStdout, removeDir, runScript, startFakeHub, statuslineScript, type FakeHub, type HookOptions, type HookRun } from "./helpers/s2-hooks.js";
@@ -222,7 +222,7 @@ describe("statusline hook", () => {
   });
 
   it("falls back to PowerShell when bash is not available", { skip: process.platform !== "win32" }, async () => {
-    const system = process.env.SystemRoot ?? "C:\Windows";
+    const system = process.env.SystemRoot ?? "C:\\Windows";
     const powershellOnly = `${join(system, "System32")};${join(system, "System32", "WindowsPowerShell", "v1.0")}`;
     const direct = await sl(limits, ["--previous", previous("Write-Output direct-ps; exit 4")], { env: { CLAUDE_CODE_GIT_BASH_PATH: join(home, "missing-bash.exe"), PATH: powershellOnly } });
     assert.equal(direct.code, 4, direct.stderr);
@@ -257,23 +257,17 @@ describe("statusline hook", () => {
   });
 
   it("uses a bash found on the PATH and skips empty and WindowsApps entries", { skip: process.platform !== "win32" }, async () => {
+    const system = process.env.SystemRoot ?? "C:\\Windows";
     const bin = join(home, "bash-bin");
     mkdirSync(bin, { recursive: true });
-    const fakeBash = join(bin, "bash.exe");
-    try {
-      linkSync(process.execPath, fakeBash);
-    } catch {
-      copyFileSync(process.execPath, fakeBash);
-    }
-    const script = join(home, "fine.js");
-    writeFileSync(script, "1 + 1;");
-    const system = process.env.SystemRoot ?? "C:\Windows";
+    copyFileSync(join(system, "System32", "findstr.exe"), join(bin, "bash.exe"));
     const path = [";", join(process.env.LOCALAPPDATA ?? home, "Microsoft", "WindowsApps"), join(system, "System32"), bin].join(";");
-    const result = await sl(limits, ["--previous", previous(script)], { env: { CLAUDE_CODE_GIT_BASH_PATH: undefined, PATH: path } });
+    const result = await sl(limits, ["--previous", previous("sl-1")], { env: { CLAUDE_CODE_GIT_BASH_PATH: undefined, PATH: path } });
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "");
-    const failing = await sl(limits, ["--previous", previous(join(home, "missing-script.js"))], { env: { CLAUDE_CODE_GIT_BASH_PATH: undefined, PATH: path } });
+    assert.match(result.stdout, /"session_id":"sl-1"/);
+    const failing = await sl(limits, ["--previous", previous("absent-from-the-input")], { env: { CLAUDE_CODE_GIT_BASH_PATH: undefined, PATH: path } });
     assert.equal(failing.code, 1);
+    assert.equal(failing.stdout, "");
   });
 
   it("ignores an unreadable or empty previous command", async () => {

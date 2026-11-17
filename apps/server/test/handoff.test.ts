@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, it } from "node:test";
 import { freePort, makeSandbox, startServer, waitFor, type RunningServer } from "./helpers.js";
+import { fakeProfileEnv } from "./helpers/fake-profile.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const hook = join(here, "..", "hooks", "notify.mjs");
@@ -37,6 +38,7 @@ function runHook(port: number, input: Record<string, unknown>): Promise<{ code: 
       ...process.env,
       HOME: box.home,
       USERPROFILE: box.home,
+      ...fakeProfileEnv(box.home),
       HUB_HOST_TARGET: "127.0.0.1",
       HUB_PORT: String(port),
       HUB_SKIP: "0",

@@ -4,6 +4,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { makeSandbox, serverDir, startServer, waitFor, type RunningServer } from "./helpers.js";
+import { fakeProfileEnv } from "./helpers/fake-profile.js";
 
 const box = makeSandbox("cchub-h1-answers-");
 const fakeUser = join(box.tmp, "user");
@@ -87,7 +88,7 @@ interface Pending {
 }
 
 function runHook(input: Record<string, unknown>): Promise<HookRun> {
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeUser, USERPROFILE: fakeUser, CLAUDE_CONFIG_DIR: claudeDir, HUB_HOST_TARGET: "127.0.0.1", HUB_PORT: String(hub.port), HUB_SKIP: "0" };
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: fakeUser, USERPROFILE: fakeUser, ...fakeProfileEnv(fakeUser), CLAUDE_CONFIG_DIR: claudeDir, HUB_HOST_TARGET: "127.0.0.1", HUB_PORT: String(hub.port), HUB_SKIP: "0" };
   for (const key of ["CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SESSION_ID", "HUB_DELEGATED", "HUB_TRACK_SDK", "HUB_SHARE_LABEL", "HUB_HOOK_INLINE", "CLAUDE_PID"]) delete env[key];
   const child = spawn(process.execPath, [notifyHook], { env, stdio: ["pipe", "pipe", "ignore"] });
   running.add(child);

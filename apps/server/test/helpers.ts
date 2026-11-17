@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fakeProfileEnv } from "./helpers/fake-profile.js";
 
 export const here = dirname(fileURLToPath(import.meta.url));
 export const serverDir = join(here, "..");
@@ -98,7 +99,9 @@ export function sandboxEnv(box: Sandbox, extra: Record<string, string>): NodeJS.
   for (const key of ["HUB_RESOURCE_DIR", "HUB_WORKSPACES_ROOT", "HUB_EDITOR", "HUB_TRUSTED_ORIGINS", "HUB_SECOND_BRAIN", "HUB_DELEGATION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SIMPLE"]) {
     delete env[key];
   }
-  return { ...env, ...extra };
+  const profile = extra.USERPROFILE ? fakeProfileEnv(extra.USERPROFILE) : null;
+  const profileEnv = profile ? { LOCALAPPDATA: profile.LOCALAPPDATA, PSModuleAnalysisCachePath: profile.PSModuleAnalysisCachePath } : {};
+  return { ...env, ...profileEnv, ...extra };
 }
 
 export function freePort(): Promise<number> {

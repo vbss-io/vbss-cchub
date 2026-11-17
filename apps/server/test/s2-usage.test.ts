@@ -194,7 +194,7 @@ describe("usage cache on disk", () => {
     const claudeFile = good.files.find((file) => file.provider === "claude") as { records: unknown[][]; meta: Record<string, unknown> };
     const codexFile = good.files.find((file) => file.provider === "codex") as { meta: Record<string, unknown> };
     const variants: Record<string, (copy: typeof good) => unknown>[] = [];
-    const mutate = (name: string, change: (copy: any) => unknown): void => {
+    const mutate = (name: string, change: (copy: typeof good) => unknown): void => {
       variants.push({ [name]: change });
     };
     mutate("not an object", () => []);
