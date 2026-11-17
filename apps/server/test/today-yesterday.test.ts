@@ -283,14 +283,98 @@ describe("H2: hub actions on the day of yesterday", () => {
     assert.throws(() => today.todayApi.tickDay(store.getSettings(), YESTERDAY, tick(old, "done")), /daily feature is disabled/);
   });
 
-  it("a tick from Today on a task of yesterday without a line in the note writes only the project", () => {
-    const root = lab({ alpha: project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`, `- [ ] Not in the note ${SCHEDULED} ${YESTERDAY}`]) }, { [YESTERDAY]: dailyOf(YESTERDAY, [line("Ship release")]) });
+  it("a tick from Today refuses a task without a line in the note of yesterday and writes nothing", () => {
+    const projectText = project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`, `- [ ] Not in the note ${SCHEDULED} ${YESTERDAY}`, "- [ ] Loose"]);
+    const root = lab({ alpha: projectText }, { [YESTERDAY]: dailyOf(YESTERDAY, [line("Ship release")]) });
     const settings = useVault(root);
     assert.deepEqual(focusTitles(settings, YESTERDAY), ["Ship release", "Not in the note"]);
-    today.todayApi.tickDay(settings, YESTERDAY, tick(taskIn(settings, "alpha", "Not in the note"), "done"));
+    for (const title of ["Not in the note", "Loose"]) {
+      assert.throws(
+        () => today.todayApi.tickDay(settings, YESTERDAY, tick(taskIn(settings, "alpha", title), "done")),
+        { message: `"${title}" has no line in the focus of yesterday, add it to that focus first or complete it in Tasks` },
+      );
+    }
     assert.equal(read(root, dailyRel(YESTERDAY)), dailyOf(YESTERDAY, [line("Ship release")]));
-    assert.equal(taskIn(settings, "alpha", "Not in the note").doneAt, YESTERDAY);
-    assert.equal(taskIn(settings, "alpha", "Not in the note").scheduled, YESTERDAY);
+    assert.equal(read(root, "projects/alpha.md"), projectText);
+  });
+
+  it("a subtask ticked and unticked on yesterday reopens without a done date, from the hub and from the note", () => {
+    const parent = line("Ship release");
+    const root = lab({ alpha: project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`, "  - [ ] Write notes", "  - [ ] Tag build"]) }, { [YESTERDAY]: dailyOf(YESTERDAY, [parent, "  - [ ] Write notes", "  - [ ] Tag build"]) });
+    const settings = useVault(root);
+    today.todayApi.regenerateFocusMirror(settings, YESTERDAY);
+    const done = today.todayApi.tickDay(settings, YESTERDAY, tick(taskIn(settings, "alpha", "Write notes"), "done"));
+    assert.deepEqual([done.task.status, done.task.doneAt], ["done", null]);
+    assert.equal(read(root, dailyRel(YESTERDAY)), dailyOf(YESTERDAY, [parent, "  - [x] Write notes", "  - [ ] Tag build"]));
+    const reopened = today.todayApi.tickDay(settings, YESTERDAY, tick(taskIn(settings, "alpha", "Write notes"), "todo"));
+    assert.equal(reopened.task.status, "todo");
+    assert.equal(read(root, dailyRel(YESTERDAY)), dailyOf(YESTERDAY, [parent, "  - [ ] Write notes", "  - [ ] Tag build"]));
+    today.flushMirrors(settings);
+    editDaily(root, YESTERDAY, (content) => content.replace("  - [ ] Tag build", "  - [x] Tag build"));
+    today.flushMirrors(settings);
+    assert.equal(read(root, "projects/alpha.md"), project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`, "  - [ ] Write notes", "  - [x] Tag build"]));
+    editDaily(root, YESTERDAY, (content) => content.replace("  - [x] Tag build", "  - [ ] Tag build"));
+    today.flushMirrors(settings);
+    assert.equal(read(root, "projects/alpha.md"), project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`, "  - [ ] Write notes", "  - [ ] Tag build"]));
+    assert.equal(today.readToday(settings, YESTERDAY).outOfSync, undefined);
+  });
+
+  it("a task closed without a done date, with no Done section configured, reopens on yesterday from the hub and from the note", () => {
+    const loose = (mark: string, title: string): string => `- [${mark}] ${title} ${SCHEDULED} ${YESTERDAY}`;
+    const root = lab({ alpha: ["# Alpha", "", "## Open loops", "", loose(" ", "Ship release"), loose(" ", "Write notes"), ""].join("\n") }, { [YESTERDAY]: dailyOf(YESTERDAY, [line("Ship release"), line("Write notes")]) });
+    const vault = useVault(root);
+    const settings = store.updateSettings({ tasks: { ...vault.tasks, doneSection: "" } });
+    today.todayApi.regenerateFocusMirror(settings, YESTERDAY);
+    const shipped = today.todayApi.tickDay(settings, YESTERDAY, tick(taskIn(settings, "alpha", "Ship release"), "done"));
+    assert.deepEqual([shipped.task.raw, shipped.task.doneAt], [loose("x", "Ship release"), null]);
+    assert.equal(today.todayApi.tickDay(settings, YESTERDAY, tick(shipped.task, "todo")).task.raw, loose(" ", "Ship release"));
+    today.flushMirrors(settings);
+    editDaily(root, YESTERDAY, (content) => content.replace(line("Write notes"), line("Write notes", "x")));
+    today.flushMirrors(settings);
+    assert.equal(taskIn(settings, "alpha", "Write notes").raw, loose("x", "Write notes"));
+    editDaily(root, YESTERDAY, (content) => content.replace(line("Write notes", "x"), line("Write notes")));
+    today.flushMirrors(settings);
+    assert.equal(read(root, "projects/alpha.md"), ["# Alpha", "", "## Open loops", "", loose(" ", "Ship release"), loose(" ", "Write notes"), ""].join("\n"));
+  });
+
+  it("a recurring task ticked in the note of yesterday is reported, never completed", () => {
+    const projectText = project(
+      "Alpha",
+      [
+        `- [ ] Daily review ${REPEAT} every day ${SCHEDULED} ${YESTERDAY}`,
+        `- [-] Weekly sync ${REPEAT} every week ${SCHEDULED} ${YESTERDAY}`,
+        `- [ ] Ship release ${SCHEDULED} ${YESTERDAY}`,
+        `- [ ] Stand up ${REPEAT} every day ${SCHEDULED} ${TODAY}`,
+      ],
+      [`- [x] Stand up ${REPEAT} every day ${SCHEDULED} ${YESTERDAY} ${DONE} ${YESTERDAY}`],
+    );
+    const root = lab({ alpha: projectText }, { [YESTERDAY]: dailyOf(YESTERDAY, [line("Daily review"), line("Weekly sync"), line("Ship release"), line("Stand up", "x")]) });
+    const settings = useVault(root);
+    today.todayApi.regenerateFocusMirror(settings, YESTERDAY);
+    assert.equal(today.readToday(settings, YESTERDAY).outOfSync, undefined);
+    const edited = editDaily(root, YESTERDAY, (content) =>
+      content
+        .replace(line("Daily review"), line("Daily review", "x"))
+        .replace(line("Weekly sync"), line("Weekly sync", "-"))
+        .replace(line("Stand up", "x"), line("Stand up"))
+        .replace(line("Ship release"), `${line("Ship release")}\n${line("Daily review")}`),
+    );
+    today.flushMirrors(settings);
+    assert.equal(read(root, "projects/alpha.md"), projectText);
+    assert.equal(read(root, dailyRel(YESTERDAY)), edited);
+    assert.deepEqual(today.readToday(settings, YESTERDAY).outOfSync, [
+      { line: line("Stand up"), taskTitle: "Stand up", projectId: "alpha", dailyCheckbox: "todo", projectStatus: "done", reason: "recurring-done" },
+      { line: line("Daily review", "x"), taskTitle: "Daily review", projectId: "alpha", dailyCheckbox: "done", projectStatus: "todo" },
+    ]);
+  });
+
+  it("the payload says when a day closes through its note: only yesterday in scheduled mode", () => {
+    const root = lab({ alpha: project("Alpha", ["- [ ] Loose"]) }, { [YESTERDAY]: dailyOf(YESTERDAY, []) });
+    const settings = useVault(root);
+    assert.equal(today.readToday(settings, YESTERDAY).closesDay, true);
+    for (const date of [TODAY, BEFORE, TOMORROW]) assert.equal(today.readToday(settings, date).closesDay, undefined);
+    store.updateSettings({ daily: { ...settings.daily, focusSource: "list" } });
+    assert.equal(today.readToday(store.getSettings(), YESTERDAY).closesDay, undefined);
   });
 
   it("Add to focus on yesterday writes the line in the note and never dates the task", () => {

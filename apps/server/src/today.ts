@@ -187,6 +187,7 @@ export interface TodayPayload {
   ambiguous: TodayAmbiguous[];
   outOfSync?: TodayOutOfSync[];
   unmatched?: TodayUnmatched[];
+  closesDay?: boolean;
   summary: string | null;
   dailyExists: boolean;
   dailyUpdatedAt: number | null;
@@ -2705,6 +2706,16 @@ interface UserTick {
   lines: { line: number; checkbox: BoardCheckbox; key: string }[];
 }
 
+function heldRecurringTicks(scan: FocusScan, plan: TickPlan): { line: number; task: BoardTask; checkbox: BoardCheckbox }[] {
+  return scan.entries.flatMap((entry) => {
+    const task = entry.match.task;
+    const base = plan.pairs.get(entry.line);
+    if (task === null || !entry.held || entry.recurred || base === undefined) return [];
+    const old = checkboxOfLine(plan.baseTexts[base] as string);
+    return old === entry.checkbox || projectCheckbox(task) === entry.checkbox ? [] : [{ line: entry.line, task, checkbox: entry.checkbox }];
+  });
+}
+
 function runMirror(settings: DelegationSettings, date: string, options: MirrorOptions = {}): MirrorResult {
   const skip = (skipped: MirrorSkip, applied = 0): MirrorResult => ({ changed: false, skipped, applied });
   if (!settings.features.daily || !settings.features.tasks) return skip("disabled");
@@ -2786,7 +2797,8 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
         continue;
       }
       const status = statusFromCheckbox(tick.task.status, target);
-      if (status === null || (closing && reopensElsewhere(tick.task, status, date))) {
+      const refused = closing && status !== null && closedElsewhere(tick.task, status, date) !== null;
+      if (status === null || refused) {
         if (status !== null || !SYNCED_STATUSES.has(tick.task.status)) for (const item of tick.lines) report(item.line, tick.task, target);
         continue;
       }
@@ -2798,6 +2810,7 @@ function runMirror(settings: DelegationSettings, date: string, options: MirrorOp
         keepOld();
       }
     }
+    if (closing) for (const held of heldRecurringTicks(scan, plan)) report(held.line, held.task, held.checkbox);
     const owned = new Set(plan.owned);
     if (applied > 0) {
       data = loadBoardData(settings) ?? data;
@@ -3989,8 +4002,8 @@ function migrateFocus(settings: DelegationSettings, date: string): MigrationResu
   return result;
 }
 
-function reopensElsewhere(task: BoardTask, status: BoardStatus, date: string): boolean {
-  return status !== "done" && task.status === "done" && task.doneAt !== date;
+function closedElsewhere(task: BoardTask, status: BoardStatus, date: string): string | null {
+  return status !== "done" && task.status === "done" && task.doneAt !== null && task.doneAt !== date ? task.doneAt : null;
 }
 
 function taskAfterSettle(settings: DelegationSettings, task: BoardTask): BoardTask {
@@ -4012,16 +4025,16 @@ function tickDay(settings: DelegationSettings, date: string, input: DayTickInput
   runMirror(settings, date, { source: "api" });
   const task = taskAfterSettle(settings, found);
   const status = explicitStatus(task.status, input.status);
-  if (status !== null && reopensElsewhere(task, status, date)) {
-    throw new BadRequestError(`"${task.title}" was completed ${task.doneAt === null ? "on another day" : `on ${task.doneAt}`}, reopen it in Tasks`);
-  }
+  const doneOn = status === null ? null : closedElsewhere(task, status, date);
+  if (doneOn !== null) throw new BadRequestError(`"${task.title}" was completed on ${doneOn}, reopen it in Tasks`);
   const daily = readDaily(settings, date);
   const data = boardOrFail(settings);
   const scan = scanDaily(settings, date, daily.content, data.projects, data.tasks);
   const closed = confidentLines(settings, date, scan, new Set(loadBaseline(date, daily.path)?.state.sync?.linked ?? []));
+  const lines = scan.links.filter((link) => link.task.id === task.id && closed.has(link.line));
+  if (lines.length === 0) throw new BadRequestError(`"${task.title}" has no line in the focus of yesterday, add it to that focus first or complete it in Tasks`);
   const doc = openDoc(daily.content);
-  for (const link of scan.links) {
-    if (link.task.id !== task.id || !closed.has(link.line)) continue;
+  for (const link of lines) {
     const line = doc.lines[link.line] as DocLine;
     line.text = withCheckbox(line.text, input.status);
   }
@@ -4157,6 +4170,7 @@ export function readToday(settings: DelegationSettings, date: string): TodayPayl
     ambiguous: [...view.ambiguous, ...report.duplicates, ...report.unresolved],
     ...(report.outOfSync.length > 0 ? { outOfSync: report.outOfSync } : {}),
     ...(report.unmatched.length > 0 ? { unmatched: report.unmatched } : {}),
+    ...(closesDay(settings, date) ? { closesDay: true } : {}),
     summary: summaryOf(lines),
     dailyExists: exists,
     dailyUpdatedAt: exists ? ((daily as DailyReadResult).updatedAt ?? null) : null,
