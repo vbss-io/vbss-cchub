@@ -190,7 +190,7 @@ const TOUR: TourItem[] = [
       "5-hour, weekly and per-model limits with a forecast of when they run out",
     ],
     image: "/shot-usage.png",
-    alt: "CCHUB usage view with plan limits for Claude and Codex and tokens per day",
+    alt: "CCHUB usage view with Claude and Codex plan limits, a forecast of when the 5-hour window runs out and tokens per day",
   },
   {
     id: "flow",
@@ -328,8 +328,8 @@ export function App() {
           <WhatsNew state={releaseState} />
 
           <div className="shot">
-            <img className="shot__app" src="/shot-app.png" alt="CCHUB sessions board with Claude Code and Codex sessions" width={1440} height={900} />
-            <img className="shot__widget" src="/shot-widget.png" alt="CCHUB widget panel listing sessions that need you, running and delegated" width={440} height={620} />
+            <img className="shot__app" src="/shot-app.png" alt="CCHUB Sessions list with the sessions that need you on top and a permission request to allow or deny" width={1440} height={900} />
+            <img className="shot__widget" src="/shot-widget.png" alt="CCHUB widget with a permission request, the sessions that need you, running and recently done" width={440} height={620} />
           </div>
         </section>
 
@@ -384,7 +384,7 @@ export function App() {
 
         <section id="tour" className="section tour">
           <h2>A closer look</h2>
-          <p className="section__sub">Screens with demo data, captured on earlier versions.</p>
+          <p className="section__sub">Real screens from v2.0, with demo data.</p>
           {TOUR.map((item, index) => (
             <article key={item.id} id={item.id} className={`tour__row${index % 2 === 1 ? " tour__row--flip" : ""}`}>
               <div className="tour__text">

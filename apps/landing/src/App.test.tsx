@@ -240,7 +240,7 @@ describe("App content", () => {
     expect(within(usage).getByRole("heading", { level: 3 }).textContent).toBe("Know what is left before you hit the wall.");
     expect(within(usage).getAllByRole("listitem")).toHaveLength(4);
     expect(
-      within(usage).getByAltText("CCHUB usage view with plan limits for Claude and Codex and tokens per day").getAttribute("src"),
+      within(usage).getByAltText("CCHUB usage view with Claude and Codex plan limits, a forecast of when the 5-hour window runs out and tokens per day").getAttribute("src"),
     ).toBe("/shot-usage.png");
     expect(within(rows[4] as HTMLElement).getByRole("img").getAttribute("src")).toBe("/shot-daily.png");
   });
