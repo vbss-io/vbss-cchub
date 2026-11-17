@@ -87,10 +87,12 @@ const delegation = vi.hoisted(() => ({
 const notifications = vi.hoisted(() => ({ notifyEvent: vi.fn(), setNotifConfig: vi.fn() }));
 const routines = vi.hoisted(() => ({ unread: 0, enabled: [] as boolean[] }));
 const clipboard = vi.hoisted(() => ({ copyText: vi.fn(async () => true) }));
+const audio = vi.hoisted(() => ({ unlockAudio: vi.fn() }));
 
 vi.mock("./api", () => api);
 vi.mock("./delegation", async (importOriginal) => ({ ...(await importOriginal<typeof import("./delegation")>()), ...delegation }));
 vi.mock("./notifications", async (importOriginal) => ({ ...(await importOriginal<typeof import("./notifications")>()), ...notifications }));
+vi.mock("./notify", async (importOriginal) => ({ ...(await importOriginal<typeof import("./notify")>()), ...audio }));
 const historyState = vi.hoisted(() => ({ hits: [] as unknown[] }));
 vi.mock("./use-history", () => ({ useHistorySearch: () => ({ state: { key: null, phase: "idle", loadingMore: false, hits: historyState.hits, hasMore: false, enabled: null, error: null }, more: () => undefined }) }));
 vi.mock("./use-routines", () => ({
@@ -208,6 +210,7 @@ beforeEach(() => {
   notifications.notifyEvent.mockClear();
   notifications.setNotifConfig.mockClear();
   clipboard.copyText.mockClear();
+  audio.unlockAudio.mockClear();
   api.getHooks.mockResolvedValue({ installed: true, events: [] });
   api.setHooks.mockResolvedValue({ installed: false, events: [] });
   api.fetchRuntimes.mockResolvedValue(runtimeSnapshot());
@@ -1527,8 +1530,11 @@ test("a window resize observer keeps the header height published", async () => {
 
 test("the pointer unlock handler runs once on the first pointer press", async () => {
   await boot();
+  expect(audio.unlockAudio).not.toHaveBeenCalled();
   fireEvent.pointerDown(window);
+  expect(audio.unlockAudio).toHaveBeenCalledTimes(1);
   fireEvent.pointerDown(window);
+  expect(audio.unlockAudio).toHaveBeenCalledTimes(1);
 });
 
 test("the goto event navigates to a hash and ignores anything else", async () => {
