@@ -1515,6 +1515,7 @@ interface PendingOutOfSync {
 }
 
 interface TickPlan {
+  scan: FocusScan;
   baseTexts: string[];
   baseKeys: string[];
   links: SyncLink[];
@@ -1630,7 +1631,22 @@ function coversTitle(needle: string, title: string, fold: TextFold): boolean {
   return [...words].every((word) => have.has(word));
 }
 
+const PLAN_MEMO_LIMIT = 8;
+const planMemos = new WeakMap<BoardTask[], Map<string, TickPlan>>();
+
 function planTicks(settings: DelegationSettings, date: string, baseline: Baseline, texts: string[], scan: FocusScan, data: BoardData): TickPlan {
+  const key = [date, localDate(), settings.daily.headings.focus, JSON.stringify(settings.tasks), baseline.content, JSON.stringify(baseline.state), texts.join("\n")].join(KEY_SEPARATOR);
+  const plans = planMemos.get(data.tasks) ?? new Map<string, TickPlan>();
+  const cached = plans.get(key);
+  if (cached !== undefined && cached.scan === scan) return cached;
+  const plan = planTicksFresh(settings, date, baseline, texts, scan, data);
+  plans.set(key, plan);
+  if (plans.size > PLAN_MEMO_LIMIT) plans.delete(plans.keys().next().value as string);
+  planMemos.set(data.tasks, plans);
+  return plan;
+}
+
+function planTicksFresh(settings: DelegationSettings, date: string, baseline: Baseline, texts: string[], scan: FocusScan, data: BoardData): TickPlan {
   const baseTexts = splitLines(baseline.content);
   const baseKeys = lineKeys(baseTexts);
   const lineage = lineageOf(data);
@@ -1679,6 +1695,7 @@ function planTicks(settings: DelegationSettings, date: string, baseline: Baselin
   const open = openLinesOf(scan);
   const moves = pairMoved(baseTexts, texts, pairs, (line) => scanLinks.get(line)?.task ?? null, identityAt, context.claimed);
   const plan: TickPlan = {
+    scan,
     baseTexts,
     baseKeys,
     links: [],

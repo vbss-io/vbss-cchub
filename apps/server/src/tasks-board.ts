@@ -1129,13 +1129,57 @@ export interface LoadedBoard {
   errors: { path: string; error: string }[];
 }
 
+interface FileMemo {
+  mtimeMs: number;
+  ctimeMs: number;
+  size: number;
+  ino: number;
+  readAt: number;
+  content: string;
+}
+
+interface ParseMemo {
+  content: string;
+  tasks: BoardTask[];
+}
+
+interface BoardMemo {
+  key: string;
+  contents: Map<string, string>;
+  result: { loaded: LoadedBoard; tasks: BoardTask[] };
+}
+
+const SETTLED_MS = 2000;
+const fileMemos = new Map<string, FileMemo>();
+const parseMemos = new Map<string, ParseMemo>();
+let boardMemo: BoardMemo | null = null;
+
+function readProjectText(abs: string): string {
+  const stats = statSync(abs);
+  const memo = fileMemos.get(abs);
+  if (memo !== undefined && memo.mtimeMs === stats.mtimeMs && memo.ctimeMs === stats.ctimeMs && memo.size === stats.size && memo.ino === stats.ino && stats.mtimeMs < memo.readAt - SETTLED_MS) return memo.content;
+  const readAt = Date.now();
+  const content = readFileSync(abs, "utf8");
+  fileMemos.set(abs, { mtimeMs: stats.mtimeMs, ctimeMs: stats.ctimeMs, size: stats.size, ino: stats.ino, readAt, content });
+  return content;
+}
+
+function parseCached(content: string, projectId: string, config: TasksFeatureSettings, configKey: string): BoardTask[] {
+  const key = `${projectId}\u0000${configKey}`;
+  const memo = parseMemos.get(key);
+  if (memo !== undefined && memo.content === content) return memo.tasks;
+  const tasks = parseBoardTasks(content, projectId, config);
+  parseMemos.set(key, { content, tasks });
+  return tasks;
+}
+
 function loadBoard(root: string, config: TasksFeatureSettings): LoadedBoard {
   const errors: { path: string; error: string }[] = [];
   const contents = new Map<string, string>();
   const files: WalkedFile[] = [];
   for (const file of walkProjects(root, config.exclude)) {
     try {
-      contents.set(file.id, readFileSync(file.abs, "utf8"));
+      contents.set(file.id, readProjectText(file.abs));
       files.push(file);
     } catch (err) {
       errors.push({ path: file.abs, error: err instanceof Error ? err.message : "read failed" });
@@ -1239,10 +1283,24 @@ function effectivePrompt(settings: DelegationSettings): string {
   return settings.tasks.delegatePrompt ?? DEFAULT_TASK_DELEGATE_PROMPT;
 }
 
+function sameContents(a: Map<string, string>, b: Map<string, string>): boolean {
+  if (a.size !== b.size) return false;
+  const left = [...a];
+  const right = [...b];
+  return left.every(([id, content], index) => {
+    const other = right[index];
+    return other !== undefined && other[0] === id && other[1] === content;
+  });
+}
+
 export function collectBoard(root: string, config: TasksFeatureSettings): { loaded: LoadedBoard; tasks: BoardTask[] } {
   const loaded = loadBoard(root, config);
-  const tasks = loaded.projects.flatMap((project) => parseBoardTasks(loaded.contents.get(project.id) as string, project.id, config));
-  return { loaded, tasks };
+  const key = `${root}\u0000${JSON.stringify(config)}`;
+  if (boardMemo !== null && boardMemo.key === key && loaded.errors.length === 0 && sameContents(boardMemo.contents, loaded.contents)) return boardMemo.result;
+  const tasks = loaded.projects.flatMap((project) => parseCached(loaded.contents.get(project.id) as string, project.id, config, key));
+  const result = { loaded, tasks };
+  boardMemo = loaded.errors.length === 0 ? { key, contents: loaded.contents, result } : null;
+  return result;
 }
 
 export function readBoard(settings: DelegationSettings): BoardPayload {
@@ -3002,7 +3060,28 @@ function focusEntries(settings: DelegationSettings, date: string, content: strin
   return entries;
 }
 
+interface ScanMemo {
+  projects: BoardProject[];
+  scans: Map<string, FocusScan>;
+}
+
+const SCAN_MEMO_LIMIT = 32;
+const scanMemos = new WeakMap<BoardTask[], ScanMemo>();
+
 export function scanDaily(settings: DelegationSettings, date: string, content: string, projects: BoardProject[], tasks: BoardTask[]): FocusScan {
+  const key = [date, localDate(), settings.daily.headings.focus, JSON.stringify(settings.tasks), content].join("\u0000");
+  const memo = scanMemos.get(tasks);
+  const own = memo !== undefined && memo.projects === projects ? memo : { projects, scans: new Map<string, FocusScan>() };
+  const cached = own.scans.get(key);
+  if (cached !== undefined) return cached;
+  const scan = scanFresh(settings, date, content, projects, tasks);
+  own.scans.set(key, scan);
+  if (own.scans.size > SCAN_MEMO_LIMIT) own.scans.delete(own.scans.keys().next().value as string);
+  scanMemos.set(tasks, own);
+  return scan;
+}
+
+function scanFresh(settings: DelegationSettings, date: string, content: string, projects: BoardProject[], tasks: BoardTask[]): FocusScan {
   const index = recurrenceIndex(tasks);
   const entries = focusEntries(settings, date, content, projects, index);
   const links: DailyLineLink[] = [];
