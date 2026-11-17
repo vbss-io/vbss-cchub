@@ -6,7 +6,8 @@
     "src/views/settings/types.ts": "type-only: settings tab prop types, emits no JavaScript"
   },
   "server": {
-    "src/plugins/types.ts": "type-only: plugin contract types, emits no JavaScript"
+    "src/plugins/types.ts": "type-only: plugin contract types, emits no JavaScript",
+    "src/index.ts": "bootstrap: five-line entrypoint that imports upgrade-backup first, then calls startHub(hubOptionsFrom(config, appVersion, process.env)); the wiring lives in app.ts and is tested"
   },
   "vscode-ext": {},
   "desktop": {
