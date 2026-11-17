@@ -1,6 +1,6 @@
 {
   "ui": {
-    "src/main.tsx": "bootstrap: imports the global stylesheets, calls prepareDocument and bridgeNavigation from boot.ts (tested) and mounts Widget, Toaster or App into #root by the flags they return",
+    "src/main.tsx": "bootstrap: imports the global stylesheets, calls prepareDocument (tested in boot.ts) for the window flags, wires bridgeNavigation (tested) to the Tauri event loader, and mounts Widget, Toaster or App into #root from those flags",
     "src/types.ts": "type-only: API payload types and interfaces, emits no JavaScript",
     "src/plugins/types.ts": "type-only: plugin contract types, emits no JavaScript",
     "src/views/settings/types.ts": "type-only: settings tab prop types, emits no JavaScript"
@@ -12,7 +12,7 @@
   "vscode-ext": {},
   "desktop": {
     "src/main.rs": "bootstrap: five-line binary entrypoint that only calls vbss_cchub_lib::run()",
-    "src/app.rs": "Tauri wiring: plugins, builder, tray menu items, the restart command and the AppHandle/window calls (show, hide, focus, emit, exit, shutdown on exit) that need a real AppHandle and webview; the tray, widget-toggle and close-to-hide decisions and the supervisor logic live in lib.rs and are unit tested",
+    "src/app.rs": "Tauri wiring: plugins, builder, tray menu items, the restart command, supervisor setup (resolve config, begin, supervise, manage) and the AppHandle/window calls (show, hide, focus, emit, exit, shutdown on ExitRequested/Exit) that need a real AppHandle and webview; the tray, widget-toggle and close-to-hide decisions and the supervisor logic live in lib.rs and are unit tested",
     "src/tests.rs": "unit tests of lib.rs (cfg(test) module), not product code"
   }
 }
