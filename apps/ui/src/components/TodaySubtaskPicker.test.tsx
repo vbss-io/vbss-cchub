@@ -265,6 +265,81 @@ describe("TodaySubtaskPicker", () => {
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
   });
 
+  const loads = () => {
+    const pending: ((value: TodaySubtaskOptions | Error) => void)[] = [];
+    get.mockImplementation(
+      () =>
+        new Promise<TodaySubtaskOptions>((resolve, reject) => {
+          pending.push((value) => (value instanceof Error ? reject(value) : resolve(value)));
+        }),
+    );
+    return {
+      settle: async (index: number, value: TodaySubtaskOptions | Error) => {
+        await act(async () => {
+          (pending[index] as (value: TodaySubtaskOptions | Error) => void)(value);
+        });
+      },
+    };
+  };
+
+  const listing = (planned: string[], raws: Record<string, string> = {}): TodaySubtaskOptions => ({
+    parentId: "p",
+    subtasks: abc().map((item) => ({ ...item, inToday: planned.includes(item.id), raw: raws[item.id] ?? item.raw })),
+  });
+
+  it("ignores a reload that answers after a newer write already replaced the list", async () => {
+    const server = control();
+    const reads = loads();
+    const { onChanged } = renderPicker();
+    await reads.settle(0, listing([]));
+    const boxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(boxes[0] as HTMLElement);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(1));
+    await server.resolveNext(["A", "B", "C"], ["A"]);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getAllByRole("checkbox")[1] as HTMLElement);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(2));
+    const fresh = "- [ ] B \u23f3 2026-11-16";
+    await act(async () => {
+      server.calls[1]?.settle(listing(["A", "B"], { B: fresh }));
+    });
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(3));
+    await reads.settle(1, listing(["A"]));
+    expect(checkedBoxes()).toEqual([true, true, false]);
+    fireEvent.click(screen.getAllByRole("checkbox")[1] as HTMLElement);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(3));
+    expect(plan).toHaveBeenLastCalledWith("2026-11-16", { projectId: "alpha", line: 6, raw: fresh, planned: false });
+    await act(async () => {
+      server.calls[2]?.settle(listing(["A"]));
+    });
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(4));
+    await reads.settle(2, listing(["A", "B"], { B: fresh }));
+    expect(checkedBoxes()).toEqual([true, false, false]);
+    await reads.settle(3, listing(["A"]));
+    expect(checkedBoxes()).toEqual([true, false, false]);
+    expect(onChanged).toHaveBeenCalledTimes(3);
+  });
+
+  it("stays quiet when a superseded reload fails", async () => {
+    const server = control();
+    const reads = loads();
+    renderPicker();
+    await reads.settle(0, listing([]));
+    fireEvent.click((await screen.findAllByRole("checkbox"))[0] as HTMLElement);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(1));
+    await server.resolveNext(["A", "B", "C"], ["A"]);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getAllByRole("checkbox")[1] as HTMLElement);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(2));
+    await reads.settle(1, new Error("stale read failed"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    await server.resolveNext(["A", "B", "C"], ["A", "B"]);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(3));
+    await reads.settle(2, listing(["A", "B"]));
+    expect(checkedBoxes()).toEqual([true, true, false]);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("blocks duplicates and explains why", async () => {
     get.mockResolvedValue({ parentId: "p", subtasks: [option("Same", { duplicate: true })] });
     renderPicker();

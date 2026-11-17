@@ -28,6 +28,7 @@ export function TodaySubtaskPicker({ date, target, onClose, onChanged }: Props) 
   const itemsRef = useRef<TodaySubtaskOption[]>([]);
   const mounted = useRef(true);
   const queue = useRef<SubtaskQueue | null>(null);
+  const generation = useRef(0);
 
   const replaceItems = useCallback((next: TodaySubtaskOption[]) => {
     itemsRef.current = next;
@@ -35,11 +36,13 @@ export function TodaySubtaskPicker({ date, target, onClose, onChanged }: Props) 
   }, []);
 
   const load = useCallback(async () => {
+    generation.current += 1;
+    const ticket = generation.current;
     try {
       const result = await getTodaySubtasks(date, target.projectId, target.line);
-      replaceItems(result.subtasks);
+      if (ticket === generation.current) replaceItems(result.subtasks);
     } catch (err) {
-      if (!mounted.current) return;
+      if (!mounted.current || ticket !== generation.current) return;
       setError(messageOf(err));
       setItems((current) => current ?? []);
     }
@@ -70,6 +73,7 @@ export function TodaySubtaskPicker({ date, target, onClose, onChanged }: Props) 
         send: async (id, planned) => {
           const item = itemsRef.current.find((candidate) => candidate.id === id);
           if (item === undefined) return;
+          generation.current += 1;
           const result = await planTodaySubtask(latest.current.date, { projectId: item.projectId, line: item.line, raw: item.raw, planned });
           latest.current.replaceItems(result.subtasks);
         },
