@@ -151,11 +151,13 @@ describe("App download links", () => {
 });
 
 describe("App content", () => {
-  it("draws the particle background behind the page without exposing it", () => {
+  it("draws the glow and particle background behind the page without exposing it", () => {
     const { container } = render(<App />);
 
-    const canvas = container.querySelector("canvas.particles");
-    expect(canvas?.getAttribute("aria-hidden")).toBe("true");
+    const ambient = container.querySelector(".ambient");
+    expect(ambient?.getAttribute("aria-hidden")).toBe("true");
+    expect(ambient?.querySelectorAll(".ambient__track .blob")).toHaveLength(10);
+    expect(ambient?.querySelector("canvas.particles")).not.toBeNull();
     expect(HTMLCanvasElement.prototype.getContext).toHaveBeenCalledWith("2d");
   });
 
