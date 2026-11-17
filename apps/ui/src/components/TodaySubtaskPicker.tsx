@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BOARD_STATUS_LABEL } from "../board-model";
 import { getTodaySubtasks, planTodaySubtask, type TodaySubtaskOption } from "../delegation";
 import { InlineText } from "../markdown";
+import { createSubtaskQueue, type SubtaskQueue } from "../subtask-queue";
 
 export interface SubtaskPickerTarget {
   projectId: string;
@@ -16,25 +17,43 @@ interface Props {
   onChanged: () => void;
 }
 
+const SETTLE_MS = 120;
+
 const messageOf = (err: unknown): string => (err instanceof Error && err.message !== "" ? err.message : "Something went wrong");
 
 export function TodaySubtaskPicker({ date, target, onClose, onChanged }: Props) {
   const [items, setItems] = useState<TodaySubtaskOption[] | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  const [wanted, setWanted] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+  const itemsRef = useRef<TodaySubtaskOption[]>([]);
+  const mounted = useRef(true);
+  const queue = useRef<SubtaskQueue | null>(null);
+
+  const replaceItems = useCallback((next: TodaySubtaskOption[]) => {
+    itemsRef.current = next;
+    if (mounted.current) setItems(next);
+  }, []);
 
   const load = useCallback(async () => {
     try {
       const result = await getTodaySubtasks(date, target.projectId, target.line);
-      setItems(result.subtasks);
+      replaceItems(result.subtasks);
     } catch (err) {
+      if (!mounted.current) return;
       setError(messageOf(err));
       setItems((current) => current ?? []);
     }
-  }, [date, target.projectId, target.line]);
+  }, [date, target.projectId, target.line, replaceItems]);
+
+  const latest = useRef({ date, load, onChanged, replaceItems });
+  latest.current = { date, load, onChanged, replaceItems };
 
   useEffect(() => {
+    mounted.current = true;
     void load();
+    return () => {
+      mounted.current = false;
+    };
   }, [load]);
 
   useEffect(() => {
@@ -45,20 +64,39 @@ export function TodaySubtaskPicker({ date, target, onClose, onChanged }: Props) 
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const toggle = async (item: TodaySubtaskOption) => {
-    if (busyId !== null || item.duplicate) return;
-    setBusyId(item.id);
+  if (queue.current === null) {
+    queue.current = createSubtaskQueue(
+      {
+        send: async (id, planned) => {
+          const item = itemsRef.current.find((candidate) => candidate.id === id);
+          if (item === undefined) return;
+          const result = await planTodaySubtask(latest.current.date, { projectId: item.projectId, line: item.line, raw: item.raw, planned });
+          latest.current.replaceItems(result.subtasks);
+        },
+        onFailed: (id, err) => {
+          if (!mounted.current) return;
+          setError(messageOf(err));
+          setWanted((current) => {
+            const { [id]: _dropped, ...rest } = current;
+            return rest;
+          });
+        },
+        onDrained: () => {
+          latest.current.onChanged();
+          if (mounted.current) setWanted({});
+          void latest.current.load();
+        },
+      },
+      SETTLE_MS,
+    );
+  }
+
+  const toggle = (item: TodaySubtaskOption) => {
+    if (item.duplicate) return;
+    const next = !(wanted[item.id] ?? item.inToday);
     setError(null);
-    try {
-      const result = await planTodaySubtask(date, { projectId: item.projectId, line: item.line, raw: item.raw, planned: !item.inToday });
-      setItems(result.subtasks);
-      onChanged();
-    } catch (err) {
-      setError(messageOf(err));
-      await load();
-    } finally {
-      setBusyId(null);
-    }
+    setWanted((current) => ({ ...current, [item.id]: next }));
+    queue.current?.request(item.id, next, item.inToday);
   };
 
   return (
@@ -80,13 +118,7 @@ export function TodaySubtaskPicker({ date, target, onClose, onChanged }: Props) 
               {items.map((item) => (
                 <li key={item.id} className="subtask-picker__item">
                   <label className={`subtask-picker__row ${item.duplicate ? "subtask-picker__row--off" : ""}`}>
-                    <input
-                      type="checkbox"
-                      checked={item.inToday}
-                      disabled={busyId !== null || item.duplicate}
-                      aria-busy={busyId === item.id}
-                      onChange={() => void toggle(item)}
-                    />
+                    <input type="checkbox" checked={wanted[item.id] ?? item.inToday} disabled={item.duplicate} onChange={() => toggle(item)} />
                     <span className="subtask-picker__title">
                       <InlineText text={item.title} />
                     </span>

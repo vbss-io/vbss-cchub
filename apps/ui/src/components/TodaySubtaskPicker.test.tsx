@@ -19,16 +19,58 @@ const option = (id: string, patch: Partial<TodaySubtaskOption> = {}): TodaySubta
   ...patch,
 });
 
+const abc = (): TodaySubtaskOption[] => [option("A"), option("B", { line: 6 }), option("C", { line: 7 })];
+
 const target = { projectId: "alpha", line: 3, title: "Parent task" };
 const get = vi.mocked(getTodaySubtasks);
 const plan = vi.mocked(planTodaySubtask);
 
+interface Call {
+  line: number;
+  planned: boolean;
+  settle: (value: TodaySubtaskOptions | Error) => void;
+}
+
+const control = () => {
+  const calls: Call[] = [];
+  let settled = 0;
+  plan.mockImplementation(
+    (_date, input) =>
+      new Promise<TodaySubtaskOptions>((resolve, reject) => {
+        calls.push({ line: input.line, planned: input.planned, settle: (value) => (value instanceof Error ? reject(value) : resolve(value)) });
+      }),
+  );
+  const next = (): Call => {
+    const call = calls[settled] as Call;
+    settled += 1;
+    return call;
+  };
+  return {
+    calls,
+    resolveNext: async (listing: string[], planned: string[] = listing) => {
+      const subtasks = abc()
+        .filter((item) => listing.includes(item.id))
+        .map((item) => ({ ...item, inToday: planned.includes(item.id) }));
+      await act(async () => {
+        next().settle({ parentId: "p", subtasks });
+      });
+    },
+    rejectNext: async (error: Error) => {
+      await act(async () => {
+        next().settle(error);
+      });
+    },
+  };
+};
+
 const renderPicker = () => {
   const onClose = vi.fn();
   const onChanged = vi.fn();
-  render(<TodaySubtaskPicker date="2026-11-16" target={target} onClose={onClose} onChanged={onChanged} />);
-  return { onClose, onChanged };
+  const view = render(<TodaySubtaskPicker date="2026-11-16" target={target} onClose={onClose} onChanged={onChanged} />);
+  return { onClose, onChanged, view };
 };
+
+const checkedBoxes = () => (screen.getAllByRole("checkbox") as HTMLInputElement[]).map((box) => box.checked);
 
 describe("TodaySubtaskPicker", () => {
   beforeEach(() => {
@@ -66,16 +108,19 @@ describe("TodaySubtaskPicker", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("Something went wrong");
   });
 
-  it("plans a subtask, replaces the list and reports the change", async () => {
-    get.mockResolvedValue({ parentId: "p", subtasks: [option("Write tests")] });
+  it("plans a subtask optimistically, replaces the list and reports the change once", async () => {
+    get.mockResolvedValueOnce({ parentId: "p", subtasks: [option("Write tests")] }).mockResolvedValue({ parentId: "p", subtasks: [option("Write tests", { inToday: true })] });
     plan.mockResolvedValue({ parentId: "p", subtasks: [option("Write tests", { inToday: true })] });
     const { onChanged } = renderPicker();
     const box = (await screen.findByRole("checkbox")) as HTMLInputElement;
     expect(box.checked).toBe(false);
     fireEvent.click(box);
+    expect(box.checked).toBe(true);
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
     expect(plan).toHaveBeenCalledWith("2026-11-16", { projectId: "alpha", line: 5, raw: "- [ ] Write tests", planned: true });
-    await waitFor(() => expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true));
+    expect(plan).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
   });
 
   it("unplans a planned subtask", async () => {
@@ -86,12 +131,137 @@ describe("TodaySubtaskPicker", () => {
     await waitFor(() => expect(plan).toHaveBeenCalledWith("2026-11-16", expect.objectContaining({ planned: false })));
   });
 
-  it("shows the error and reloads the list when planning fails", async () => {
-    get.mockResolvedValue({ parentId: "p", subtasks: [option("Write tests")] });
-    plan.mockRejectedValue(new Error("conflict"));
-    renderPicker();
-    fireEvent.click(await screen.findByRole("checkbox"));
+  it("flips three boxes at once, keeps them enabled, writes in click order and refreshes once", async () => {
+    const server = control();
+    get.mockResolvedValueOnce({ parentId: "p", subtasks: abc() }).mockResolvedValue({ parentId: "p", subtasks: abc().map((item) => ({ ...item, inToday: true })) });
+    const { onChanged } = renderPicker();
+    const boxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(boxes[2] as HTMLElement);
+    fireEvent.click(boxes[0] as HTMLElement);
+    fireEvent.click(boxes[1] as HTMLElement);
+    expect(checkedBoxes()).toEqual([true, true, true]);
+    expect((screen.getAllByRole("checkbox") as HTMLInputElement[]).every((box) => !box.disabled)).toBe(true);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(1));
+    expect(server.calls[0]?.line).toBe(7);
+    await server.resolveNext(["A", "B", "C"], ["C"]);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(2));
+    expect(server.calls[1]?.line).toBe(5);
+    expect(checkedBoxes()).toEqual([true, true, true]);
+    expect(onChanged).not.toHaveBeenCalled();
+    await server.resolveNext(["A", "B", "C"], ["A", "C"]);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(3));
+    expect(server.calls[2]?.line).toBe(6);
+    await server.resolveNext(["A", "B", "C"]);
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect(checkedBoxes()).toEqual([true, true, true]);
+    expect(plan).toHaveBeenCalledTimes(3);
+  });
+
+  it("sends no write when the same box is clicked twice before its write runs", async () => {
+    get.mockResolvedValue({ parentId: "p", subtasks: [option("A")] });
+    const { onChanged } = renderPicker();
+    const box = (await screen.findByRole("checkbox")) as HTMLInputElement;
+    fireEvent.click(box);
+    fireEvent.click(box);
+    expect(box.checked).toBe(false);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    expect(plan).not.toHaveBeenCalled();
+    expect(onChanged).not.toHaveBeenCalled();
+  });
+
+  it("applies the final state when a box is clicked again while its write is in flight", async () => {
+    const server = control();
+    get.mockResolvedValue({ parentId: "p", subtasks: [option("A")] });
+    const { onChanged } = renderPicker();
+    const box = (await screen.findByRole("checkbox")) as HTMLInputElement;
+    fireEvent.click(box);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(1));
+    fireEvent.click(box);
+    expect(box.checked).toBe(false);
+    await server.resolveNext(["A"]);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(2));
+    expect(server.calls.map((call) => call.planned)).toEqual([true, false]);
+    await server.resolveNext(["A"], []);
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+  });
+
+  it("sends nothing more when a box returns to the confirmed state while its write is in flight", async () => {
+    const server = control();
+    get.mockResolvedValue({ parentId: "p", subtasks: [option("A")] });
+    const { onChanged } = renderPicker();
+    const box = (await screen.findByRole("checkbox")) as HTMLInputElement;
+    fireEvent.click(box);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(1));
+    fireEvent.click(box);
+    fireEvent.click(box);
+    expect(box.checked).toBe(true);
+    await server.resolveNext(["A"]);
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(plan).toHaveBeenCalledTimes(1);
+  });
+
+  it("reverts only the item that failed, shows why and keeps writing the rest", async () => {
+    const server = control();
+    get.mockResolvedValueOnce({ parentId: "p", subtasks: abc() }).mockResolvedValue({ parentId: "p", subtasks: abc().map((item) => ({ ...item, inToday: item.id !== "B" })) });
+    const { onChanged } = renderPicker();
+    const boxes = await screen.findAllByRole("checkbox");
+    for (const box of boxes) fireEvent.click(box);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(1));
+    await server.resolveNext(["A", "B", "C"], ["A"]);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(2));
+    await server.rejectNext(new Error("conflict"));
     expect((await screen.findByRole("alert")).textContent).toBe("conflict");
+    expect(checkedBoxes()).toEqual([true, false, true]);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(3));
+    expect(server.calls[2]?.line).toBe(7);
+    await server.resolveNext(["A", "B", "C"], ["A", "C"]);
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    expect(checkedBoxes()).toEqual([true, false, true]);
+  });
+
+  it("skips the write for a subtask that left the list while earlier writes ran", async () => {
+    const server = control();
+    get.mockResolvedValue({ parentId: "p", subtasks: [option("A"), option("B", { line: 6 })] });
+    const { onChanged } = renderPicker();
+    const boxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(boxes[0] as HTMLElement);
+    fireEvent.click(boxes[1] as HTMLElement);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(1));
+    await server.resolveNext(["A"]);
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(plan).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps writing after the picker closes and still refreshes the day once", async () => {
+    const server = control();
+    get.mockResolvedValue({ parentId: "p", subtasks: abc().slice(0, 2) });
+    const { onChanged, view } = renderPicker();
+    const boxes = await screen.findAllByRole("checkbox");
+    fireEvent.click(boxes[0] as HTMLElement);
+    fireEvent.click(boxes[1] as HTMLElement);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(1));
+    view.unmount();
+    await server.resolveNext(["A", "B"], ["A"]);
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(2));
+    expect(onChanged).not.toHaveBeenCalled();
+    await server.resolveNext(["A", "B"]);
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    expect(plan).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays quiet about failures and reload errors that arrive after the picker closed", async () => {
+    const server = control();
+    get.mockResolvedValueOnce({ parentId: "p", subtasks: [option("A")] }).mockRejectedValue(new Error("gone"));
+    const { onChanged, view } = renderPicker();
+    fireEvent.click(await screen.findByRole("checkbox"));
+    await waitFor(() => expect(plan).toHaveBeenCalledTimes(1));
+    view.unmount();
+    await server.rejectNext(new Error("late"));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
   });
 
@@ -105,23 +275,16 @@ describe("TodaySubtaskPicker", () => {
     expect(plan).not.toHaveBeenCalled();
   });
 
-  it("ignores a second toggle while one is in flight", async () => {
-    get.mockResolvedValue({ parentId: "p", subtasks: [option("A"), option("B", { line: 6 })] });
-    let release: (value: TodaySubtaskOptions) => void = () => undefined;
-    plan.mockReturnValue(
-      new Promise<TodaySubtaskOptions>((resolve) => {
-        release = resolve;
-      }),
-    );
+  it("ignores a toggle on a duplicate row even when the input is clicked programmatically", async () => {
+    get.mockResolvedValue({ parentId: "p", subtasks: [option("Same", { duplicate: true }), option("Other", { line: 6 })] });
     renderPicker();
-    const boxes = await screen.findAllByRole("checkbox");
+    const boxes = (await screen.findAllByRole("checkbox")) as HTMLInputElement[];
+    boxes[0]?.removeAttribute("disabled");
     fireEvent.click(boxes[0] as HTMLElement);
-    await waitFor(() => expect((screen.getAllByRole("checkbox")[1] as HTMLInputElement).disabled).toBe(true));
-    fireEvent.click(screen.getAllByRole("checkbox")[1] as HTMLElement);
-    expect(plan).toHaveBeenCalledTimes(1);
     await act(async () => {
-      release({ parentId: "p", subtasks: [option("A", { inToday: true }), option("B", { line: 6 })] });
+      await new Promise((resolve) => setTimeout(resolve, 200));
     });
+    expect(plan).not.toHaveBeenCalled();
   });
 
   it("closes on Escape, on the overlay and on Done but not inside the dialog", async () => {
