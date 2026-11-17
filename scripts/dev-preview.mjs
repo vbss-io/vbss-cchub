@@ -290,7 +290,8 @@ const prepareFromReal = async () => {
 
 mkdirSync(dataDir, { recursive: true });
 const realPrep = fromReal ? await prepareFromReal() : null;
-const codexHome = realCodex || fromReal ? null : mkdtempSync(join(tmpdir(), "cchub-preview-codex-"));
+const presetCodexHome = !realCodex && !fromReal && process.env.PREVIEW_CODEX_HOME ? resolve(process.env.PREVIEW_CODEX_HOME) : null;
+const codexHome = realCodex || fromReal ? null : (presetCodexHome ?? mkdtempSync(join(tmpdir(), "cchub-preview-codex-")));
 
 const serverEnv = {
   ...process.env,
@@ -345,7 +346,7 @@ const shutdown = () => {
   if (shuttingDown) return;
   shuttingDown = true;
   for (const child of children) child.kill();
-  if (codexHome) {
+  if (codexHome && !presetCodexHome) {
     try {
       rmSync(codexHome, { recursive: true, force: true });
     } catch {
