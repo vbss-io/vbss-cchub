@@ -931,8 +931,9 @@ describe("property: every user line survives any sequence of operations, only ex
               if (chosen) {
                 const lines = content.split(/\r\n|\n/);
                 const original = lines[chosen.line] as string;
-                const variant = Math.floor(random() * 3);
-                const typed = variant === 0 ? `${original} _note ${seed}-${step}_` : variant === 1 ? `${original} again for Ana ${seed}-${step}` : original.replace(BOX_RE, "$1x$3");
+                const variant = Math.floor(random() * 5);
+                const tokens = [`${original} #p${step % 4}`, `${original} ${SCHEDULED} ${TODAY}`];
+                const typed = variant === 0 ? `${original} _note ${seed}-${step}_` : variant === 1 ? `${original} again for Ana ${seed}-${step}` : variant === 2 ? original.replace(BOX_RE, "$1x$3") : (tokens[variant - 3] as string);
                 const at = chosen.line + 1;
                 expected.splice(slotFor(lines, at), 0, typed);
                 lines.splice(at, 0, typed);

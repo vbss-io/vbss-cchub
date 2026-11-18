@@ -210,10 +210,21 @@ function coreOf(text: string, separator: string): string {
   return cut === -1 ? text : text.slice(0, cut);
 }
 
-function bodiesOf(settings: DelegationSettings, text: string): Body[] {
-  const body = taskBody(text, settings.tasks);
+function splitBody(body: string): Body[] {
   const split = body.match(SUFFIX_RE);
   return split === null ? [{ core: body, suffix: null }] : [{ core: body, suffix: null }, { core: split[1] as string, suffix: split[2] as string }];
+}
+
+function bodiesOf(settings: DelegationSettings, text: string): Body[] {
+  return splitBody(taskBody(text, settings.tasks));
+}
+
+function suffixOf(text: string): string | null {
+  return text.trim().match(SUFFIX_RE)?.[2] ?? null;
+}
+
+function withSuffix(text: string, suffix: string | null): string {
+  return suffix === null || text.endsWith(suffix) ? text : `${text} ${suffix}`;
 }
 
 function titleHits(settings: DelegationSettings, text: string, pool: BoardTask[]): BoardTask[] {
@@ -307,13 +318,13 @@ function plainOf(node: Node): string {
 
 function isExact(settings: DelegationSettings, node: Node, task: BoardTask): boolean {
   const titles = titlesOf(settings, task, [node.oldTitle]);
-  return bodiesOf(settings, plainOf(node)).some((body) => titles.has(body.core) || titles.has(stripInlineMarkup(body.core)));
+  return splitBody(plainOf(node).trim()).some((body) => titles.has(body.core) || titles.has(stripInlineMarkup(body.core)));
 }
 
-function removalOf(settings: DelegationSettings, titles: ReadonlySet<string>, gone: string, kept: string): { suffix: string | null } | null {
-  for (const removed of bodiesOf(settings, gone)) {
+function removalOf(titles: ReadonlySet<string>, gone: string, kept: string): { suffix: string | null } | null {
+  for (const removed of splitBody(gone.trim())) {
     if (!titles.has(removed.core)) continue;
-    for (const survivor of bodiesOf(settings, kept)) {
+    for (const survivor of splitBody(kept.trim())) {
       if (survivor.core !== removed.core && stripInlineMarkup(survivor.core) !== removed.core) continue;
       if (removed.suffix === null || removed.suffix === survivor.suffix) return { suffix: null };
       if (survivor.suffix === null) return { suffix: removed.suffix };
@@ -323,8 +334,8 @@ function removalOf(settings: DelegationSettings, titles: ReadonlySet<string>, go
 }
 
 function renameOf(settings: DelegationSettings, node: Node, task: BoardTask): string | null {
-  if (node.renameTo !== null) return node.renameTo;
   const plain = plainOf(node);
+  if (node.renameTo !== null) return withSuffix(node.renameTo, suffixOf(plain));
   const title = renderTitle(settings, task);
   if (node.oldTitle !== null && node.oldTitle !== task.title && plain.includes(node.oldTitle)) return plain.replace(node.oldTitle, task.title);
   return extendsTitle(settings, plain, task) ? title : null;
@@ -602,7 +613,7 @@ function attempt(settings: DelegationSettings, date: string, doc: ParsedDoc, dat
     const wanted = projectCheckbox(task);
     for (const other of nodes) {
       if (other === survivor || contains(other, survivor) || contains(survivor, other) || (anchor !== null && contains(other, anchor))) continue;
-      const removal = removalOf(settings, titlesOf(settings, task, [other.oldTitle, survivor.oldTitle]), plainOf(other), plainOf(survivor));
+      const removal = removalOf(titlesOf(settings, task, [other.oldTitle, survivor.oldTitle]), plainOf(other), plainOf(survivor));
       if (removal === null) {
         result.similar.push({ line: other.line, index: other.index, task });
         if (!exact(survivor)) result.similar.push({ line: survivor.line, index: survivor.index, task });
@@ -669,11 +680,11 @@ function unlinkedLines(lines: DocLine[], texts: ReadonlyMap<DocLine, string>, li
     .sort();
 }
 
-function losesLines(state: Attempt): boolean {
-  const kept = new Set(state.focus);
-  return state.before.some((line) => {
+export function lostLines(before: readonly DocLine[], after: readonly DocLine[], removed: ReadonlyMap<DocLine, DocLine>): DocLine[] {
+  const kept = new Set(after);
+  return before.filter((line) => {
     if (kept.has(line) || isBlank(line)) return false;
-    const survivor = state.removed.get(line);
+    const survivor = removed.get(line);
     return survivor === undefined || !kept.has(survivor);
   });
 }
@@ -693,7 +704,7 @@ function failedTasks(settings: DelegationSettings, date: string, data: Structure
     if (index === -1 || linked.get(index) !== id) failed.add(id);
   }
   const kept = unlinkedLines(state.before, new Map(), state.linked).join("\n");
-  if (kept !== unlinkedLines(state.focus, state.texts, state.linked).join("\n") || losesLines(state)) for (const id of state.touched) failed.add(id);
+  if (kept !== unlinkedLines(state.focus, state.texts, state.linked).join("\n") || lostLines(state.before, state.focus, state.removed).length > 0) for (const id of state.touched) failed.add(id);
   return failed;
 }
 

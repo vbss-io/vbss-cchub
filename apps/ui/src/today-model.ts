@@ -368,7 +368,7 @@ const AMBIGUITY_HINT: Record<TodayAmbiguityReason, string> = {
   "several-tasks": "This line matches more than one task, so its checkbox is not synced.",
   "duplicate-line": "This line was copied or removed, so its checkbox was not synced. Check the task status.",
   moved: "It moved in its project and its line in the note could mean another task, so nothing was added.",
-  similar: "This line looks like a task but has extra text, so it was kept as you wrote it.",
+  similar: "This line looks like this task but is not an exact copy, so it was left in place.",
   renamed: "The task was renamed in its project, so its line in the note now shows the new title.",
 };
 

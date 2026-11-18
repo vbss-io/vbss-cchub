@@ -160,6 +160,25 @@ describe("restructureFocus", () => {
   });
 });
 
+describe("lostLines, the backstop that cancels a pass", () => {
+  const lines = (...texts: string[]): DocLine[] => texts.map((text) => board.docLine(text));
+
+  it("finds a non-blank line that left the focus without being merged", () => {
+    const [task, note, blank] = lines("- [ ] [[alpha|Alpha]] - Release the build", "  - my note", "");
+    assert.deepEqual(structure.lostLines([task, note, blank] as DocLine[], [task] as DocLine[], new Map()), [note]);
+  });
+
+  it("accepts dropped blank lines and copies merged into a line that is still there", () => {
+    const [task, copy, blank] = lines("- [ ] [[alpha|Alpha]] - Release the build", "- [ ] [[alpha|Alpha]] - Release the build", "");
+    assert.deepEqual(structure.lostLines([task, copy, blank] as DocLine[], [task] as DocLine[], new Map([[copy as DocLine, task as DocLine]])), []);
+  });
+
+  it("refuses a merge whose survivor is gone too", () => {
+    const [task, copy, other] = lines("- [ ] [[alpha|Alpha]] - Release the build", "- [ ] [[alpha|Alpha]] - Release the build", "- [ ] free");
+    assert.deepEqual(structure.lostLines([task, copy, other] as DocLine[], [other] as DocLine[], new Map([[copy as DocLine, task as DocLine]])), [task, copy]);
+  });
+});
+
 describe("restructureFocus removes only exact duplicates of the surviving line", () => {
   const PARENT = `- [ ] Parent job ${SCHEDULED} ${TODAY}`;
   const similar = (result: import("../src/focus-structure.js").StructureResult): string[] => result.similar.map((item) => item.line.text.trim()).sort();
@@ -220,6 +239,34 @@ describe("restructureFocus removes only exact duplicates of the surviving line",
     const outcome = run(content, data);
     assert.equal(outcome.text, note(["- [ ] [[alpha|Alpha]] - Parent job", "- [ ] [[alpha|Alpha]] - Deploy the server", "  some free text continuation", "- free note"]));
   });
+
+  it("keeps the user's suffix when a line is renamed to the project title", () => {
+    const data = boardOf({ alpha: [PARENT, "  - [ ] Write the changelog - waiting on Bob"] });
+    const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Write the changelog - ask Ana _Falta Deploy_"]);
+    const outcome = run(content, data);
+    assert.equal(outcome.text, note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Write the changelog - waiting on Bob _Falta Deploy_"]));
+    assert.deepEqual(
+      outcome.result.renames.map((item) => [item.from, item.to]),
+      [["Write the changelog - ask Ana _Falta Deploy_", "Write the changelog - waiting on Bob _Falta Deploy_"]],
+    );
+  });
+
+  it("does not repeat a suffix the project title already ends with", () => {
+    const data = boardOf({ alpha: [PARENT, "  - [ ] Write the changelog - waiting on Bob _Falta Deploy_"] });
+    const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Write the changelog - ask Ana _Falta Deploy_"]);
+    assert.equal(run(content, data).text, note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Write the changelog - waiting on Bob _Falta Deploy_"]));
+  });
+
+  for (const token of ["#p0", `${SCHEDULED} 2026-12-01`]) {
+    it(`keeps a copy that differs by the token ${token} and reports it`, () => {
+      const data = boardOf({ alpha: [PARENT, `  - [ ] Deploy the server ${SCHEDULED} ${TODAY}`] });
+      const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Deploy the server", `- [ ] [[alpha|Alpha]] - Deploy the server ${token}`]);
+      const outcome = run(content, data);
+      assert.equal(outcome.text, content);
+      assert.deepEqual(outcome.result.merged, []);
+      assert.deepEqual(similar(outcome.result), [`- [ ] [[alpha|Alpha]] - Deploy the server ${token}`]);
+    });
+  }
 
   it("lists every rename with the old and the new text", () => {
     const data = boardOf({ alpha: [PARENT, "  - [ ] Write the changelog - waiting on Bob"] });
