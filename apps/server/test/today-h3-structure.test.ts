@@ -450,3 +450,112 @@ describe("H3: no path writes a copy of a line the note already has", () => {
     assert.equal(moved.length, 2);
   });
 });
+
+describe("H3 fix: a Focus action that lands before the mirror never drops a tick", () => {
+  const AL = "[[alpha|Alpha]]";
+  const DEPLOY = "Deploy the server";
+  const CHANGELOG = "Write the changelog";
+  const REVIEW = "Review the docs";
+  const OTHER = "Other task of the day";
+
+  function ticked(): { root: string; settings: DelegationSettings } {
+    const alpha = project("Alpha", [`- [ ] Parent job ${SCHEDULED} ${TODAY}`, `  - [ ] ${DEPLOY} ${SCHEDULED} ${TODAY}`, `  - [ ] ${CHANGELOG}`, `  - [ ] ${REVIEW} ${SCHEDULED} ${TODAY}`, `- [ ] ${OTHER}`]);
+    const root = lab({ alpha }, { [TODAY]: dailyOf(TODAY, [`- [ ] ${AL} - Parent job`, `  - [ ] ${DEPLOY}`, `  - [ ] ${REVIEW}`]) });
+    const settings = useVault(root);
+    settle(settings);
+    write(root, dailyRel(TODAY), read(root, dailyRel(TODAY)).replace(`  - [ ] ${DEPLOY}\n  - [ ] ${REVIEW}\n`, `  - [x] ${DEPLOY}\n  - [ ] ${REVIEW}\n- [ ] ${AL} - ${DEPLOY}\n`));
+    return { root, settings };
+  }
+
+  function assertTickKept(settings: DelegationSettings, root: string): void {
+    settle(settings);
+    assert.equal(taskIn(settings, "alpha", DEPLOY).status, "done");
+    const lines = focusLines(root);
+    assert.equal(lines.filter((line) => line.includes(DEPLOY)).length, 1, lines.join("\n"));
+    assert.ok(lines.includes(`  - [x] ${DEPLOY}`), lines.join("\n"));
+    const reported = (today.readToday(settings, TODAY).outOfSync ?? []).map((item) => [item.taskTitle, item.dailyCheckbox]);
+    assert.deepEqual(reported, [[DEPLOY, "todo"]]);
+  }
+
+  it("Plan subtasks applies the tick first and reports the copy that disagreed", () => {
+    const { root, settings } = ticked();
+    const task = taskIn(settings, "alpha", CHANGELOG);
+    today.todayApi.planSubtask(settings, TODAY, { projectId: "alpha", line: task.line, raw: task.raw, planned: true });
+    assertTickKept(settings, root);
+    assert.ok(focusLines(root).includes(`  - [ ] ${CHANGELOG}`));
+  });
+
+  it("removing a planned subtask applies the tick first", () => {
+    const { root, settings } = ticked();
+    const task = taskIn(settings, "alpha", REVIEW);
+    today.todayApi.planSubtask(settings, TODAY, { projectId: "alpha", line: task.line, raw: task.raw, planned: false });
+    assertTickKept(settings, root);
+    assert.equal(focusLines(root).some((line) => line.includes(REVIEW)), false);
+  });
+
+  it("Add to focus applies the tick first", () => {
+    const { root, settings } = ticked();
+    const task = taskIn(settings, "alpha", OTHER);
+    today.todayApi.schedule(settings, { projectId: "alpha", line: task.line, raw: task.raw, date: TODAY });
+    assertTickKept(settings, root);
+    assert.ok(focusLines(root).includes(`- [ ] ${AL} - ${OTHER}`));
+  });
+});
+
+describe("H3 fix: renames and lines kept in place are visible in the sync report", () => {
+  it("lists the rename of case 4 with the old and the new text", () => {
+    const root = lab({ equatorial: EQUATORIAL_AFTER }, { [TODAY]: dailyOf(TODAY, [`- [-] ${EQ} - ${TRAIN}`, `  - [x] ${T3}`, `  - [ ] ${DATASET_NOTE}`]) });
+    const settings = useVault(root);
+    settle(settings);
+    const renamed = today.readToday(settings, TODAY).ambiguous.filter((item) => item.reason === "renamed");
+    assert.deepEqual(
+      renamed.map((item) => [item.text, item.taskId]),
+      [[`${DATASET_NOTE} -> ${DATASET}`, taskIn(settings, "equatorial", DATASET).id]],
+    );
+    assert.equal(renamed[0]?.line, read(root, dailyRel(TODAY)).split("\n").indexOf(`  - [ ] ${DATASET}`));
+  });
+
+  it("lists a rename made in the project and forgets it once the line is gone", () => {
+    const root = lab({ alpha: project("Alpha", [`- [ ] Ship release ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyOf(TODAY, ["- [ ] [[alpha|Alpha]] - Ship release _call Ana_"]) });
+    const settings = useVault(root);
+    settle(settings);
+    const task = taskIn(settings, "alpha", "Ship release");
+    board.writeBoardTaskSynced(settings, { projectId: "alpha", line: task.line, raw: task.raw, title: "Ship the new release" });
+    settle(settings);
+    assert.deepEqual(focusLines(root), ["- [ ] [[alpha|Alpha]] - Ship the new release _call Ana_"]);
+    const renames = (): string[] => today.readToday(settings, TODAY).ambiguous.flatMap((item) => (item.reason === "renamed" ? [item.text] : []));
+    assert.deepEqual(renames(), ["Ship release _call Ana_ -> Ship the new release _call Ana_"]);
+    settle(settings);
+    assert.deepEqual(renames(), ["Ship release _call Ana_ -> Ship the new release _call Ana_"]);
+    write(root, dailyRel(TODAY), read(root, dailyRel(TODAY)).replace("- [ ] [[alpha|Alpha]] - Ship the new release _call Ana_\n", "- free line\n"));
+    settle(settings);
+    assert.deepEqual(renames(), []);
+  });
+
+  it("lists a line that only starts with a task title and keeps it", () => {
+    const AL = "[[alpha|Alpha]]";
+    const root = lab({ alpha: project("Alpha", [`- [ ] Parent job ${SCHEDULED} ${TODAY}`, `  - [ ] Deploy the server ${SCHEDULED} ${TODAY}`]) }, { [TODAY]: dailyOf(TODAY, [`- [ ] ${AL} - Parent job`, "  - [ ] Deploy the server"]) });
+    const settings = useVault(root);
+    settle(settings);
+    write(root, dailyRel(TODAY), read(root, dailyRel(TODAY)).replace("  - [ ] Deploy the server\n", "  - [ ] Deploy the server\n  - [ ] Deploy the server again on staging for Ana\n"));
+    settle(settings);
+    assert.deepEqual(focusLines(root), [`- [ ] ${AL} - Parent job`, "  - [ ] Deploy the server", "  - [ ] Deploy the server again on staging for Ana"]);
+    const similar = today.readToday(settings, TODAY).ambiguous.filter((item) => item.reason === "similar");
+    assert.deepEqual(
+      similar.map((item) => item.text),
+      ["  - [ ] Deploy the server again on staging for Ana"],
+    );
+  });
+
+  it("carries the suffix of a merged copy onto the line that stays", () => {
+    const AL = "[[alpha|Alpha]]";
+    const root = lab(
+      { alpha: project("Alpha", [`- [ ] Parent job ${SCHEDULED} ${TODAY}`, `  - [ ] Deploy the server ${SCHEDULED} ${TODAY}`]) },
+      { [TODAY]: dailyOf(TODAY, [`- [ ] ${AL} - Parent job`, "  - [ ] Deploy the server", `- [ ] ${AL} - Deploy the server _Falta Deploy_`, "  - nota da copia"]) },
+    );
+    const settings = useVault(root);
+    settle(settings);
+    assert.deepEqual(focusLines(root), [`- [ ] ${AL} - Parent job`, "  - [ ] Deploy the server _Falta Deploy_", "    - nota da copia"]);
+    assertSettled(settings, root);
+  });
+});

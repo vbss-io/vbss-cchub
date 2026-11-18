@@ -159,3 +159,76 @@ describe("restructureFocus", () => {
     assert.deepEqual(outcome.result.unclear.map((task) => task.title).sort(), ["Ask the team", "Ask the team", "Write the changelog"]);
   });
 });
+
+describe("restructureFocus removes only exact duplicates of the surviving line", () => {
+  const PARENT = `- [ ] Parent job ${SCHEDULED} ${TODAY}`;
+  const similar = (result: import("../src/focus-structure.js").StructureResult): string[] => result.similar.map((item) => item.line.text.trim()).sort();
+
+  it("keeps a line that only starts with a task title next to the task line and reports it", () => {
+    const data = boardOf({ alpha: [PARENT, `  - [ ] Deploy the server ${SCHEDULED} ${TODAY}`] });
+    const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Deploy the server", "  - [ ] Deploy the server again on staging for Ana"]);
+    const outcome = run(content, data);
+    assert.equal(outcome.text, content);
+    assert.deepEqual(outcome.result.merged, []);
+    assert.deepEqual(similar(outcome.result), ["- [ ] Deploy the server again on staging for Ana"]);
+  });
+
+  it("never collapses two lines that extend the same title and reports both", () => {
+    const data = boardOf({ alpha: [PARENT, "  - [ ] Review the docs"] });
+    const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Review the docs for Ana", "  - [ ] Review the docs for Bob"]);
+    const outcome = run(content, data);
+    assert.equal(outcome.text, content);
+    assert.deepEqual(similar(outcome.result), ["- [ ] Review the docs for Ana", "- [ ] Review the docs for Bob"]);
+  });
+
+  it("keeps the tick of a free line that names a sibling title and never links it", () => {
+    const data = boardOf({ alpha: [PARENT, "  - [ ] Review the docs"] });
+    const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [x] Review the docs and then ping", "  - [ ] Review the docs"]);
+    const outcome = run(content, data);
+    assert.equal(outcome.text, content);
+    assert.deepEqual(outcome.result.divergent, []);
+  });
+
+  it("reports a line under a wrong ancestor that only starts with a task title and leaves it in place", () => {
+    const data = boardOf({ alpha: [PARENT, "  - [ ] Phase one of the job", `    - [ ] Deploy the server ${SCHEDULED} ${TODAY}`] });
+    const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Deploy the server tomorrow with Ana"]);
+    const outcome = run(content, data);
+    assert.equal(outcome.text, content);
+    assert.deepEqual(outcome.result.similar.map((item) => item.task?.title), ["Deploy the server"]);
+  });
+
+  it("carries the suffix of the removed copy onto the survivor", () => {
+    const data = boardOf({ alpha: [PARENT, `  - [ ] Deploy the server ${SCHEDULED} ${TODAY}`] });
+    const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Deploy the server", "- [ ] [[alpha|Alpha]] - Deploy the server _Falta Deploy_", "  - note of the copy"]);
+    const outcome = run(content, data);
+    assert.equal(outcome.text, note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Deploy the server _Falta Deploy_", "    - note of the copy"]));
+    assert.equal(outcome.result.merged.length, 1);
+  });
+
+  it("keeps both copies when they carry different suffixes and reports the one left in place", () => {
+    const data = boardOf({ alpha: [PARENT, `  - [ ] Deploy the server ${SCHEDULED} ${TODAY}`] });
+    const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Deploy the server _Falta Deploy_", "- [ ] [[alpha|Alpha]] - Deploy the server _Falta Teste_"]);
+    const outcome = run(content, data);
+    assert.equal(outcome.text, content);
+    assert.deepEqual(outcome.result.merged, []);
+    assert.deepEqual(similar(outcome.result), ["- [ ] [[alpha|Alpha]] - Deploy the server _Falta Teste_"]);
+  });
+
+  it("moves an indented line without a bullet together with its task line", () => {
+    const data = boardOf({ alpha: [PARENT, `- [ ] Deploy the server ${SCHEDULED} ${TODAY}`] });
+    const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Deploy the server", "  some free text continuation", "- free note"]);
+    const outcome = run(content, data);
+    assert.equal(outcome.text, note(["- [ ] [[alpha|Alpha]] - Parent job", "- [ ] [[alpha|Alpha]] - Deploy the server", "  some free text continuation", "- free note"]));
+  });
+
+  it("lists every rename with the old and the new text", () => {
+    const data = boardOf({ alpha: [PARENT, "  - [ ] Write the changelog - waiting on Bob"] });
+    const content = note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Write the changelog - ask Ana"]);
+    const outcome = run(content, data);
+    assert.equal(outcome.text, note(["- [ ] [[alpha|Alpha]] - Parent job", "  - [ ] Write the changelog - waiting on Bob"]));
+    assert.deepEqual(
+      outcome.result.renames.map((item) => [item.from, item.to]),
+      [["Write the changelog - ask Ana", "Write the changelog - waiting on Bob"]],
+    );
+  });
+});

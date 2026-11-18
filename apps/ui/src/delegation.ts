@@ -599,7 +599,7 @@ export interface TodayCapture {
   promotedTo: string | null;
 }
 
-export type TodayAmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks" | "duplicate-line" | "moved";
+export type TodayAmbiguityReason = "same-title" | "unclear-line" | "several-lines" | "several-tasks" | "duplicate-line" | "moved" | "similar" | "renamed";
 
 export interface TodayOutOfSync {
   line: string;

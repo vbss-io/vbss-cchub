@@ -8,6 +8,8 @@ import {
   joinReason,
   normalizeText,
   scanDaily,
+  stripInlineMarkup,
+  taskBody,
   taskNeedle,
   type BoardCheckbox,
   type BoardProject,
@@ -35,14 +37,29 @@ export interface StructureDivergence {
   checkbox: BoardCheckbox;
 }
 
+export interface StructureRename {
+  line: DocLine;
+  task: BoardTask;
+  from: string;
+  to: string;
+}
+
+export interface StructureSimilar {
+  line: DocLine;
+  index: number;
+  task: BoardTask | null;
+}
+
 export interface StructureResult {
   changed: boolean;
   moved: string[];
   renamed: string[];
+  renames: StructureRename[];
   merged: string[];
   merges: DocLine[];
   created: string[];
   divergent: StructureDivergence[];
+  similar: StructureSimilar[];
   unclear: BoardTask[];
 }
 
@@ -78,10 +95,18 @@ interface Attempt {
   texts: Map<DocLine, string>;
   placed: Map<string, Node>;
   touched: Set<string>;
+  removed: Map<DocLine, DocLine>;
   result: StructureResult;
 }
 
+interface Body {
+  core: string;
+  suffix: string | null;
+}
+
 const LINE_RE = /^(\s*)[-*+]\s+\[([ xX-])\]\s?(.*)$/;
+const LIST_RE = /^\s*(?:[-*+]|\d+[.)])(?:\s|$)/;
+const SUFFIX_RE = /^(.*\S)\s+(_[^_\s](?:[^_]*[^_\s])?_)$/;
 const MARKS: Record<BoardCheckbox, string> = { todo: " ", doing: "-", done: "x" };
 const SYNCED: ReadonlySet<BoardStatus> = new Set<BoardStatus>(["todo", "doing", "done"]);
 const OPEN: ReadonlySet<BoardStatus> = new Set<BoardStatus>(["todo", "doing", "blocked", "hold"]);
@@ -89,7 +114,7 @@ const MIN_TITLE = 12;
 const MAX_ATTEMPTS = 6;
 const DEFAULT_STEP = "  ";
 
-export const noStructure = (): StructureResult => ({ changed: false, moved: [], renamed: [], merged: [], merges: [], created: [], divergent: [], unclear: [] });
+export const noStructure = (): StructureResult => ({ changed: false, moved: [], renamed: [], renames: [], merged: [], merges: [], created: [], divergent: [], similar: [], unclear: [] });
 
 function leadOf(text: string): string {
   return text.match(/^\s*/)?.[0] ?? "";
@@ -124,6 +149,10 @@ function entersDay(task: BoardTask, date: string): boolean {
   return OPEN.has(task.status) && (task.scheduled === date || task.subtasks.some((subtask) => entersDay(subtask, date)));
 }
 
+function newNode(line: DocLine, index: number, before: DocLine[]): Node {
+  return { line, index, depth: depthOf(line.text), lead: leadOf(line.text), text: line.text, parent: null, children: [], before, task: null, plain: null, oldTitle: null, renameTo: null, frozen: false };
+}
+
 function buildForest(doc: ParsedDoc, start: number, end: number): Forest {
   const roots: Node[] = [];
   const nodes: Node[] = [];
@@ -135,14 +164,19 @@ function buildForest(doc: ParsedDoc, start: number, end: number): Forest {
       pending.push(line);
       continue;
     }
-    const depth = depthOf(line.text);
-    const node: Node = { line, index, depth, lead: leadOf(line.text), text: line.text, parent: null, children: [], before: pending, task: null, plain: null, oldTitle: null, renameTo: null, frozen: false };
+    const node = newNode(line, index, pending);
     pending = [];
     nodes.push(node);
-    while (stack.length > 0 && (stack[stack.length - 1] as Node).depth >= depth) stack.pop();
-    const parent = depth === 0 ? undefined : stack[stack.length - 1];
+    const owner = stack[stack.length - 1];
+    if (owner !== undefined && node.lead !== "" && !LIST_RE.test(line.text)) {
+      node.parent = owner;
+      owner.children.push(node);
+      continue;
+    }
+    while (stack.length > 0 && (stack[stack.length - 1] as Node).depth >= node.depth) stack.pop();
+    const parent = node.depth === 0 ? undefined : stack[stack.length - 1];
     if (parent === undefined) {
-      if (depth > 0) node.frozen = true;
+      if (node.depth > 0) node.frozen = true;
       roots.push(node);
       stack = [node];
       continue;
@@ -176,13 +210,30 @@ function coreOf(text: string, separator: string): string {
   return cut === -1 ? text : text.slice(0, cut);
 }
 
+function bodiesOf(settings: DelegationSettings, text: string): Body[] {
+  const body = taskBody(text, settings.tasks);
+  const split = body.match(SUFFIX_RE);
+  return split === null ? [{ core: body, suffix: null }] : [{ core: body, suffix: null }, { core: split[1] as string, suffix: split[2] as string }];
+}
+
 function titleHits(settings: DelegationSettings, text: string, pool: BoardTask[]): BoardTask[] {
+  return (
+    firstFold((fold: TextFold) => {
+      const needles = bodiesOf(settings, text)
+        .map((body) => taskNeedle(body.core, settings.tasks, fold))
+        .filter((needle) => needle !== "");
+      if (needles.length === 0) return undefined;
+      const exact = pool.filter((task) => needles.includes(fold(task.title)) || needles.includes(fold(joinReason(task.title, task.reason, settings.tasks.reasonSeparator))));
+      return exact.length > 0 ? exact : undefined;
+    }) ?? []
+  );
+}
+
+function prefixHits(settings: DelegationSettings, text: string, pool: BoardTask[]): BoardTask[] {
   return (
     firstFold((fold: TextFold) => {
       const needle = taskNeedle(text, settings.tasks, fold);
       if (needle === "") return undefined;
-      const exact = pool.filter((task) => needle === fold(task.title) || needle === fold(joinReason(task.title, task.reason, settings.tasks.reasonSeparator)));
-      if (exact.length > 0) return exact;
       const longer = pool.filter((task) => {
         const title = fold(task.title);
         return title.length >= MIN_TITLE && needle.startsWith(`${title} `);
@@ -233,6 +284,12 @@ function renderTitle(settings: DelegationSettings, task: BoardTask): string {
   return task.prefix === null ? body : `${task.prefix}${settings.tasks.separator}${body}`;
 }
 
+function titlesOf(settings: DelegationSettings, task: BoardTask, extra: (string | null)[]): Set<string> {
+  const titles = new Set([task.title, joinReason(task.title, task.reason, settings.tasks.reasonSeparator), renderTitle(settings, task)]);
+  for (const title of extra) if (title !== null) titles.add(title);
+  return titles;
+}
+
 function extendsTitle(settings: DelegationSettings, text: string, task: BoardTask): boolean {
   return (
     firstFold((fold: TextFold) => {
@@ -246,6 +303,23 @@ function extendsTitle(settings: DelegationSettings, text: string, task: BoardTas
 
 function plainOf(node: Node): string {
   return node.plain ?? restOf(node.text) ?? node.text.trim();
+}
+
+function isExact(settings: DelegationSettings, node: Node, task: BoardTask): boolean {
+  const titles = titlesOf(settings, task, [node.oldTitle]);
+  return bodiesOf(settings, plainOf(node)).some((body) => titles.has(body.core) || titles.has(stripInlineMarkup(body.core)));
+}
+
+function removalOf(settings: DelegationSettings, titles: ReadonlySet<string>, gone: string, kept: string): { suffix: string | null } | null {
+  for (const removed of bodiesOf(settings, gone)) {
+    if (!titles.has(removed.core)) continue;
+    for (const survivor of bodiesOf(settings, kept)) {
+      if (survivor.core !== removed.core && stripInlineMarkup(survivor.core) !== removed.core) continue;
+      if (removed.suffix === null || removed.suffix === survivor.suffix) return { suffix: null };
+      if (survivor.suffix === null) return { suffix: removed.suffix };
+    }
+  }
+  return null;
 }
 
 function renameOf(settings: DelegationSettings, node: Node, task: BoardTask): string | null {
@@ -342,7 +416,7 @@ function createUnder(placer: Placer, parent: Node, task: BoardTask): Node {
   const lead = childLead(placer, parent, null);
   const text = `${lead}- [${MARKS[checkboxForStatus(task.status)]}] ${task.title}`;
   const line = docLine(text);
-  const node: Node = { line, index: -1, depth: depthOf(text), lead, text, parent, children: [], before: [], task, plain: null, oldTitle: null, renameTo: null, frozen: false };
+  const node: Node = { ...newNode(line, -1, []), parent, task };
   parent.children.splice(orderIndex(parent.children, node), 0, node);
   placer.attempt.texts.set(line, text);
   placer.attempt.linked.add(line);
@@ -359,6 +433,13 @@ function mergeInto(placer: Placer, other: Node, survivor: Node): void {
     survivor.children.push(child);
   }
   detach(placer, other);
+  placer.attempt.removed.set(other.line, survivor.line);
+}
+
+function carrySuffix(node: Node, suffix: string): void {
+  const join = (text: string): string => (/\s$/.test(text) ? `${text}${suffix}` : `${text} ${suffix}`);
+  node.text = join(node.text);
+  if (node.plain !== null) node.plain = join(node.plain);
 }
 
 function render(forest: Forest): DocLine[] {
@@ -375,12 +456,20 @@ function render(forest: Forest): DocLine[] {
 function stepOf(forest: Forest): string {
   for (const node of forest.nodes) {
     const parent = node.parent;
-    if (parent !== null && node.lead.startsWith(parent.lead) && node.lead.length > parent.lead.length) return node.lead.slice(parent.lead.length);
+    if (parent !== null && LIST_RE.test(node.text) && node.lead.startsWith(parent.lead) && node.lead.length > parent.lead.length) return node.lead.slice(parent.lead.length);
   }
   return DEFAULT_STEP;
 }
 
-function link(settings: DelegationSettings, date: string, forest: Forest, scan: FocusScan, data: StructureData, known: ReadonlyMap<DocLine, EngineLink>, frozen: ReadonlySet<string>, unclear: Map<string, BoardTask>): void {
+interface Linker {
+  settings: DelegationSettings;
+  date: string;
+  unclear: Map<string, BoardTask>;
+  similar: StructureSimilar[];
+}
+
+function link(linker: Linker, forest: Forest, scan: FocusScan, data: StructureData, known: ReadonlyMap<DocLine, EngineLink>, frozen: ReadonlySet<string>): void {
+  const { settings, date, unclear } = linker;
   const parents = parentsOf(data.tasks);
   const nodeAtLine = new Map(forest.nodes.map((node) => [node.index, node]));
   for (const entry of scan.entries) {
@@ -449,13 +538,16 @@ function link(settings: DelegationSettings, date: string, forest: Forest, scan: 
       for (const task of hits) if (entersDay(task, date)) unclear.set(task.id, task);
       continue;
     }
-    if (inside === null) continue;
-    const renamed = coreHits(settings, text, pool.filter((task) => inside.has(task.id) && !claimed.has(task.id)));
-    if (renamed.length !== 1) continue;
-    const task = renamed[0] as BoardTask;
-    node.task = task;
-    node.renameTo = renderTitle(settings, task);
-    claimed.add(task.id);
+    const renamed = inside === null ? [] : coreHits(settings, text, pool.filter((task) => inside.has(task.id) && !claimed.has(task.id)));
+    if (renamed.length === 1) {
+      const task = renamed[0] as BoardTask;
+      node.task = task;
+      node.renameTo = renderTitle(settings, task);
+      claimed.add(task.id);
+      continue;
+    }
+    const loose = prefixHits(settings, text, pool).filter(related);
+    if (loose.length > 0) linker.similar.push({ line: node.line, index: node.index, task: loose.length === 1 ? (loose[0] as BoardTask) : null });
   }
   for (const node of forest.nodes) if (node.task !== null && (node.task.repeat !== null || frozen.has(node.task.id))) node.task = null;
 }
@@ -476,13 +568,14 @@ function attempt(settings: DelegationSettings, date: string, doc: ParsedDoc, dat
   if (range === null) return null;
   const forest = buildForest(doc, range.heading + 1, range.end);
   const scan = scanDaily(settings, date, texts.join("\n"), data.projects, data.tasks);
-  const unclear = new Map<string, BoardTask>();
-  link(settings, date, forest, scan, data, known, frozen, unclear);
+  const linker: Linker = { settings, date, unclear: new Map<string, BoardTask>(), similar: [] };
+  link(linker, forest, scan, data, known, frozen);
   const result = noStructure();
-  result.unclear = [...unclear.values()];
+  result.unclear = [...linker.unclear.values()];
+  result.similar = linker.similar;
   const before = doc.lines.slice(forest.start, forest.end);
   const linked = new Set(forest.nodes.flatMap((node) => (node.task === null ? [] : [node.line])));
-  const state: Attempt = { lines: [], before, focus: [], linked, texts: new Map(), placed: new Map(), touched: new Set(), result };
+  const state: Attempt = { lines: [], before, focus: [], linked, texts: new Map(), placed: new Map(), touched: new Set(), removed: new Map(), result };
   const placer: Placer = { settings, projects: new Map(data.projects.map((project) => [project.id, project])), step: stepOf(forest), forest, cursors: new Map(), attempt: state };
   const groups = new Map<string, Node[]>();
   for (const node of forest.nodes) if (!node.frozen && node.task !== null) groups.set(node.task.id, [...(groups.get(node.task.id) ?? []), node]);
@@ -502,12 +595,19 @@ function attempt(settings: DelegationSettings, date: string, doc: ParsedDoc, dat
       chain.unshift(parent);
     }
     const atPlace = (node: Node): boolean => (anchor === null ? node.parent === null : chain.length === 0 && boxParent(node) === anchor);
-    const survivor = nodes.find(atPlace) ?? (nodes[0] as Node);
+    const exact = (node: Node): boolean => isExact(settings, node, task);
+    const survivor = nodes.find((node) => atPlace(node) && exact(node)) ?? nodes.find(atPlace) ?? nodes.find(exact) ?? (nodes[0] as Node);
     state.placed.set(task.id, survivor);
     if (anchor !== null && contains(survivor, anchor)) continue;
     const wanted = projectCheckbox(task);
     for (const other of nodes) {
       if (other === survivor || contains(other, survivor) || contains(survivor, other) || (anchor !== null && contains(other, anchor))) continue;
+      const removal = removalOf(settings, titlesOf(settings, task, [other.oldTitle, survivor.oldTitle]), plainOf(other), plainOf(survivor));
+      if (removal === null) {
+        result.similar.push({ line: other.line, index: other.index, task });
+        if (!exact(survivor)) result.similar.push({ line: survivor.line, index: survivor.index, task });
+        continue;
+      }
       const theirs = checkboxOf(other.text);
       const mine = checkboxOf(survivor.text);
       if (theirs !== null && mine !== null && theirs !== mine && wanted !== null) {
@@ -515,6 +615,7 @@ function attempt(settings: DelegationSettings, date: string, doc: ParsedDoc, dat
         const odd = theirs !== wanted ? theirs : mine;
         result.divergent.push({ line: survivor.line, task, checkbox: odd });
       }
+      if (removal.suffix !== null) carrySuffix(survivor, removal.suffix);
       mergeInto(placer, other, survivor);
       result.merged.push(task.id);
       if (!result.merges.includes(survivor.line)) result.merges.push(survivor.line);
@@ -537,11 +638,13 @@ function attempt(settings: DelegationSettings, date: string, doc: ParsedDoc, dat
     if (renamed !== null) {
       const rest = restOf(survivor.text);
       if (rest !== null) {
+        const from = plainOf(survivor).trim();
         const head = survivor.text.slice(0, survivor.text.length - rest.length);
         const label = survivor.parent === null && survivor.plain !== null && rest.endsWith(survivor.plain) ? rest.slice(0, rest.length - survivor.plain.length) : "";
         survivor.text = `${head}${label}${renamed}`;
         survivor.plain = survivor.parent === null ? renamed : null;
         result.renamed.push(task.id);
+        result.renames.push({ line: survivor.line, task, from, to: renamed.trim() });
         state.touched.add(task.id);
       }
     }
@@ -566,6 +669,15 @@ function unlinkedLines(lines: DocLine[], texts: ReadonlyMap<DocLine, string>, li
     .sort();
 }
 
+function losesLines(state: Attempt): boolean {
+  const kept = new Set(state.focus);
+  return state.before.some((line) => {
+    if (kept.has(line) || isBlank(line)) return false;
+    const survivor = state.removed.get(line);
+    return survivor === undefined || !kept.has(survivor);
+  });
+}
+
 function failedTasks(settings: DelegationSettings, date: string, data: StructureData, state: Attempt): Set<string> {
   const texts = state.lines.map((line) => state.texts.get(line) ?? line.text);
   const scan = scanDaily(settings, date, texts.join("\n"), data.projects, data.tasks);
@@ -581,7 +693,7 @@ function failedTasks(settings: DelegationSettings, date: string, data: Structure
     if (index === -1 || linked.get(index) !== id) failed.add(id);
   }
   const kept = unlinkedLines(state.before, new Map(), state.linked).join("\n");
-  if (kept !== unlinkedLines(state.focus, state.texts, state.linked).join("\n")) for (const id of state.touched) failed.add(id);
+  if (kept !== unlinkedLines(state.focus, state.texts, state.linked).join("\n") || losesLines(state)) for (const id of state.touched) failed.add(id);
   return failed;
 }
 

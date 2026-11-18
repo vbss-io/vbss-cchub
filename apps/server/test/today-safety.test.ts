@@ -571,7 +571,7 @@ function prng(seed: number): () => number {
   };
 }
 
-describe("property: every user line survives any sequence of operations, task lines follow their project", () => {
+describe("property: every user line survives any sequence of operations, only exact duplicates of a surviving line are removed and renames are reported", () => {
   const OPEN: ReadonlySet<string> = new Set(["todo", "doing", "blocked", "hold"]);
   const BOX_RE = /^(\s*[-*]\s+\[)([ xX-])(\])/;
   const checkboxOf = (line: string): "todo" | "doing" | "done" | null => {
@@ -593,8 +593,8 @@ describe("property: every user line survives any sequence of operations, task li
         const allTasks = (): BoardTask[] => flatten(board.readBoard(settings).tasks);
         const openTasks = (): BoardTask[] => allTasks().filter((task) => task.section === "open" && task.status !== "archived");
         const identities = new Map<string, string>();
-        const taskTexts = new Set<string>();
         const copies: string[] = [];
+        const released = new Map<string, number>();
         const renameKey = (from: string, to: string): void => {
           for (const [line, key] of identities) if (key === from) identities.set(line, to);
         };
@@ -624,24 +624,64 @@ describe("property: every user line survives any sequence of operations, task li
           const texts = content.split(/\r\n|\n/);
           for (const link of board.scanDaily(settings, TODAY, content, payload.projects, payload.tasks).links) {
             const key = keyOf(link.task);
-            taskTexts.add(unmarked(texts[link.line] as string));
             if (scoped.has(key)) identities.set(unmarked(texts[link.line] as string), key);
           }
         };
-        const isTaskLine = (line: string): boolean => identities.has(unmarked(line)) || taskTexts.has(unmarked(line));
-        const plainOf = (line: string): string => unmarked(line).trim();
+        const canon = (line: string): string => {
+          const rest = line.match(/^\s*[-*+]\s+\[[ xX-]\]\s?(.*)$/)?.[1];
+          return rest === undefined ? line.trim() : rest.replace(/^\[\[[^\]]*\]\]\s+-\s+/, "").trim();
+        };
+        const variants = (text: string): { core: string; suffix: string | null }[] => {
+          const split = text.match(/^(.*\S)\s+(_[^_\s](?:[^_]*[^_\s])?_)$/);
+          return split === null ? [{ core: text, suffix: null }] : [{ core: text, suffix: null }, { core: split[1] as string, suffix: split[2] as string }];
+        };
+        const duplicateOf = (gone: string, survivors: string[], titles: ReadonlySet<string>): boolean =>
+          variants(gone).some(
+            (removed) =>
+              titles.has(removed.core) &&
+              survivors.some((kept) =>
+                variants(kept).some((item) => (item.core === removed.core || board.stripInlineMarkup(item.core) === removed.core) && (removed.suffix === null || item.suffix === removed.suffix)),
+              ),
+          );
         const check = (step: string): void => {
           const content = readContent();
+          const lines = content.split(/\r\n|\n/);
+          const canons = lines.map(canon);
           const left = new Map<string, number>();
-          for (const line of content.split(/\r\n|\n/)) left.set(plainOf(line), (left.get(plainOf(line)) ?? 0) + 1);
-          const missing = expected.filter((line) => {
-            if (isTaskLine(line)) return false;
-            const count = left.get(plainOf(line)) ?? 0;
-            if (count === 0) return true;
-            left.set(plainOf(line), count - 1);
-            return false;
-          });
+          for (const text of canons) left.set(text, (left.get(text) ?? 0) + 1);
+          const renamed = today
+            .readToday(settings, TODAY)
+            .ambiguous.filter((item) => item.reason === "renamed")
+            .map((item) => item.text.split(" -> ") as [string, string]);
+          const titles = new Set(allTasks().flatMap((item) => [item.title, item.reason === null ? item.title : `${item.title} - ${item.reason}`]));
+          const missing: string[] = [];
+          const next: string[] = [];
+          for (const line of expected) {
+            const text = canon(line);
+            const count = left.get(text) ?? 0;
+            if (count > 0) {
+              left.set(text, count - 1);
+              next.push(line);
+              continue;
+            }
+            const rename = renamed.find(([from, to]) => from === text && canons.includes(to));
+            if (rename !== undefined) {
+              next.push(`- [ ] ${rename[1]}`);
+              continue;
+            }
+            const sources = renamed.flatMap(([from, to]) => (canons.includes(to) ? [from] : []));
+            if (duplicateOf(text, canons, titles) || duplicateOf(text, sources, new Set([...titles, ...sources.flatMap((from) => variants(from).map((item) => item.core))]))) continue;
+            const freed = released.get(text) ?? 0;
+            if (freed > 0) {
+              released.set(text, freed - 1);
+              continue;
+            }
+            missing.push(line);
+            next.push(line);
+          }
           assert.deepEqual(missing, [], `${step} CONTENT ${JSON.stringify(content)} EXPECTED ${JSON.stringify(expected)}`);
+          expected.splice(0, expected.length, ...next);
+          released.clear();
           if (fixture.bom) assert.equal(content.startsWith(BOM), true, step);
           if (fixture.crlf) assert.equal(content.replace(/\r\n/g, "").includes("\n"), false, step);
         };
@@ -671,8 +711,8 @@ describe("property: every user line survives any sequence of operations, task li
         check("prime");
         remember();
         for (let step = 0; step < 18; step += 1) {
-          const draw = Math.floor(random() * 24);
-          const op = draw >= 18 ? 18 + (draw % 2) : draw;
+          const draw = Math.floor(random() * 28);
+          const op = draw >= 24 ? 20 + (draw % 2) : draw >= 18 ? 18 + (draw % 2) : draw;
           const label = `seed ${seed} step ${step} op ${op}`;
           const task = pick(openTasks());
           const statusBefore = new Map(allTasks().map((item) => [keyOf(item), item.status]));
@@ -686,7 +726,22 @@ describe("property: every user line survives any sequence of operations, task li
             ticks.push({ line: result.line, key: found.key, checkbox: result.after });
           };
           try {
-            if (op === 0 && task) today.todayApi.schedule(settings, { projectId: task.projectId, line: task.line, raw: task.raw, date: pick([TODAY, TOMORROW, null]) ?? null });
+            if (op === 0 && task) {
+              const date = pick([TODAY, TOMORROW, null]) ?? null;
+              if (date !== TODAY) {
+                const content = readContent();
+                const payload = board.readBoard(settings);
+                const lines = content.split(/\r\n|\n/);
+                const depthAt = (index: number): number => (lines[index]?.match(/^\s*/)?.[0] ?? "").length;
+                for (const link of board.scanDaily(settings, TODAY, content, payload.projects, payload.tasks).links.filter((item) => item.task.id === task.id)) {
+                  for (let index = link.line; index === link.line || (index < lines.length && (lines[index] as string).trim() !== "" && depthAt(index) > depthAt(link.line)); index += 1) {
+                    const text = canon(lines[index] as string);
+                    released.set(text, (released.get(text) ?? 0) + 1);
+                  }
+                }
+              }
+              today.todayApi.schedule(settings, { projectId: task.projectId, line: task.line, raw: task.raw, date });
+            }
             if (op === 1 && task) {
               allowedReopen.add(keyOf(task));
               board.writeBoardTaskSynced(settings, { projectId: task.projectId, line: task.line, raw: task.raw, status: pick(["todo", "doing", "done"] as const) ?? "done" });
@@ -757,7 +812,7 @@ describe("property: every user line survives any sequence of operations, task li
                 const lines = content.split(/\r\n|\n/);
                 const at = lines.map(unmarked).lastIndexOf(text);
                 if (at !== -1 && lines.filter((line) => unmarked(line) === text).length >= 2) {
-                  const inExpected = matched(lines).indexOf(at);
+                  const inExpected = expected.findIndex((line) => canon(line) === canon(lines[at] as string));
                   if (inExpected !== -1) expected.splice(inExpected, 1);
                   lines.splice(at, 1);
                   today.saveDailyFromClient(settings, TODAY, lines.join(eolOf(content)));
@@ -784,7 +839,7 @@ describe("property: every user line survives any sequence of operations, task li
                 const lines = content.split(/\r\n|\n/);
                 const original = lines[chosen.line] as string;
                 const reworded = `${original} asap`;
-                const at = matched(lines).indexOf(chosen.line);
+                const at = expected.findIndex((line) => canon(line) === canon(original));
                 if (at !== -1 && lines.filter((line) => unmarked(line) === unmarked(original)).length === 1) {
                   lines[chosen.line] = reworded;
                   expected[at] = reworded;
@@ -864,6 +919,31 @@ describe("property: every user line survives any sequence of operations, task li
                 }
               }
             }
+            if (op === 20 && task) {
+              const siblings = openTasks().filter((item) => item.projectId === task.projectId && item.id !== task.id && !flatten(task.subtasks).some((sub) => sub.id === item.id));
+              const parent = random() < 0.4 ? null : (pick(siblings) ?? null);
+              board.reparentBoardTask(settings, { projectId: task.projectId, line: task.line, raw: task.raw, parent: parent === null ? null : { line: parent.line, raw: parent.raw } });
+            }
+            if (op === 21) {
+              const content = readContent();
+              const payload = board.readBoard(settings);
+              const chosen = pick(board.scanDaily(settings, TODAY, content, payload.projects, payload.tasks).links);
+              if (chosen) {
+                const lines = content.split(/\r\n|\n/);
+                const original = lines[chosen.line] as string;
+                const variant = Math.floor(random() * 3);
+                const typed = variant === 0 ? `${original} _note ${seed}-${step}_` : variant === 1 ? `${original} again for Ana ${seed}-${step}` : original.replace(BOX_RE, "$1x$3");
+                const at = chosen.line + 1;
+                expected.splice(slotFor(lines, at), 0, typed);
+                lines.splice(at, 0, typed);
+                if (random() < 0.5) {
+                  writeFileSync(dailyPath(root), lines.join(eolOf(content)));
+                  today.queueDailyDiskChange(TODAY);
+                } else {
+                  today.saveDailyFromClient(settings, TODAY, lines.join(eolOf(content)));
+                }
+              }
+            }
             if (op === 18 || op === 19) {
               const content = readContent();
               const payload = board.readBoard(settings);
@@ -879,7 +959,7 @@ describe("property: every user line survives any sequence of operations, task li
               const chosen = pick(leaves);
               if (chosen) {
                 const original = lines[chosen.line] as string;
-                const at = matched(lines).indexOf(chosen.line);
+                const at = expected.findIndex((line) => canon(line) === canon(original));
                 lines.splice(chosen.line, 1);
                 if (at !== -1) expected.splice(at, 1);
                 const heading = lines.findIndex((line) => line.trim() === "## Focus");
@@ -906,7 +986,7 @@ describe("property: every user line survives any sequence of operations, task li
               }
             }
           } catch (err) {
-            if (!(err instanceof board.TaskConflictError) && !(err instanceof Error && /occurrence|nothing was written/.test(err.message))) throw err;
+            if (!(err instanceof board.TaskConflictError) && !(err instanceof Error && /occurrence|nothing was written|already top-level|own subtask/.test(err.message))) throw err;
           }
           for (const [from, to] of renames) renameKey(from, to);
           today.flushMirrors(settings);
@@ -932,7 +1012,7 @@ describe("property: every user line survives any sequence of operations, task li
               const now = statusAfter.get(tick.key);
               const applied = now !== undefined && statusBox(now) === tick.checkbox;
               const told = reported.has(tick.line) || reportedKeys.has(tick.key);
-              const kept = content.split(/\r\n|\n/).includes(tick.line) || boxes.get(tick.key)?.has(tick.checkbox) === true;
+              const kept = content.split(/\r\n|\n/).some((line) => canon(line) === canon(tick.line) && checkboxOf(line) === tick.checkbox) || boxes.get(tick.key)?.has(tick.checkbox) === true;
               assert.ok(kept || told, `${label}: the ticked line "${tick.line}" was rewritten`);
               assert.ok(applied || told, `${label}: tick on "${tick.line}" for ${tick.key} was dropped (status ${now ?? "missing"})`);
             }
