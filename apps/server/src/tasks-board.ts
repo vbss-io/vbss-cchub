@@ -1129,18 +1129,95 @@ export interface LoadedBoard {
   errors: { path: string; error: string }[];
 }
 
+interface FileMemo {
+  mtimeMs: number;
+  ctimeMs: number;
+  size: number;
+  ino: number;
+  readAt: number;
+  content: string;
+}
+
+interface ParseMemo {
+  content: string;
+  tasks: BoardTask[];
+}
+
+interface BoardMemo {
+  key: string;
+  contents: Map<string, string>;
+  result: { loaded: LoadedBoard; tasks: BoardTask[] };
+}
+
+const SETTLED_MS = 2000;
+const MEMO_LIMIT = 2048;
+const fileMemos = new Map<string, FileMemo>();
+const parseMemos = new Map<string, ParseMemo>();
+let boardMemo: BoardMemo | null = null;
+
+function capMemos<T>(memos: Map<string, T>): void {
+  while (memos.size > MEMO_LIMIT) {
+    const oldest = memos.keys().next().value;
+    if (oldest === undefined) return;
+    memos.delete(oldest);
+  }
+}
+
+function keepOnly<T>(memos: Map<string, T>, wanted: ReadonlySet<string>): void {
+  for (const key of [...memos.keys()]) if (!wanted.has(key)) memos.delete(key);
+}
+
+export function memoSizes(): { files: number; parses: number } {
+  return { files: fileMemos.size, parses: parseMemos.size };
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const item of Object.values(value)) deepFreeze(item);
+  return value;
+}
+
+function readProjectText(abs: string): string {
+  const stats = statSync(abs);
+  const memo = fileMemos.get(abs);
+  if (memo !== undefined && memo.mtimeMs === stats.mtimeMs && memo.ctimeMs === stats.ctimeMs && memo.size === stats.size && memo.ino === stats.ino && stats.mtimeMs < memo.readAt - SETTLED_MS) return memo.content;
+  const readAt = Date.now();
+  const content = readFileSync(abs, "utf8");
+  fileMemos.delete(abs);
+  fileMemos.set(abs, { mtimeMs: stats.mtimeMs, ctimeMs: stats.ctimeMs, size: stats.size, ino: stats.ino, readAt, content });
+  capMemos(fileMemos);
+  return content;
+}
+
+function parseKey(projectId: string, configKey: string): string {
+  return `${projectId}\u0000${configKey}`;
+}
+
+function parseCached(content: string, projectId: string, config: TasksFeatureSettings, configKey: string): BoardTask[] {
+  const key = parseKey(projectId, configKey);
+  const memo = parseMemos.get(key);
+  if (memo !== undefined && memo.content === content) return memo.tasks;
+  const tasks = deepFreeze(parseBoardTasks(content, projectId, config));
+  parseMemos.delete(key);
+  parseMemos.set(key, { content, tasks });
+  capMemos(parseMemos);
+  return tasks;
+}
+
 function loadBoard(root: string, config: TasksFeatureSettings): LoadedBoard {
   const errors: { path: string; error: string }[] = [];
   const contents = new Map<string, string>();
   const files: WalkedFile[] = [];
   for (const file of walkProjects(root, config.exclude)) {
     try {
-      contents.set(file.id, readFileSync(file.abs, "utf8"));
+      contents.set(file.id, readProjectText(file.abs));
       files.push(file);
     } catch (err) {
       errors.push({ path: file.abs, error: err instanceof Error ? err.message : "read failed" });
     }
   }
+  keepOnly(fileMemos, new Set(files.map((file) => file.abs)));
   const folderProjects = new Map<string, string>();
   for (const file of files) {
     const dir = dirOf(file.id);
@@ -1239,10 +1316,29 @@ function effectivePrompt(settings: DelegationSettings): string {
   return settings.tasks.delegatePrompt ?? DEFAULT_TASK_DELEGATE_PROMPT;
 }
 
+function sameContents(a: Map<string, string>, b: Map<string, string>): boolean {
+  if (a.size !== b.size) return false;
+  const left = [...a];
+  const right = [...b];
+  return left.every(([id, content], index) => {
+    const other = right[index];
+    return other !== undefined && other[0] === id && other[1] === content;
+  });
+}
+
 export function collectBoard(root: string, config: TasksFeatureSettings): { loaded: LoadedBoard; tasks: BoardTask[] } {
   const loaded = loadBoard(root, config);
-  const tasks = loaded.projects.flatMap((project) => parseBoardTasks(loaded.contents.get(project.id) as string, project.id, config));
-  return { loaded, tasks };
+  const key = `${root}\u0000${JSON.stringify(config)}`;
+  if (boardMemo !== null && boardMemo.key === key && loaded.errors.length === 0 && sameContents(boardMemo.contents, loaded.contents)) return boardView(boardMemo.result);
+  const tasks = deepFreeze(loaded.projects.flatMap((project) => parseCached(loaded.contents.get(project.id) as string, project.id, config, key)));
+  keepOnly(parseMemos, new Set(loaded.projects.map((project) => parseKey(project.id, key))));
+  const result = { loaded: { ...loaded, projects: deepFreeze(loaded.projects), contents: new Map(loaded.contents), errors: deepFreeze(loaded.errors) }, tasks };
+  boardMemo = loaded.errors.length === 0 ? { key, contents: result.loaded.contents, result } : null;
+  return boardView(result);
+}
+
+function boardView(result: { loaded: LoadedBoard; tasks: BoardTask[] }): { loaded: LoadedBoard; tasks: BoardTask[] } {
+  return { loaded: { projects: result.loaded.projects, contents: new Map(result.loaded.contents), errors: result.loaded.errors }, tasks: result.tasks };
 }
 
 export function readBoard(settings: DelegationSettings): BoardPayload {
@@ -2707,7 +2803,7 @@ function stripEmphasis(text: string): string {
   return current;
 }
 
-function stripInlineMarkup(text: string): string {
+export function stripInlineMarkup(text: string): string {
   let out = "";
   let position = 0;
   for (const span of text.matchAll(INLINE_CODE_RE)) {
@@ -2785,6 +2881,10 @@ function prefixMatches(a: string, b: string): boolean {
 export interface TaskMatch {
   task: BoardTask | null;
   candidates: string[];
+}
+
+export function taskBody(text: string, config: TasksFeatureSettings): string {
+  return removePriorityTokens(splitSignifiers(text.trim(), config).text, config).trim();
 }
 
 export function taskNeedle(text: string, config: TasksFeatureSettings, fold: TextFold = normalizeText): string {
@@ -3002,7 +3102,28 @@ function focusEntries(settings: DelegationSettings, date: string, content: strin
   return entries;
 }
 
+interface ScanMemo {
+  projects: BoardProject[];
+  scans: Map<string, FocusScan>;
+}
+
+const SCAN_MEMO_LIMIT = 32;
+const scanMemos = new WeakMap<BoardTask[], ScanMemo>();
+
 export function scanDaily(settings: DelegationSettings, date: string, content: string, projects: BoardProject[], tasks: BoardTask[]): FocusScan {
+  const key = [date, localDate(), settings.daily.headings.focus, JSON.stringify(settings.tasks), content].join("\u0000");
+  const memo = scanMemos.get(tasks);
+  const own = memo !== undefined && memo.projects === projects ? memo : { projects, scans: new Map<string, FocusScan>() };
+  const cached = own.scans.get(key);
+  if (cached !== undefined) return cached;
+  const scan = scanFresh(settings, date, content, projects, tasks);
+  own.scans.set(key, scan);
+  if (own.scans.size > SCAN_MEMO_LIMIT) own.scans.delete(own.scans.keys().next().value as string);
+  scanMemos.set(tasks, own);
+  return scan;
+}
+
+function scanFresh(settings: DelegationSettings, date: string, content: string, projects: BoardProject[], tasks: BoardTask[]): FocusScan {
   const index = recurrenceIndex(tasks);
   const entries = focusEntries(settings, date, content, projects, index);
   const links: DailyLineLink[] = [];
